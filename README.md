@@ -1,9 +1,5 @@
 # seekr
 
-<p align="center">
-  <img src="docs/seekr-logo.png" alt="seekr Logo">
-</p>
-
 **seekr** is a high-performance AI Agent Manager featuring a sleek Terminal UI, powered by the DeepSeek native API. It brings the power of autonomous agents directly to your terminal with a robust toolset for shell execution, file management, and web exploration.
 
 ![License](https://img.shields.io/badge/license-Polyform_Prosperity-blue.svg)
@@ -12,11 +8,17 @@
 
 ---
 
+## 🌟 Highlights
+
+- **Interruptible Agent Loop:** Real-time user steering. Interrupt the agent mid-thought to provide new context or directions.
+- **Premium TUI Experience:** Beautiful, icon-based headers and a custom-built, wrapping-aware scrolling engine for a smooth conversation flow.
+- **Dynamic Skills System:** Load and execute custom tools via simple JSON definitions and shell scripts (Python, JS, Bash, etc.).
+
 ## Features
 
 - **Terminal UI (TUI):** Built with `ratatui` for a responsive, multi-tabbed interactive experience.
 - **Native DeepSeek Integration:** Low-latency access to DeepSeek's powerful reasoning and chat models.
-- **Extensible Skills System:** Refactored tool architecture allowing for global and repository-specific custom skills via simple JSON and scripts.
+- **Extensible Skills System:** Refactored tool architecture allowing for global and repository-specific custom skills.
 - **Autonomous Tools:**
   - **Shell:** Execute terminal commands with built-in sandboxing and timeouts.
   - **File Edit:** Sophisticated file manipulation using patches and diffs.
@@ -25,6 +27,22 @@
 - **Rich Activity Stream:** Real-time visibility into agent thoughts and tool executions with diff previews.
 - **Session Persistence:** Automatic saving and loading of chat history and agent state.
 - **Seekr Doctor:** Built-in diagnostics command to verify system health and API connectivity.
+
+---
+
+## 🛠️ TODO (Missing Features)
+
+- [ ] **Syntax Highlighting:** Add full syntax highlighting for code blocks in the chat window.
+- [ ] **Parallel Tool Execution:** Execute multiple independent tools concurrently for significant performance gains.
+- [ ] **Visual Planner:** Display the agent's internal step-by-step plan as a checklist in the UI.
+- [ ] **Advanced Context Management:** Implement sliding-window and summary-based pruning for long-running conversations.
+
+---
+
+## ☣️ Danger Zone (Current Issues)
+
+- ⚠️ **Large Result Lag:** Rendering extremely large tool outputs (1MB+) can cause temporary TUI stutter.
+- ⚠️ **Resize Artifacts:** Rare layout flickering if the terminal is rapidly resized during an active API stream.
 
 ---
 
