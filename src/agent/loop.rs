@@ -12,6 +12,8 @@ use crate::config::AppConfig;
 use crate::tools;
 use crate::tools::task::TaskManager;
 
+use crate::session::Session;
+use anyhow::Result;
 use super::system_prompt::build_system_prompt;
 
 /// Events sent from the agent loop to the UI
@@ -62,8 +64,7 @@ pub enum AgentCommand {
 pub struct AgentLoop {
     client: DeepSeekClient,
     config: AppConfig,
-    messages: Vec<ChatMessage>,
-    task_manager: TaskManager,
+    session: Session,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     command_rx: mpsc::UnboundedReceiver<AgentCommand>,
     auto_approve: bool,
@@ -78,14 +79,17 @@ impl AgentLoop {
     ) -> Self {
         let client = DeepSeekClient::new(&config);
         let system_prompt = build_system_prompt(&config.agent.working_directory);
-        let messages = vec![ChatMessage::system(&system_prompt)];
         let auto_approve = config.agent.auto_approve_tools;
+
+        // Start a new session with a random ID
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mut session = Session::new(session_id, "New Chat".to_string());
+        session.messages.push(ChatMessage::system(&system_prompt));
 
         Self {
             client,
             config,
-            messages,
-            task_manager: TaskManager::new(),
+            session,
             event_tx,
             command_rx,
             auto_approve,
@@ -93,14 +97,48 @@ impl AgentLoop {
         }
     }
 
+    /// Resume a session from disk
+    #[allow(dead_code)]
+    pub fn resume(
+        config: AppConfig,
+        session_id: &str,
+        event_tx: mpsc::UnboundedSender<AgentEvent>,
+        command_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    ) -> Result<Self> {
+        let client = DeepSeekClient::new(&config);
+        let session = Session::load(session_id)?;
+        let auto_approve = config.agent.auto_approve_tools;
+
+        Ok(Self {
+            client,
+            config,
+            session,
+            event_tx,
+            command_rx,
+            auto_approve,
+            iteration: 0,
+        })
+    }
+
     /// Run the agent loop, processing commands from the UI
     pub async fn run(mut self) {
         while let Some(command) = self.command_rx.recv().await {
             match command {
                 AgentCommand::UserMessage(msg) => {
-                    self.messages.push(ChatMessage::user(&msg));
+                    // Update session title on first message if it's still default
+                    if self.session.title == "New Chat" {
+                        let title = if msg.len() > 30 {
+                            format!("{}...", &msg[..27])
+                        } else {
+                            msg.clone()
+                        };
+                        self.session.title = title;
+                    }
+                    
+                    self.session.messages.push(ChatMessage::user(&msg));
                     self.iteration = 0;
                     self.run_agent_turn().await;
+                    let _ = self.session.save();
                 }
                 AgentCommand::ToolAlwaysApprove => {
                     self.auto_approve = true;
@@ -124,12 +162,15 @@ impl AgentLoop {
             }
             self.iteration += 1;
 
+            // Prune context if needed before calling API
+            self.prune_messages();
+
             // Call the API with streaming
             let tool_defs = tools::all_tool_definitions();
             let stream_result = self
                 .client
                 .chat_completion_stream(
-                    self.messages.clone(),
+                    self.session.messages.clone(),
                     &self.config.api.model,
                     Some(tool_defs),
                 )
@@ -190,12 +231,14 @@ impl AgentLoop {
                 } else {
                     Some(content_buf.clone())
                 };
-                self.messages.push(ChatMessage::assistant_with_tool_calls(
+                self.session.messages.push(ChatMessage::assistant_with_tool_calls(
                     content,
                     tool_calls.clone(),
                 ));
 
                 // Execute each tool call
+                let mut tool_futures = Vec::new();
+                
                 for tc in &tool_calls {
                     let _ = self.event_tx.send(AgentEvent::ToolCallStart {
                         name: tc.function.name.clone(),
@@ -205,7 +248,7 @@ impl AgentLoop {
                     // Check approval if needed
                     if !self.auto_approve {
                         let _ = self.event_tx.send(AgentEvent::ToolApprovalRequest {
-                            call_index: 0,
+                            call_index: 0, // This logic needs improvement for multiple tools
                             name: tc.function.name.clone(),
                             arguments: tc.function.arguments.clone(),
                         });
@@ -213,7 +256,7 @@ impl AgentLoop {
                         // Wait for approval
                         let approved = self.wait_for_approval().await;
                         if !approved {
-                            self.messages.push(ChatMessage::tool_result(
+                            self.session.messages.push(ChatMessage::tool_result(
                                 &tc.id,
                                 "Tool execution denied by user.",
                             ));
@@ -225,23 +268,50 @@ impl AgentLoop {
                         }
                     }
 
-                    // Execute the tool
-                    let (result, activity) = tools::execute_tool(
-                        &tc.function.name,
-                        &tc.function.arguments,
-                        &mut self.task_manager,
-                    )
-                    .await;
+                    // Special case: task tools must be executed sequentially because they mutate state
+                    if tc.function.name.contains("task") {
+                        let (result, activity) = tools::execute_tool(
+                            &tc.function.name,
+                            &tc.function.arguments,
+                            &mut self.session.task_manager,
+                        )
+                        .await;
 
-                    let _ = self.event_tx.send(AgentEvent::Activity(activity));
-                    let _ = self.event_tx.send(AgentEvent::ToolCallResult {
-                        name: tc.function.name.clone(),
-                        result: result.clone(),
-                    });
+                        let _ = self.event_tx.send(AgentEvent::Activity(activity));
+                        let _ = self.event_tx.send(AgentEvent::ToolCallResult {
+                            name: tc.function.name.clone(),
+                            result: result.clone(),
+                        });
 
-                    // Add tool result to conversation
-                    self.messages
-                        .push(ChatMessage::tool_result(&tc.id, &result));
+                        self.session.messages.push(ChatMessage::tool_result(&tc.id, &result));
+                    } else {
+                        // Other tools can be prepared for parallel execution
+                        // We need to clone what we need since we'll be moving into a future
+                        let name = tc.function.name.clone();
+                        let arguments = tc.function.arguments.clone();
+                        let id = tc.id.clone();
+                        
+                        tool_futures.push(async move {
+                            // Note: We bypass TaskManager here because non-task tools don't use it
+                            // This is a bit of a hack until we have a better registry
+                            let mut dummy_tm = TaskManager::new(); 
+                            let (result, activity) = tools::execute_tool(&name, &arguments, &mut dummy_tm).await;
+                            (id, name, result, activity)
+                        });
+                    }
+                }
+
+                // Execute independent tools in parallel
+                if !tool_futures.is_empty() {
+                    let results = futures::future::join_all(tool_futures).await;
+                    for (id, name, result, activity) in results {
+                        let _ = self.event_tx.send(AgentEvent::Activity(activity));
+                        let _ = self.event_tx.send(AgentEvent::ToolCallResult {
+                            name,
+                            result: result.clone(),
+                        });
+                        self.session.messages.push(ChatMessage::tool_result(&id, &result));
+                    }
                 }
 
                 // Continue the loop - call the API again with tool results
@@ -250,8 +320,9 @@ impl AgentLoop {
 
             // No tool calls - this is a regular text response, turn is complete
             if !content_buf.is_empty() {
-                self.messages.push(ChatMessage::assistant(&content_buf));
+                self.session.messages.push(ChatMessage::assistant(&content_buf));
             }
+            let _ = self.session.save();
             let _ = self.event_tx.send(AgentEvent::TurnComplete);
             break;
         }
@@ -274,9 +345,26 @@ impl AgentLoop {
         false
     }
 
+    /// Prune messages to fit within context limits
+    fn prune_messages(&mut self) {
+        // Simple sliding window: keep system prompt and last 20 messages
+        // This is a naive implementation; token-based pruning would be better.
+        const MAX_MESSAGES: usize = 20;
+
+        if self.session.messages.len() > MAX_MESSAGES {
+            let system_prompt = self.session.messages[0].clone();
+            let mut recent = self.session.messages[self.session.messages.len() - MAX_MESSAGES..].to_vec();
+            
+            // Ensure we keep the system prompt at the start
+            let mut new_messages = vec![system_prompt];
+            new_messages.append(&mut recent);
+            self.session.messages = new_messages;
+        }
+    }
+
     /// Get task manager reference (for UI rendering)
     #[allow(dead_code)]
     pub fn task_manager(&self) -> &TaskManager {
-        &self.task_manager
+        &self.session.task_manager
     }
 }

@@ -1,0 +1,44 @@
+# Installation
+
+Getting started with **seekr** is straightforward. Ensure you have the necessary prerequisites installed on your system.
+
+## Prerequisites
+
+- **Rust:** You'll need the latest stable version of Rust. Install it via `rustup`:
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+  ```
+- **DeepSeek API Key:** Register at [platform.deepseek.com](https://platform.deepseek.com/) to obtain your API key.
+
+## Installation
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/kodr-pro/seekr.git
+   cd seekr
+   ```
+
+2. Install globally:
+   ```bash
+   cargo install --path .
+   ```
+
+3. (Alternative) Build the project and move manually:
+   ```bash
+   cargo build --release
+   sudo cp ./target/release/seekr /usr/local/bin/
+   ```
+
+## Running the App
+
+Start **seekr** by running the binary:
+
+```bash
+cargo run --release
+```
+
+On the first run, the application will detect that no configuration exists and will automatically launch the **Setup Wizard**.
+
+---
+
+[Next: Configuration](/configuration)

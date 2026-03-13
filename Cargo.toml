@@ -3,7 +3,7 @@ name = "seekr"
 version = "0.1.0"
 edition = "2021"
 description = "AI Agent Manager - Terminal UI powered by DeepSeek"
-license = "MIT"
+license = "Polyform-Prosperity-1.0.0"
 
 [[bin]]
 name = "seekr"
@@ -18,7 +18,7 @@ crossterm = "0.28"
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -45,3 +45,9 @@ scraper = "0.22"
 
 # For unique IDs
 uuid = { version = "1", features = ["v4"] }
+
+# For timestamps
+chrono = { version = "0.4", features = ["serde"] }
+
+# For async traits
+async-trait = "0.1"

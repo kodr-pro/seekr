@@ -1,0 +1,58 @@
+# Configuration
+
+**seekr** uses a TOML configuration file located at `~/.config/seekr/config.toml`.
+
+## Configuration Options
+
+The config file is split into three main sections: `[api]`, `[agent]`, and `[ui]`.
+
+### [api]
+
+Settings related to the DeepSeek API connection.
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `key` | `""` | Your DeepSeek API Key. |
+| `model` | `"deepseek-chat"` | The model ID to use (e.g., `deepseek-reasoner`). |
+| `base_url` | `"https://api.deepseek.com"` | The base URL for the API. |
+
+### [agent]
+
+Controls the behavior and constraints of the AI agent.
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `max_iterations` | `25` | Maximum number of tool-use steps per task. |
+| `auto_approve_tools` | `false` | If true, the agent will run tools without asking for permission. |
+| `working_directory` | `"."` | The default directory where the agent operates. |
+
+### [ui]
+
+Customizes the look and feel of the terminal interface.
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `theme` | `"dark"` | UI Theme (currently supports `dark`). |
+| `show_reasoning` | `true` | Whether to show the agent's internal reasoning steps. |
+
+## Example Config
+
+```toml
+[api]
+key = "sk-..."
+model = "deepseek-reasoner"
+base_url = "https://api.deepseek.com"
+
+[agent]
+max_iterations = 50
+auto_approve_tools = true
+working_directory = "/home/user/projects"
+
+[ui]
+theme = "dark"
+show_reasoning = true
+```
+
+---
+
+[Next: Tools](/tools)

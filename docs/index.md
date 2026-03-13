@@ -1,0 +1,35 @@
+# Introduction
+
+Welcome to the **seekr** documentation.
+
+**seekr** is an autonomous AI agent manager designed specifically for the terminal. Built with Rust and powered by the DeepSeek native API, it provides a fast, reliable, and powerful interface for managing AI-driven tasks within your local development environment.
+
+## Why seekr?
+
+- **Native Speed:** Written in Rust for minimal overhead and maximum performance.
+- **DeepSeek First:** Optimized for DeepSeek's latest models and capabilities.
+- **Local Control:** All agent activities happen in your terminal, under your supervision.
+- **Rich TUI:** A sophisticated Terminal User Interface that doesn't sacrifice power for aesthetics.
+
+## Core Concepts
+
+### The Agent Loop
+seekr runs a continuous loop where the agent:
+1. Receives a objective or task.
+2. Analyzes the current state.
+3. Decides which tool to use (Shell, File, Web, etc.).
+4. Executes the tool and observes the outcome.
+5. Repeats until the task is complete.
+
+### Tools
+Each tool in seekr is a specialized capability that the agent can invoke. You can choose to auto-approve these tools or review each action for maximum security.
+
+### User Interface
+The UI is divided into several sections:
+- **Chat:** The primary interface for interacting with the agent.
+- **Tasks:** A dedicated view for tracking complex multi-step objectives.
+- **Setup:** A wizard for managing your configuration and API keys.
+
+---
+
+[Next: Installation](/installation)

@@ -3,9 +3,13 @@
 // web_fetch: Fetches a URL and extracts text content (stripping HTML).
 // web_search: Performs a DuckDuckGo search and parses results.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use scraper::{Html, Selector};
+use async_trait::async_trait;
+use crate::api::types::{FunctionDefinition, ToolDefinition};
+use crate::tools::{Tool, task::TaskManager, truncate};
+use serde_json::json;
 
 /// Fetch a web page and return its text content
 pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
@@ -173,4 +177,73 @@ fn urlencoding(input: &str) -> String {
         }
     }
     result
+}
+
+// --- Tools ---
+
+pub struct WebFetchTool;
+
+#[async_trait]
+impl Tool for WebFetchTool {
+    fn name(&self) -> &str { "web_fetch" }
+    fn definition(&self) -> ToolDefinition {
+         ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: self.name().to_string(),
+                description: "Fetch a web page and return its text content (HTML stripped). Use to gather information from the web.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "url": { "type": "string", "description": "URL to fetch" },
+                        "selector": { "type": "string", "description": "Optional CSS selector to extract specific content" }
+                    },
+                    "required": ["url"]
+                }),
+            },
+        }
+    }
+    async fn execute(&self, args: &serde_json::Value, _task_manager: &mut TaskManager) -> Result<(String, String)> {
+        let url = args["url"].as_str().ok_or_else(|| anyhow!("Missing url"))?;
+        let selector = args["selector"].as_str();
+        
+        let mut short_url = url.to_string();
+        if short_url.len() > 40 {
+            short_url.truncate(37);
+            short_url.push_str("...");
+        }
+        let summary = format!("web_fetch {}", short_url);
+        
+        let result = web_fetch(url, selector).await?;
+        Ok((result, summary))
+    }
+}
+
+pub struct WebSearchTool;
+
+#[async_trait]
+impl Tool for WebSearchTool {
+    fn name(&self) -> &str { "web_search" }
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: self.name().to_string(),
+                description: "Search the web using DuckDuckGo and return results with titles, URLs, and snippets.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "query": { "type": "string", "description": "Search query" }
+                    },
+                    "required": ["query"]
+                }),
+            },
+        }
+    }
+    async fn execute(&self, args: &serde_json::Value, _task_manager: &mut TaskManager) -> Result<(String, String)> {
+        let query = args["query"].as_str().ok_or_else(|| anyhow!("Missing query"))?;
+        let summary = format!("web_search \"{}\"", truncate(query, 20));
+        let result = web_search(query).await?;
+        Ok((result, summary))
+    }
 }

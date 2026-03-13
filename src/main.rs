@@ -7,6 +7,7 @@ mod agent;
 mod api;
 mod app;
 mod config;
+mod session;
 mod tools;
 mod ui;
 

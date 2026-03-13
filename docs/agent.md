@@ -1,0 +1,20 @@
+# Agent Logic
+
+The "brain" of **seekr** is a sophisticated implementation of the ReAct (Reasoning and Acting) pattern, optimized for DeepSeek's high-reasoning models.
+
+## The Reasoning Loop
+
+1. **Input:** The agent receives a task and its current system prompt.
+2. **Reasoning:** It analyzes the task, previous actions, and observations.
+3. **Action:** It selects a tool and provides the necessary arguments.
+4. **Observation:** The result of the tool execution is fed back into the agent's context.
+
+## System Prompts
+**seekr** uses carefully crafted system prompts that define its capabilities, limitations, and "personality". These prompts are designed to minimize hallucinations and ensure the agent stays on task.
+
+## Memory Management
+As the conversation grows, **seekr** manages its token context by summarizing older parts of the conversation or pruning less relevant information (depending on complexity).
+
+---
+
+[Back to Introduction](/)

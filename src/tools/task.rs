@@ -4,6 +4,11 @@
 // on multi-step operations. Tasks are displayed in the TUI task panel.
 
 use serde::{Deserialize, Serialize};
+use async_trait::async_trait;
+use crate::api::types::{FunctionDefinition, ToolDefinition};
+use crate::tools::Tool;
+use anyhow::{Result, anyhow};
+use serde_json::json;
 
 /// Possible task statuses
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -51,7 +56,7 @@ impl TaskStatus {
 }
 
 /// A tracked task
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: usize,
     pub title: String,
@@ -59,7 +64,7 @@ pub struct Task {
 }
 
 /// Task manager that holds the list of active tasks
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct TaskManager {
     pub tasks: Vec<Task>,
     next_id: usize,
@@ -95,6 +100,92 @@ impl TaskManager {
             Ok(format!("Task {} updated to {}", task_id, task.status))
         } else {
             Err(format!("Task {} not found", task_id))
+        }
+    }
+}
+
+// --- Tools ---
+
+pub struct CreateTaskTool;
+
+#[async_trait]
+impl Tool for CreateTaskTool {
+    fn name(&self) -> &str {
+        "create_task"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: self.name().to_string(),
+                description: "Create a task to track progress on a multi-step operation. Tasks appear in the task panel.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Short task title"
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "Task status: pending, in_progress, completed, failed"
+                        }
+                    },
+                    "required": ["title"]
+                }),
+            },
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+        let title = args["title"].as_str().ok_or_else(|| anyhow!("Missing title"))?;
+        let status = args["status"].as_str();
+        let id = task_manager.create_task(title, status);
+        let summary = format!("create_task #{}", id);
+        Ok((format!("Created task #{}: {}", id, title), summary))
+    }
+}
+
+pub struct UpdateTaskTool;
+
+#[async_trait]
+impl Tool for UpdateTaskTool {
+    fn name(&self) -> &str {
+        "update_task"
+    }
+
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            tool_type: "function".to_string(),
+            function: FunctionDefinition {
+                name: self.name().to_string(),
+                description: "Update the status of an existing task.".to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "integer",
+                            "description": "Task ID (1-based index)"
+                        },
+                        "status": {
+                            "type": "string",
+                            "description": "New status: pending, in_progress, completed, failed"
+                        }
+                    },
+                    "required": ["task_id", "status"]
+                }),
+            },
+        }
+    }
+
+    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+        let task_id = args["task_id"].as_u64().ok_or_else(|| anyhow!("Missing task_id"))? as usize;
+        let status = args["status"].as_str().ok_or_else(|| anyhow!("Missing status"))?;
+        let summary = format!("update_task #{}", task_id);
+        match task_manager.update_task(task_id, status) {
+            Ok(msg) => Ok((msg, summary)),
+            Err(e) => Err(anyhow!(e)),
         }
     }
 }
