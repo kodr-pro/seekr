@@ -14,7 +14,7 @@ use ratatui::{
 use crate::app::ChatEntry;
 
 /// Render the chat panel
-pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_offset: u16, focused: bool) {
+pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_offset: u16, focused: bool) -> u16 {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -29,7 +29,7 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
     let inner = block.inner(area);
     if inner.width == 0 || inner.height == 0 {
         frame.render_widget(block, area);
-        return;
+        return 0;
     }
 
     // Build the full text content
@@ -55,18 +55,12 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                     Span::styled("● Assistant", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 ]));
                 
-                // Process text to collapse overly aggressive newlines from tools while keeping markdown-ish paragraphs
+                // Restore structure-preserving rendering but avoid excessive empty lines
                 let processed = if text.is_empty() && is_streaming { "..." } else { text.as_str() };
-                for paragraph in processed.split("\n\n") {
-                    let cleaned = paragraph.replace('\n', " ");
+                for line in processed.lines() {
                     all_text.push_line(Line::from(vec![
-                        Span::styled(cleaned, Style::default().fg(Color::White)),
+                        Span::styled(line, Style::default().fg(Color::White)),
                     ]));
-                    all_text.push_line(Line::from(""));
-                }
-                // Remove the last extra empty line from paragraph splitting
-                if !all_text.lines.is_empty() {
-                    all_text.lines.pop();
                 }
 
                 if is_streaming && !text.ends_with("...") {
@@ -112,8 +106,6 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                     result.clone()
                 };
 
-                // For results, we often get raw content (HTML/JSON). 
-                // We'll show it in a dimmed, monospaced-like block.
                 for line in display_result.lines() {
                     let trimmed = line.trim();
                     if !trimmed.is_empty() {
@@ -200,4 +192,6 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
             &mut scrollbar_state,
         );
     }
+
+    max_scroll
 }
