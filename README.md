@@ -1,4 +1,8 @@
-# 🔍 seekr
+# seekr
+
+<p align="center">
+  <img src="docs/logo.png" alt="seekr Logo" width="400">
+</p>
 
 **seekr** is a high-performance AI Agent Manager featuring a sleek Terminal UI, powered by the DeepSeek native API. It brings the power of autonomous agents directly to your terminal with a robust toolset for shell execution, file management, and web exploration.
 
@@ -8,21 +12,21 @@
 
 ---
 
-## ✨ Features
+## Features
 
-- 🖥️ **Terminal UI (TUI):** Built with `ratatui` for a responsive, multi-tabbed interactive experience.
-- 🧠 **Native DeepSeek Integration:** Low-latency access to DeepSeek's powerful reasoning and chat models.
-- 🛠️ **Autonomous Tools:**
-  - **🐚 Shell:** Execute terminal commands and capture output.
-  - **📂 File Edit:** Sophisticated file manipulation and management.
-  - **🌐 Web:** Search and scrape content from the web for real-time information.
-  - **📋 Task Management:** Track agent goals and progress within the UI.
-- ⚙️ **Configurable Behaviors:** Customize max iterations, auto-approval settings, and UI themes.
-- 🔒 **Privacy First:** Configuration and API keys are stored locally in `~/.config/seekr/`.
+- **Terminal UI (TUI):** Built with `ratatui` for a responsive, multi-tabbed interactive experience.
+- **Native DeepSeek Integration:** Low-latency access to DeepSeek's powerful reasoning and chat models.
+- **Autonomous Tools:**
+  - **Shell:** Execute terminal commands and capture output.
+  - **File Edit:** Sophisticated file manipulation and management.
+  - **Web:** Search and scrape content from the web for real-time information.
+  - **Task Management:** Track agent goals and progress within the UI.
+- **Configurable Behaviors:** Customize max iterations, auto-approval settings, and UI themes.
+- **Privacy First:** Configuration and API keys are stored locally in `~/.config/seekr/`.
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -55,7 +59,7 @@ On your first run, **seekr** will guide you through a setup wizard to configure 
 
 ---
 
-## 📂 Configuration
+## Configuration
 
 **seekr** stores its configuration in `~/.config/seekr/config.toml`. You can manually edit this file or use the built-in setup wizard.
 
@@ -77,7 +81,7 @@ show_reasoning = true
 
 ---
 
-## 🛠️ Toolset
+## Toolset
 
 | Tool | Description | Capabilities |
 | :--- | :--- | :--- |
@@ -88,13 +92,13 @@ show_reasoning = true
 
 ---
 
-## 📖 Documentation
+## Documentation
 
 For more detailed guides and API references, check out our [Documentation](https://docs.page/kodr-pro/seekr).
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
@@ -106,12 +110,12 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ---
 
-## 📄 License
+## License
 
 Distributed under the Polyform Prosperity License 1.0.0. See `LICENSE` for more information regarding personal and commercial use.
 
 ---
 
 <p align="center">
-  Built with ❤️ by the kodr team
+  Built with care by the kodr team
 </p>

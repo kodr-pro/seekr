@@ -134,7 +134,13 @@ impl TaskManager {
                 .map(|s| TaskStatus::from_str_loose(s))
                 .unwrap_or(TaskStatus::Pending),
         };
-        self.tasks.push(task);
+        self.tasks.push(task.clone());
+        
+        // Send event if we have a channel
+        if let Some(ref tx) = self.event_tx {
+            tx.send(crate::agent::AgentEvent::TaskCreated(task)).ok();
+        }
+        
         id
     }
 
@@ -142,6 +148,12 @@ impl TaskManager {
     pub fn update_task(&mut self, task_id: usize, status: &str) -> Result<String, String> {
         if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
             task.status = TaskStatus::from_str_loose(status);
+            
+            // Send event if we have a channel
+            if let Some(ref tx) = self.event_tx {
+                tx.send(crate::agent::AgentEvent::TaskUpdated(task.clone())).ok();
+            }
+            
             Ok(format!("Task {} updated to {}", task_id, task.status))
         } else {
             Err(format!("Task {} not found", task_id))
@@ -232,5 +244,80 @@ impl Tool for UpdateTaskTool {
             Ok(msg) => Ok((msg, summary)),
             Err(e) => Err(anyhow!(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+    use crate::agent::AgentEvent;
+
+    #[tokio::test]
+    async fn test_task_sync() {
+        // Create a channel for events
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        
+        // Create a task manager with the event sender
+        let mut task_manager = TaskManager::new().with_sender(event_tx);
+        
+        // Test 1: Create a task
+        let task_id = task_manager.create_task("Test Task", Some("in_progress"));
+        
+        // Check that the task was created
+        assert_eq!(task_manager.tasks.len(), 1);
+        assert_eq!(task_manager.tasks[0].id, task_id);
+        assert_eq!(task_manager.tasks[0].title, "Test Task");
+        assert_eq!(task_manager.tasks[0].status, TaskStatus::InProgress);
+        
+        // Check that an event was sent
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            AgentEvent::TaskCreated(task) => {
+                assert_eq!(task.id, task_id);
+                assert_eq!(task.title, "Test Task");
+                assert_eq!(task.status, TaskStatus::InProgress);
+            }
+            _ => panic!("Expected TaskCreated event"),
+        }
+        
+        // Test 2: Update the task
+        let result = task_manager.update_task(task_id, "completed");
+        assert!(result.is_ok());
+        
+        // Check that the task was updated
+        assert_eq!(task_manager.tasks[0].status, TaskStatus::Completed);
+        
+        // Check that an event was sent
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            AgentEvent::TaskUpdated(task) => {
+                assert_eq!(task.id, task_id);
+                assert_eq!(task.status, TaskStatus::Completed);
+            }
+            _ => panic!("Expected TaskUpdated event"),
+        }
+        
+        // Test 3: Create another task
+        let task_id2 = task_manager.create_task("Another Task", None);
+        
+        // Check that the task was created
+        assert_eq!(task_manager.tasks.len(), 2);
+        assert_eq!(task_manager.tasks[1].id, task_id2);
+        assert_eq!(task_manager.tasks[1].title, "Another Task");
+        assert_eq!(task_manager.tasks[1].status, TaskStatus::Pending);
+        
+        // Check that an event was sent
+        let event = event_rx.try_recv().unwrap();
+        match event {
+            AgentEvent::TaskCreated(task) => {
+                assert_eq!(task.id, task_id2);
+                assert_eq!(task.title, "Another Task");
+                assert_eq!(task.status, TaskStatus::Pending);
+            }
+            _ => panic!("Expected TaskCreated event"),
+        }
+        
+        println!("Task synchronization test passed!");
     }
 }

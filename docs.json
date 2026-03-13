@@ -1,0 +1,52 @@
+{
+  "name": "seekr",
+  "description": "Autonomous AI Agent Manager for the Terminal",
+  "logo": "/docs/logo.png",
+  "sidebar": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        {
+          "title": "Introduction",
+          "href": "/",
+          "icon": "home"
+        },
+        {
+          "title": "Installation",
+          "href": "/installation",
+          "icon": "download"
+        },
+        {
+          "title": "Configuration",
+          "href": "/configuration",
+          "icon": "settings"
+        }
+      ]
+    },
+    {
+      "group": "Deep Dive",
+      "pages": [
+        {
+          "title": "The Agent Loop",
+          "href": "/agent",
+          "icon": "refresh"
+        },
+        {
+          "title": "Built-in Tools",
+          "href": "/tools",
+          "icon": "tool"
+        },
+        {
+          "title": "User Interface",
+          "href": "/ui",
+          "icon": "terminal"
+        }
+      ]
+    }
+  ],
+  "theme": {
+    "colors": {
+      "primary": "#00bcd4"
+    }
+  }
+}

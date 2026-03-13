@@ -41,6 +41,10 @@ pub enum AgentEvent {
     ToolApprovalRequest { call_index: usize, name: String, arguments: String },
     /// Request CLI input (e.g. for sudo password, [y/n] prompt)
     CliInputRequest { prompt: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
+    /// A new task was created
+    TaskCreated(crate::tools::task::Task),
+    /// An existing task was updated
+    TaskUpdated(crate::tools::task::Task),
 }
 
 /// Events sent from the UI to the agent loop
