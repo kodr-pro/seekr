@@ -6,27 +6,33 @@
       "pages": [
         {
           "title": "Introduction",
-          "href": "/"
+          "href": "/",
+          "icon": "home"
         },
         {
           "title": "Getting Started",
-          "href": "/getting-started"
+          "href": "/getting-started",
+          "icon": "rocket"
         },
         {
           "title": "Built-in Tools",
-          "href": "/tools"
+          "href": "/tools",
+          "icon": "box"
         },
         {
           "title": "The Agent Loop",
-          "href": "/agent"
+          "href": "/agent",
+          "icon": "refresh-cw"
         },
         {
           "title": "User Interface",
-          "href": "/ui"
+          "href": "/ui",
+          "icon": "terminal"
         },
         {
           "title": "Info Schema",
-          "href": "/schema"
+          "href": "/schema",
+          "icon": "file-code"
         }
       ]
     }
