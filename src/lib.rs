@@ -2,6 +2,8 @@ pub mod agent;
 pub mod api;
 pub mod app;
 pub mod config;
+pub mod doctor;
+pub mod manager;
 pub mod session;
 pub mod tools;
 pub mod ui;

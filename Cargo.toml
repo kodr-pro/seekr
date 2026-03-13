@@ -55,3 +55,8 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # For async traits
 async-trait = "0.1"
+colored = "3"
+shellexpand = "3"
+
+[dev-dependencies]
+tempfile = "3"

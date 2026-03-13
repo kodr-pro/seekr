@@ -7,7 +7,7 @@ The power of **seekr** lies in its toolset. These tools allow the AI agent to in
 ### 🐚 Shell Tool
 The shell tool allows the agent to execute commands on your system.
 - **Capabilities:** Run scripts, install packages, check system logs, etc.
-- **Security:** By default, all commands require user approval unless `auto_approve_tools` is set to `true`.
+- **Safety:** Features a 5-minute execution timeout and a blacklist of dangerous commands to prevent system instability.
 
 ### 📂 File Edit Tool
 A specialized tool for managing files in your repository.
@@ -24,12 +24,30 @@ Used by the agent to manage its own internal state and goals.
 - **Capabilities:** Break down complex objectives into smaller, manageable tasks.
 - **Tracking:** Users can see the current active task and the history of completed tasks in the **Tasks** tab.
 
-## Tool Safety
+---
 
-**seekr** is designed with safety in mind. Every tool invocation that could modify your system (like Shell and File Edit) is presented to you for confirmation. You can see:
+## 🛠 Extensible Skills
+Beyond built-in tools, you can extend **seekr** with custom skills. 
+
+### How it works:
+1. Create a directory in `~/.config/seekr/skills/` (global) or `./.seekr/skills/` (repository-specific).
+2. Add a `skill.json` to define your tools and their parameters.
+3. Write scripts that the tools will execute.
+
+Seekr handles the argument passing and captures the output back into the agent's context.
+
+---
+
+## Tool Safety & Approvals
+**seekr** is designed with safety in mind. Every tool invocation that could modify your system is presented for confirmation. You can choose to:
+- **[Y]es**: Approve the current execution.
+- **[N]o**: Reject the execution.
+- **[A]lways**: Enter auto-approval mode for the remainder of the session.
+
+You can see:
 1. The exact command or edit being proposed.
 2. The agent's reasoning behind the action.
-3. The option to **Approve**, **Reject**, or **Edit** the command.
+3. A real-time preview of file diffs in the activity log.
 
 ---
 

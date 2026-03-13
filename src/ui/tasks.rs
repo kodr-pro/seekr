@@ -107,10 +107,21 @@ fn render_activity_log(frame: &mut Frame, area: Rect, activities: &[ActivityEntr
         // Show the most recent activities (last N that fit)
         let start = activities.len().saturating_sub(20);
         for activity in &activities[start..] {
-            lines.push(Line::from(Span::styled(
-                activity.summary.as_str(),
-                Style::default().fg(Color::Cyan),
-            )));
+            let (icon, color) = match activity.status {
+                crate::tools::task::ActivityStatus::Starting => ("▶", Color::Cyan),
+                crate::tools::task::ActivityStatus::Success => ("✓", Color::Green),
+                crate::tools::task::ActivityStatus::Failure => ("✗", Color::Red),
+            };
+            
+            let time_str = activity.timestamp.format("%H:%M:%S").to_string();
+            
+            lines.push(Line::from(vec![
+                Span::styled(format!("{} ", icon), Style::default().fg(color)),
+                Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+                Span::styled(activity.tool_name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+                Span::styled(": ", Style::default().fg(Color::DarkGray)),
+                Span::styled(activity.summary.as_str(), Style::default().fg(Color::Gray)),
+            ]));
         }
     }
 

@@ -21,7 +21,7 @@ impl AppLayout {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(1), // title bar
+                Constraint::Length(2), // title bar
                 Constraint::Min(5),    // main area (chat + tasks)
                 Constraint::Length(5), // input bar
                 Constraint::Length(1), // status bar

@@ -41,11 +41,19 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 lines.push(Line::from(""));
             }
             ChatEntry::AssistantContent(text) => {
-                // Wrap long assistant messages
-                for line_str in text.lines() {
-                    if !line_str.trim().is_empty() {
+                // Render all lines including blank lines for proper markdown structure.
+                // Split on '\n' instead of .lines() to preserve trailing partial lines.
+                let raw_lines: Vec<&str> = text.split('\n').collect();
+                for (i, line_str) in raw_lines.iter().enumerate() {
+                    if line_str.trim().is_empty() {
+                        // Preserve blank lines (paragraph spacing, list separation)
+                        // but skip a trailing blank at the very end to avoid double-spacing.
+                        if i < raw_lines.len() - 1 {
+                            lines.push(Line::from(""));
+                        }
+                    } else {
                         lines.push(Line::from(vec![
-                            Span::styled(line_str, Style::default().fg(Color::White)),
+                            Span::styled(*line_str, Style::default().fg(Color::White)),
                         ]));
                     }
                 }
@@ -53,10 +61,16 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
             }
             ChatEntry::AssistantStreaming(text) => {
                 if !text.is_empty() {
-                    for line_str in text.lines() {
-                        if !line_str.trim().is_empty() {
+                    // Use split('\n') so a trailing partial line (no newline yet) is not lost.
+                    let raw_lines: Vec<&str> = text.split('\n').collect();
+                    for (i, line_str) in raw_lines.iter().enumerate() {
+                        if line_str.trim().is_empty() {
+                            if i < raw_lines.len() - 1 {
+                                lines.push(Line::from(""));
+                            }
+                        } else {
                             lines.push(Line::from(vec![
-                                Span::styled(line_str, Style::default().fg(Color::White)),
+                                Span::styled(*line_str, Style::default().fg(Color::White)),
                             ]));
                         }
                     }
@@ -69,7 +83,7 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 lines.push(Line::from(vec![
                     Span::styled("[thinking] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM)),
                 ]));
-                for line_str in text.lines() {
+                for line_str in text.split('\n') {
                     if !line_str.trim().is_empty() {
                         lines.push(Line::from(vec![
                             Span::styled(line_str, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
@@ -91,16 +105,42 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 ]));
             }
             ChatEntry::ToolResult { name, result } => {
-                let result_short = if result.len() > 200 {
-                    format!("{}...", &result[..200])
+                lines.push(Line::from(vec![
+                    Span::styled("  = ", Style::default().fg(Color::Blue)),
+                    Span::styled(format!("[{}]", name), Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                ]));
+
+                let lines_to_show = if result.len() > 1000 {
+                    let mut s = result.chars().take(1000).collect::<String>();
+                    s.push_str("...");
+                    s
                 } else {
                     result.clone()
                 };
-                lines.push(Line::from(vec![
-                    Span::styled("  = ", Style::default().fg(Color::Blue)),
-                    Span::styled(format!("[{}] ", name), Style::default().fg(Color::Blue)),
-                    Span::styled(result_short, Style::default().fg(Color::DarkGray)),
-                ]));
+
+                for line in lines_to_show.split('\n') {
+                    if line.starts_with('+') {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Green)),
+                        ]));
+                    } else if line.starts_with('-') {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                        ]));
+                    } else if line.starts_with("@@") {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Cyan)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                        ]));
+                    }
+                }
                 lines.push(Line::from(""));
             }
             ChatEntry::Error(msg) => {
@@ -147,8 +187,9 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
         }
     }
 
-    // Calculate scroll
-    let total_lines = lines.len() as u16;
+    // Calculate scroll: since we don't know the exact height after wrapping,
+    // we allow scrolling up to 4x the number of entries as a safe buffer.
+    let total_lines = (lines.len() * 4) as u16;
     let visible_height = inner.height;
     let max_scroll = total_lines.saturating_sub(visible_height);
     let effective_scroll = scroll_offset.min(max_scroll);

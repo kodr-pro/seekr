@@ -79,19 +79,19 @@ async fn test_session_save_load() {
 #[tokio::test]
 async fn test_task_manager_activities() {
     let mut tm = TaskManager::new();
-    tm.log_activity("test_tool", "test summary");
+    tm.log_activity("test_tool", "test summary", seekr::tools::task::ActivityStatus::Success);
     assert_eq!(tm.activities.len(), 1);
     assert_eq!(tm.activities[0].tool_name, "test_tool");
     assert_eq!(tm.activities[0].summary, "test summary");
 }
 
 #[tokio::test]
-async fn test_tool_registry() {
-    use seekr::tools::ToolRegistry;
-    let registry = ToolRegistry::new();
-    assert!(registry.get("shell_command").is_some());
-    assert!(registry.get("read_file").is_some());
-    assert!(registry.get("web_search").is_some());
+async fn test_skill_registry() {
+    use seekr::tools::SkillRegistry;
+    let registry = SkillRegistry::new(None);
+    assert!(registry.get_tool("shell_command").is_some());
+    assert!(registry.get_tool("read_file").is_some());
+    assert!(registry.get_tool("web_search").is_some());
     assert!(registry.all_definitions().len() >= 9);
 }
 
@@ -101,7 +101,7 @@ async fn test_execute_tool_mock() {
     let mut tm = TaskManager::new();
     let args = json!({ "command": "echo 'execute_tool test'" }).to_string();
     
-    let (result, activity) = execute_tool("shell_command", &args, &mut tm).await;
+    let (result, activity) = execute_tool("shell_command", &args, &mut tm, None).await;
     // The shell command might output with newline or exit code, so check for the content
     // It might return "Command completed with exit code: 0" if output is empty
     // or it might contain the actual output

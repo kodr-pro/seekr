@@ -16,15 +16,21 @@ use serde_json::json;
 pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
     let command = args["command"].as_str().ok_or_else(|| anyhow!("Missing command"))?;
     let summary = format!("shell_command {}", truncate(command, 20));
-    task_manager.log_activity("shell_command", &summary);
+    task_manager.log_activity("shell_command", &summary, crate::tools::task::ActivityStatus::Starting);
 
     // Basic security check: prevent dangerous commands
-    let dangerous_patterns = ["rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:"];
+    let dangerous_patterns = [
+        "rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", 
+        "> /dev/sda", "> /dev/nvme", "chmod -R 777 /", "chown -R"
+    ];
     for pattern in dangerous_patterns {
         if command.contains(pattern) {
             return Err(anyhow!("Security Error: Command contains a forbidden pattern: '{}'", pattern));
         }
     }
+
+    // Use a timeout to prevent runaway processes
+    let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
 
     let mut child = Command::new("sh")
         .arg("-c")
@@ -110,8 +116,14 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
                 let _ = stdin.write_all(b"\n").await;
                 let _ = stdin.flush().await;
             }
-            status = child.wait() => {
-                let status = status?;
+            status = tokio::time::timeout(timeout_duration, child.wait()) => {
+                let status = match status {
+                    Ok(s) => s?,
+                    Err(_) => {
+                        let _ = child.kill().await;
+                        return Err(anyhow!("Command timed out after {} seconds", timeout_duration.as_secs()));
+                    }
+                };
                 let mut final_res = result_arc.lock().await.clone();
                 if final_res.is_empty() {
                     final_res = format!("Command completed with exit code: {}", status.code().unwrap_or(-1));
