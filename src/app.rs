@@ -98,9 +98,9 @@ pub struct App {
     pub input: String,
     pub cursor_pos: usize,
     pub scroll_offset: u16,
-    pub show_reasoning: bool,
-    /// True when the user has manually scrolled up (suppress auto-scroll)
+    pub chat_max_scroll: u16,
     pub user_scrolled: bool,
+    pub show_reasoning: bool,
 
     // Agent communication channels
     pub agent_cmd_tx: Option<mpsc::UnboundedSender<AgentCommand>>,
@@ -151,6 +151,7 @@ impl App {
             input: String::new(),
             cursor_pos: 0,
             scroll_offset: 0,
+            chat_max_scroll: 0,
             show_reasoning: true,
             user_scrolled: false,
             agent_cmd_tx: None,
@@ -283,7 +284,7 @@ impl App {
         }
 
         // Auto-scroll to bottom
-        self.scroll_offset = u16::MAX;
+        self.scroll_offset = self.chat_max_scroll;
     }
 
     /// Process pending agent events (non-blocking)
@@ -307,7 +308,7 @@ impl App {
                     self.streaming_content.push_str(&text);
                     self.update_streaming_entry();
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::ReasoningDelta(text) => {
@@ -316,7 +317,7 @@ impl App {
                         self.update_reasoning_entry();
                     }
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::ToolCallStart { name, arguments } => {
@@ -326,14 +327,14 @@ impl App {
                         arguments: arguments.clone(),
                     });
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::ToolCallResult { name, result } => {
                     self.chat_entries
                         .push(ChatEntry::ToolResult { name, result });
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::Activity(entry) => {
@@ -362,7 +363,7 @@ impl App {
                     self.is_streaming = false;
                     self.mode = AppMode::AwaitingContinue;
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::Error(msg) => {
@@ -379,7 +380,7 @@ impl App {
                     self.chat_entries
                         .push(ChatEntry::ToolApproval { name, arguments });
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::CliInputRequest { prompt, input_tx } => {
@@ -388,7 +389,7 @@ impl App {
                     self.cli_input_tx = Some(input_tx);
                     self.chat_entries.push(ChatEntry::CliInputPrompt(prompt));
                     if !self.user_scrolled {
-                        self.scroll_offset = u16::MAX;
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::TaskCreated(task) => {
@@ -712,7 +713,7 @@ async fn event_loop(
 }
 
 /// Render the current application state
-fn render(frame: &mut Frame, app: &App) {
+fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     match app.mode {
         AppMode::Setup => {
@@ -739,14 +740,14 @@ fn render(frame: &mut Frame, app: &App) {
 }
 
 /// Render the main application layout
-fn render_main(frame: &mut Frame, area: Rect, app: &App) {
+fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     let layout = ui::layout::AppLayout::new(area);
 
     // Title bar
     render_title_bar(frame, layout.title_bar, app);
 
     // Chat panel
-    ui::chat::render_chat(
+    app.chat_max_scroll = ui::chat::render_chat(
         frame,
         layout.chat_panel,
         &app.chat_entries,
@@ -1177,7 +1178,7 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             KeyCode::Enter => {
                 app.send_message();
                 app.user_scrolled = false;
-                app.scroll_offset = u16::MAX;
+                app.scroll_offset = app.chat_max_scroll;
             }
             KeyCode::Esc => {
                 app.mode = AppMode::QuitConfirm;
@@ -1195,23 +1196,30 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                 app.show_reasoning = !app.show_reasoning;
             }
             KeyCode::PageUp if app.focus == Focus::Chat => {
+                if !app.user_scrolled {
+                    app.scroll_offset = app.chat_max_scroll;
+                }
                 app.scroll_offset = app.scroll_offset.saturating_sub(10);
                 app.user_scrolled = true;
             }
             KeyCode::PageDown if app.focus == Focus::Chat => {
                 app.scroll_offset = app.scroll_offset.saturating_add(10);
-                // Auto-scroll re-enables in poll_agent_events if we're at the bottom
+                if app.scroll_offset >= app.chat_max_scroll {
+                    app.user_scrolled = false;
+                }
             }
             KeyCode::Up if app.focus == Focus::Chat => {
+                if !app.user_scrolled {
+                    app.scroll_offset = app.chat_max_scroll;
+                }
                 app.scroll_offset = app.scroll_offset.saturating_sub(1);
                 app.user_scrolled = true;
             }
             KeyCode::Down if app.focus == Focus::Chat => {
                 app.scroll_offset = app.scroll_offset.saturating_add(1);
-                // We'll let poll_agent_events handle resetting user_scrolled 
-                // if it detects we've hit the bottom, but for now we stay in manual mode
-                // if the user is explicitly pressing keys.
-                app.user_scrolled = true;
+                if app.scroll_offset >= app.chat_max_scroll {
+                    app.user_scrolled = false;
+                }
             }
             KeyCode::Backspace => {
                 if app.cursor_pos > 0 {
@@ -1246,12 +1254,19 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
         if app.focus == Focus::Chat {
             match kind {
                 MouseEventKind::ScrollUp => {
+                    if !app.user_scrolled {
+                        app.scroll_offset = app.chat_max_scroll;
+                    }
                     app.scroll_offset = app.scroll_offset.saturating_sub(3);
                     app.user_scrolled = true;
                 }
                 MouseEventKind::ScrollDown => {
                     app.scroll_offset = app.scroll_offset.saturating_add(3);
-                    app.user_scrolled = true;
+                    if app.scroll_offset >= app.chat_max_scroll {
+                        app.user_scrolled = false;
+                    } else {
+                        app.user_scrolled = true;
+                    }
                 }
                 _ => {}
             }
