@@ -15,13 +15,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// An entry in the activity log shown in the task panel
-#[derive(Debug, Clone)]
-pub struct ActivityEntry {
-    #[allow(dead_code)]
-    pub tool_name: String,
-    pub summary: String,
-}
+pub use crate::tools::task::ActivityEntry;
 
 /// The base trait for all agent tools
 #[async_trait]

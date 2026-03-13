@@ -48,6 +48,8 @@ pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usiz
         ])
     };
 
-    let paragraph = Paragraph::new(display_text).block(block);
+    let paragraph = Paragraph::new(display_text)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }

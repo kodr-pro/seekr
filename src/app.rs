@@ -18,7 +18,7 @@ use ratatui::{
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use crate::agent::{AgentCommand, AgentEvent, AgentLoop};
+use crate::agent::{AgentCommand, AgentEvent};
 use crate::api::client::DeepSeekClient;
 use crate::config::AppConfig;
 use crate::tools::task::Task;
@@ -52,6 +52,7 @@ pub enum ChatEntry {
     Error(String),
     SystemInfo(String),
     ToolApproval { name: String, arguments: String },
+    CliInputPrompt(String),
 }
 
 /// State for the setup wizard
@@ -102,6 +103,8 @@ pub struct App {
     pub iteration: u32,
     pub connected: bool,
     pub awaiting_approval: bool,
+    pub awaiting_cli_input: bool,
+    pub cli_input_prompt: String,
 
     // Tasks and activity (mirrored from agent for UI rendering)
     pub tasks: Vec<Task>,
@@ -114,6 +117,9 @@ pub struct App {
 
     // Setup wizard state
     pub setup_state: SetupState,
+
+    // Resumption state
+    pub session_id: Option<String>,
 }
 
 impl App {
@@ -134,12 +140,15 @@ impl App {
             iteration: 0,
             connected: false,
             awaiting_approval: false,
+            awaiting_cli_input: false,
+            cli_input_prompt: String::new(),
             tasks: Vec::new(),
             activities: Vec::new(),
             streaming_content: String::new(),
             streaming_reasoning: String::new(),
             is_streaming: false,
             setup_state: SetupState::default(),
+            session_id: None,
         }
     }
 
@@ -164,12 +173,62 @@ impl App {
             let (evt_tx, evt_rx) = mpsc::unbounded_channel();
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
-            let agent = AgentLoop::new(config.clone(), evt_tx, cmd_rx);
-            tokio::spawn(agent.run());
+            let agent_res = if let Some(ref sid) = self.session_id {
+                crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx)
+            } else {
+                Ok(crate::agent::loop_mod::AgentLoop::new(config.clone(), evt_tx, cmd_rx))
+            };
 
-            self.agent_cmd_tx = Some(cmd_tx);
-            self.agent_event_rx = Some(evt_rx);
-            self.connected = true;
+            match agent_res {
+                Ok(agent) => {
+                    tokio::spawn(agent.run());
+                    self.agent_cmd_tx = Some(cmd_tx);
+                    self.agent_event_rx = Some(evt_rx);
+                    self.connected = true;
+                }
+                Err(e) => {
+                    self.chat_entries.push(ChatEntry::Error(format!("Failed to start agent: {}", e)));
+                }
+            }
+        }
+    }
+
+    /// Set session ID for resumption
+    pub fn resume_session(&mut self, session_id: String) {
+        self.session_id = Some(session_id.clone());
+        match crate::session::Session::load(&session_id) {
+            Ok(session) => {
+                self.chat_entries.clear();
+                for msg in session.messages {
+                    match (msg.role.as_str(), msg.content) {
+                        ("user", Some(content)) => self.chat_entries.push(ChatEntry::UserMessage(content)),
+                        ("assistant", content) => {
+                            if let Some(c) = content {
+                                self.chat_entries.push(ChatEntry::AssistantContent(c));
+                            }
+                            if let Some(tool_calls) = msg.tool_calls {
+                                for tc in tool_calls {
+                                    self.chat_entries.push(ChatEntry::ToolCall {
+                                        name: tc.function.name,
+                                        arguments: tc.function.arguments,
+                                    });
+                                }
+                            }
+                        }
+                        ("tool", Some(content)) => {
+                            self.chat_entries.push(ChatEntry::ToolResult {
+                                name: "resumed".to_string(),
+                                result: content,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                self.tasks = session.task_manager.tasks.clone();
+            }
+            Err(e) => {
+                self.chat_entries.push(ChatEntry::Error(format!("Failed to load session: {}", e)));
+            }
         }
     }
 
@@ -182,13 +241,18 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
 
+        if self.awaiting_cli_input {
+            self.handle_cli_input(msg);
+            return;
+        }
+
         self.chat_entries.push(ChatEntry::UserMessage(msg.clone()));
         self.is_streaming = true;
         self.streaming_content.clear();
         self.streaming_reasoning.clear();
 
         if let Some(ref tx) = self.agent_cmd_tx {
-            let _ = tx.send(AgentCommand::UserMessage(msg));
+            tx.send(AgentCommand::UserMessage(msg)).ok();
         }
 
         // Auto-scroll to bottom
@@ -244,8 +308,7 @@ impl App {
                 }
                 AgentEvent::TokenUsage {
                     total_tokens,
-                    prompt_tokens: _,
-                    completion_tokens: _,
+                    ..
                 } => {
                     self.total_tokens = total_tokens;
                 }
@@ -270,11 +333,17 @@ impl App {
                 AgentEvent::ToolApprovalRequest {
                     name,
                     arguments,
-                    call_index: _,
+                    ..
                 } => {
                     self.awaiting_approval = true;
                     self.chat_entries
                         .push(ChatEntry::ToolApproval { name, arguments });
+                    self.scroll_offset = u16::MAX;
+                }
+                AgentEvent::CliInputRequest { prompt } => {
+                    self.awaiting_cli_input = true;
+                    self.cli_input_prompt = prompt.clone();
+                    self.chat_entries.push(ChatEntry::CliInputPrompt(prompt));
                     self.scroll_offset = u16::MAX;
                 }
             }
@@ -365,12 +434,29 @@ impl App {
 
         if let Some(ref tx) = self.agent_cmd_tx {
             if always {
-                let _ = tx.send(AgentCommand::ToolAlwaysApprove);
+                tx.send(AgentCommand::ToolAlwaysApprove).ok();
             } else if approved {
-                let _ = tx.send(AgentCommand::ToolApproved { call_index: 0 });
+                tx.send(AgentCommand::ToolApproved { call_index: 0 }).ok();
             } else {
-                let _ = tx.send(AgentCommand::ToolDenied { call_index: 0 });
+                tx.send(AgentCommand::ToolDenied { call_index: 0 }).ok();
             }
+        }
+    }
+
+    /// Handle CLI input
+    pub fn handle_cli_input(&mut self, input: String) {
+        self.awaiting_cli_input = false;
+        // Remove the prompt from chat
+        if let Some(pos) = self
+            .chat_entries
+            .iter()
+            .rposition(|e| matches!(e, ChatEntry::CliInputPrompt(_)))
+        {
+            self.chat_entries.remove(pos);
+        }
+
+        if let Some(ref tx) = self.agent_cmd_tx {
+            tx.send(AgentCommand::CliInputResponse(input)).ok();
         }
     }
 
@@ -399,7 +485,7 @@ pub async fn run_app(mut app: App) -> Result<()> {
 
     // Shutdown agent if running
     if let Some(ref tx) = app.agent_cmd_tx {
-        let _ = tx.send(AgentCommand::Shutdown);
+        tx.send(AgentCommand::Shutdown).ok();
     }
 
     result

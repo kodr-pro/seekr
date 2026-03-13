@@ -124,6 +124,20 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                     ),
                 ]));
             }
+            ChatEntry::CliInputPrompt(prompt) => {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("CLI Input Required: {}", prompt),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "  Type your response in the input bar below.",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+            }
         }
     }
 
