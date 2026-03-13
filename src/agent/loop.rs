@@ -166,6 +166,25 @@ impl AgentLoop {
     /// Execute one full agent turn: call the API, handle tool calls, repeat
     async fn run_agent_turn(&mut self) {
         loop {
+            // ── INTERRUPT CHECK ──────────────────────────────────────────────
+            // Before every API call, drain any commands that arrived while we
+            // were busy executing tools. This is what makes the agent responsive:
+            // the user's new message is injected directly into the conversation
+            // history so the LLM sees it on the next call and can respond.
+            match self.drain_pending_commands().await {
+                DrainResult::Shutdown => return,
+                DrainResult::UserMessageInjected => {
+                    // User interrupted. Skip the iteration-limit check and go
+                    // straight to the API call so the LLM can respond now.
+                    self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
+                    self.prune_messages();
+                    // Jump to API call by falling through — the code below handles it.
+                }
+                DrainResult::Nothing => {
+                    // Normal path: check iteration limit, then call API.
+                }
+            }
+
             // Check iteration limit
             if self.iteration >= self.config.agent.max_iterations {
                 self.event_tx.send(AgentEvent::MaxIterationsReached).ok();
@@ -194,6 +213,7 @@ impl AgentLoop {
 
             // Prune context if needed before calling API
             self.prune_messages();
+
 
             // Call the API with streaming
             let tool_defs = tools::all_tool_definitions();
@@ -474,6 +494,40 @@ impl AgentLoop {
     pub fn task_manager(&self) -> &TaskManager {
         &self.session.task_manager
     }
+
+    /// Non-blocking drain of the command channel.
+    /// Injects any pending user messages into conversation history so
+    /// the next API call can respond to them.
+    /// Returns whether anything meaningful was found.
+    async fn drain_pending_commands(&mut self) -> DrainResult {
+        let mut found_user_message = false;
+
+        loop {
+            match self.command_rx.try_recv() {
+                Ok(AgentCommand::UserMessage(msg)) => {
+                    // Inject directly into history — the UI already showed it
+                    self.session.messages.push(ChatMessage::user(&msg));
+                    found_user_message = true;
+                    // Keep draining in case more messages arrived
+                }
+                Ok(AgentCommand::Shutdown) => return DrainResult::Shutdown,
+                Ok(AgentCommand::ToolAlwaysApprove) => {
+                    self.auto_approve = true;
+                }
+                Ok(_) => {} // Ignore other commands (Continue/AnswerNow don't apply here)
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    return DrainResult::Shutdown;
+                }
+            }
+        }
+
+        if found_user_message {
+            DrainResult::UserMessageInjected
+        } else {
+            DrainResult::Nothing
+        }
+    }
 }
 
 /// Result of waiting for continue-or-answer decision
@@ -481,4 +535,14 @@ enum ContinueAction {
     Continue,
     AnswerNow,
     Shutdown,
+}
+
+/// Result of draining the command channel between tool calls
+enum DrainResult {
+    /// A user message was found and injected into conversation history
+    UserMessageInjected,
+    /// A shutdown command was received
+    Shutdown,
+    /// Nothing noteworthy
+    Nothing,
 }
