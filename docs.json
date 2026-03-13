@@ -1,8 +1,8 @@
 {
-  "name": "seekr",
-  "logo": "./logo.png",
-  "logoDark": "./logo.png",
-  "favicon": "./favicon.ico",
+  "name": "SEEKR",
+  "logo": "/logo.png",
+  "logoDark": "/logo.png",
+  "favicon": "/favicon.ico",
   "sidebar": [
     {
       "group": "Documentation",
@@ -18,14 +18,14 @@
           "icon": "rocket"
         },
         {
+          "title": "Configuration",
+          "href": "/schema",
+          "icon": "settings"
+        },
+        {
           "title": "Built-in Tools",
           "href": "/tools",
           "icon": "box"
-        },
-        {
-          "title": "The Agent Loop",
-          "href": "/agent",
-          "icon": "refresh-cw"
         },
         {
           "title": "User Interface",
@@ -33,9 +33,9 @@
           "icon": "terminal"
         },
         {
-          "title": "Info Schema",
-          "href": "/schema",
-          "icon": "file-code"
+          "title": "The Agent Loop",
+          "href": "/agent",
+          "icon": "refresh-cw"
         }
       ]
     }
