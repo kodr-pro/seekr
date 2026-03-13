@@ -115,3 +115,52 @@ async fn test_execute_tool_mock() {
     assert_eq!(activity.tool_name, "shell_command");
     assert!(activity.summary.contains("shell_command"));
 }
+
+#[tokio::test]
+async fn test_streaming_content_preservation() {
+    use seekr::app::{App, ChatEntry, AppMode};
+    use seekr::agent::AgentEvent;
+    
+    let mut app = App::new_setup();
+    app.mode = AppMode::Main;
+    
+    let (tx, rx) = mpsc::unbounded_channel();
+    app.agent_event_rx = Some(rx);
+    
+    // 1. Assistant starts talking
+    tx.send(AgentEvent::ContentDelta("Part 1".to_string())).unwrap();
+    app.poll_agent_events();
+    
+    // 2. Tool call starts
+    tx.send(AgentEvent::ToolCallStart { 
+        name: "test_tool".to_string(), 
+        arguments: "{}".to_string() 
+    }).unwrap();
+    app.poll_agent_events();
+    
+    // 3. Interleaved content delta
+    tx.send(AgentEvent::ContentDelta("Part 2".to_string())).unwrap();
+    app.poll_agent_events();
+    
+    // 4. Tool call result arrives - THIS SHOULD NOT CLEAR Part 1 or Part 2
+    tx.send(AgentEvent::ToolCallResult { 
+        name: "test_tool".to_string(), 
+        result: "result".to_string() 
+    }).unwrap();
+    app.poll_agent_events();
+    
+    // 5. Finalize turn
+    tx.send(AgentEvent::TurnComplete).unwrap();
+    app.poll_agent_events();
+
+    // Verify results: Everything should be finalized into AssistantContent now
+    let mut all_content = String::new();
+    for entry in &app.chat_entries {
+        if let ChatEntry::AssistantContent(c) = entry {
+            all_content.push_str(c);
+        }
+    }
+    
+    assert!(all_content.contains("Part 1"), "Part 1 missing. Entries: {:?}", app.chat_entries);
+    assert!(all_content.contains("Part 2"), "Part 2 missing. Entries: {:?}", app.chat_entries);
+}
