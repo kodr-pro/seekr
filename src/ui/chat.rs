@@ -41,11 +41,19 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 lines.push(Line::from(""));
             }
             ChatEntry::AssistantContent(text) => {
-                // Wrap long assistant messages
-                for line_str in text.lines() {
-                    if !line_str.trim().is_empty() {
+                // Render all lines including blank lines for proper markdown structure.
+                // Split on '\n' instead of .lines() to preserve trailing partial lines.
+                let raw_lines: Vec<&str> = text.split('\n').collect();
+                for (i, line_str) in raw_lines.iter().enumerate() {
+                    if line_str.trim().is_empty() {
+                        // Preserve blank lines (paragraph spacing, list separation)
+                        // but skip a trailing blank at the very end to avoid double-spacing.
+                        if i < raw_lines.len() - 1 {
+                            lines.push(Line::from(""));
+                        }
+                    } else {
                         lines.push(Line::from(vec![
-                            Span::styled(line_str, Style::default().fg(Color::White)),
+                            Span::styled(*line_str, Style::default().fg(Color::White)),
                         ]));
                     }
                 }
@@ -53,10 +61,16 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
             }
             ChatEntry::AssistantStreaming(text) => {
                 if !text.is_empty() {
-                    for line_str in text.lines() {
-                        if !line_str.trim().is_empty() {
+                    // Use split('\n') so a trailing partial line (no newline yet) is not lost.
+                    let raw_lines: Vec<&str> = text.split('\n').collect();
+                    for (i, line_str) in raw_lines.iter().enumerate() {
+                        if line_str.trim().is_empty() {
+                            if i < raw_lines.len() - 1 {
+                                lines.push(Line::from(""));
+                            }
+                        } else {
                             lines.push(Line::from(vec![
-                                Span::styled(line_str, Style::default().fg(Color::White)),
+                                Span::styled(*line_str, Style::default().fg(Color::White)),
                             ]));
                         }
                     }
@@ -69,7 +83,7 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 lines.push(Line::from(vec![
                     Span::styled("[thinking] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM)),
                 ]));
-                for line_str in text.lines() {
+                for line_str in text.split('\n') {
                     if !line_str.trim().is_empty() {
                         lines.push(Line::from(vec![
                             Span::styled(line_str, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
@@ -147,7 +161,7 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
         }
     }
 
-    // Calculate scroll
+    // Calculate scroll: clamp so we never scroll past the last line
     let total_lines = lines.len() as u16;
     let visible_height = inner.height;
     let max_scroll = total_lines.saturating_sub(visible_height);

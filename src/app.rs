@@ -31,6 +31,10 @@ pub enum AppMode {
     Setup,
     Main,
     QuitConfirm,
+    /// Agent reached max iterations, waiting for user to Continue or Answer Now
+    AwaitingContinue,
+    /// Session list view for resuming or deleting sessions
+    SessionList,
 }
 
 /// Focus area in the main view
@@ -93,6 +97,8 @@ pub struct App {
     pub cursor_pos: usize,
     pub scroll_offset: u16,
     pub show_reasoning: bool,
+    /// True when the user has manually scrolled up (suppress auto-scroll)
+    pub user_scrolled: bool,
 
     // Agent communication channels
     pub agent_cmd_tx: Option<mpsc::UnboundedSender<AgentCommand>>,
@@ -121,6 +127,11 @@ pub struct App {
 
     // Resumption state
     pub session_id: Option<String>,
+
+    // Session list state
+    pub sessions: Vec<crate::session::SessionMetadata>,
+    pub session_selection: usize,
+    pub session_list_error: Option<String>,
 }
 
 impl App {
@@ -135,6 +146,7 @@ impl App {
             cursor_pos: 0,
             scroll_offset: 0,
             show_reasoning: true,
+            user_scrolled: false,
             agent_cmd_tx: None,
             agent_event_rx: None,
             total_tokens: 0,
@@ -151,6 +163,9 @@ impl App {
             is_streaming: false,
             setup_state: SetupState::default(),
             session_id: None,
+            sessions: Vec::new(),
+            session_selection: 0,
+            session_list_error: None,
         }
     }
 
@@ -252,6 +267,8 @@ impl App {
         self.is_streaming = true;
         self.streaming_content.clear();
         self.streaming_reasoning.clear();
+        // New message — reset manual scroll so we auto-follow again
+        self.user_scrolled = false;
 
         if let Some(ref tx) = self.agent_cmd_tx {
             tx.send(AgentCommand::UserMessage(msg)).ok();
@@ -281,14 +298,18 @@ impl App {
                 AgentEvent::ContentDelta(text) => {
                     self.streaming_content.push_str(&text);
                     self.update_streaming_entry();
-                    self.scroll_offset = u16::MAX;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                 }
                 AgentEvent::ReasoningDelta(text) => {
                     self.streaming_reasoning.push_str(&text);
                     if self.show_reasoning {
                         self.update_reasoning_entry();
                     }
-                    self.scroll_offset = u16::MAX;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                 }
                 AgentEvent::ToolCallStart { name, arguments } => {
                     self.finalize_streaming();
@@ -296,12 +317,16 @@ impl App {
                         name: name.clone(),
                         arguments: arguments.clone(),
                     });
-                    self.scroll_offset = u16::MAX;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                 }
                 AgentEvent::ToolCallResult { name, result } => {
                     self.chat_entries
                         .push(ChatEntry::ToolResult { name, result });
-                    self.scroll_offset = u16::MAX;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                     self.streaming_content.clear();
                     self.streaming_reasoning.clear();
                 }
@@ -314,18 +339,25 @@ impl App {
                 } => {
                     self.total_tokens = total_tokens;
                 }
+                AgentEvent::IterationUpdate(n) => {
+                    self.iteration = n;
+                }
                 AgentEvent::TurnComplete => {
                     self.finalize_streaming();
                     self.is_streaming = false;
                     self.iteration = 0;
+                    // Return to Main mode if we were in AwaitingContinue
+                    if self.mode == AppMode::AwaitingContinue {
+                        self.mode = AppMode::Main;
+                    }
                 }
                 AgentEvent::MaxIterationsReached => {
                     self.finalize_streaming();
                     self.is_streaming = false;
-                    self.chat_entries.push(ChatEntry::SystemInfo(
-                        "Agent reached maximum iterations. Send another message to continue."
-                            .to_string(),
-                    ));
+                    self.mode = AppMode::AwaitingContinue;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                 }
                 AgentEvent::Error(msg) => {
                     self.finalize_streaming();
@@ -340,14 +372,18 @@ impl App {
                     self.awaiting_approval = true;
                     self.chat_entries
                         .push(ChatEntry::ToolApproval { name, arguments });
-                    self.scroll_offset = u16::MAX;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                 }
                 AgentEvent::CliInputRequest { prompt, input_tx } => {
                     self.awaiting_cli_input = true;
                     self.cli_input_prompt = prompt.clone();
                     self.cli_input_tx = Some(input_tx);
                     self.chat_entries.push(ChatEntry::CliInputPrompt(prompt));
-                    self.scroll_offset = u16::MAX;
+                    if !self.user_scrolled {
+                        self.scroll_offset = u16::MAX;
+                    }
                 }
                 AgentEvent::TaskCreated(task) => {
                     // Add or replace task
@@ -486,6 +522,63 @@ impl App {
         ));
         self.scroll_offset = 0;
     }
+
+    /// Load session list from disk
+    pub fn load_sessions(&mut self) {
+        match crate::session::Session::list_all() {
+            Ok(sessions) => {
+                self.sessions = sessions;
+                self.session_list_error = None;
+            }
+            Err(e) => {
+                self.session_list_error = Some(format!("Failed to load sessions: {}", e));
+                self.sessions.clear();
+            }
+        }
+    }
+
+    /// Switch to session list mode
+    pub fn show_session_list(&mut self) {
+        self.load_sessions();
+        self.mode = AppMode::SessionList;
+        self.session_selection = 0;
+    }
+
+    /// Resume a selected session
+    pub fn resume_selected_session(&mut self) {
+        if let Some(session) = self.sessions.get(self.session_selection) {
+            self.session_id = Some(session.id.clone());
+            self.mode = AppMode::Main;
+            self.resume_session(session.id.clone());
+            self.start_agent();
+        }
+    }
+
+    /// Delete the selected session
+    pub fn delete_selected_session(&mut self) {
+        if let Some(session) = self.sessions.get(self.session_selection) {
+            let dir = match crate::session::Session::sessions_dir() {
+                Ok(dir) => dir,
+                Err(e) => {
+                    self.session_list_error = Some(format!("Failed to get sessions directory: {}", e));
+                    return;
+                }
+            };
+            let path = dir.join(format!("{}.json", session.id));
+            match std::fs::remove_file(&path) {
+                Ok(_) => {
+                    // Remove from list and adjust selection
+                    self.sessions.remove(self.session_selection);
+                    if self.session_selection >= self.sessions.len() && !self.sessions.is_empty() {
+                        self.session_selection = self.sessions.len() - 1;
+                    }
+                }
+                Err(e) => {
+                    self.session_list_error = Some(format!("Failed to delete session: {}", e));
+                }
+            }
+        }
+    }
 }
 
 /// Run the full TUI event loop
@@ -518,8 +611,8 @@ async fn event_loop(
         // Render
         terminal.draw(|frame| render(frame, app))?;
 
-        // Poll agent events (non-blocking)
-        if app.mode == AppMode::Main {
+        // Poll agent events (non-blocking) in both Main and AwaitingContinue
+        if app.mode == AppMode::Main || app.mode == AppMode::AwaitingContinue {
             app.poll_agent_events();
         }
 
@@ -532,7 +625,7 @@ async fn event_loop(
                         return Ok(());
                     }
                 }
-                AppMode::Main => {
+                AppMode::Main | AppMode::AwaitingContinue => {
                     if handle_main_event(app, &ev) {
                         return Ok(());
                     }
@@ -540,6 +633,30 @@ async fn event_loop(
                 AppMode::QuitConfirm => {
                     if handle_quit_confirm(app, &ev) {
                         return Ok(());
+                    }
+                }
+                AppMode::SessionList => {
+                    // Session list keybindings handled here
+                    if let crossterm::event::Event::Key(key) = &ev {
+                        match key.code {
+                            KeyCode::Char('q') | KeyCode::Esc => {
+                                app.mode = AppMode::Main;
+                            }
+                            KeyCode::Up => {
+                                app.session_selection = app.session_selection.saturating_sub(1);
+                            }
+                            KeyCode::Down => {
+                                app.session_selection = (app.session_selection + 1)
+                                    .min(app.sessions.len().saturating_sub(1));
+                            }
+                            KeyCode::Enter => {
+                                app.resume_selected_session();
+                            }
+                            KeyCode::Char('d') | KeyCode::Delete => {
+                                app.delete_selected_session();
+                            }
+                            _ => {}
+                        }
                     }
                 }
             }
@@ -554,11 +671,18 @@ fn render(frame: &mut Frame, app: &App) {
         AppMode::Setup => {
             ui::setup::render_setup(frame, area, &app.setup_state);
         }
-        AppMode::Main | AppMode::QuitConfirm => {
+        AppMode::Main | AppMode::QuitConfirm | AppMode::AwaitingContinue => {
             render_main(frame, area, app);
             if app.mode == AppMode::QuitConfirm {
                 render_quit_dialog(frame, area);
             }
+            if app.mode == AppMode::AwaitingContinue {
+                render_continue_dialog(frame, area);
+            }
+        }
+        AppMode::SessionList => {
+            // Placeholder: render main layout behind a session list overlay
+            render_main(frame, area, app);
         }
     }
 }
@@ -614,7 +738,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &App) {
         .config
         .as_ref()
         .map(|c| c.agent.max_iterations)
-        .unwrap_or(25);
+        .unwrap_or(15);
     ui::status::render_status(
         frame,
         layout.status_bar,
@@ -635,29 +759,14 @@ fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
         .map(|c| c.api.model.as_str())
         .unwrap_or("unknown");
 
-    let line = Line::from(vec![
-        Span::styled(
-            " Seekr Agent ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(ratatui::style::Modifier::BOLD),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            format!("[{}]", model),
-            Style::default().fg(Color::Yellow),
-        ),
-        Span::raw(" "),
-        if app.is_streaming {
-            Span::styled("working...", Style::default().fg(Color::Yellow))
-        } else {
-            Span::styled("ready", Style::default().fg(Color::Green))
-        },
-    ]);
+    let title_info = ui::title::TitleInfo {
+        version: "0.1.0",
+        session_id: app.session_id.as_deref(),
+        connected: app.connected,
+        model,
+    };
 
-    let paragraph =
-        Paragraph::new(line).style(Style::default().bg(Color::DarkGray));
-    frame.render_widget(paragraph, area);
+    ui::title::render_title(frame, area, &title_info);
 }
 
 fn render_quit_dialog(frame: &mut Frame, area: Rect) {
@@ -696,6 +805,46 @@ fn render_quit_dialog(frame: &mut Frame, area: Rect) {
             Span::raw(" to Yes, "),
             Span::styled("[N]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
             Span::raw(" to No"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block);
+    frame.render_widget(paragraph, dialog_area);
+}
+
+fn render_continue_dialog(frame: &mut Frame, area: Rect) {
+    let dialog_width = 58u16;
+    let dialog_height = 8u16;
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    let dialog_area = Rect::new(
+        x,
+        y,
+        dialog_width.min(area.width),
+        dialog_height.min(area.height),
+    );
+
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+
+    let block = ratatui::widgets::Block::default()
+        .title(" Max Iterations Reached ")
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .style(Style::default().bg(Color::Reset));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "  The agent has used all available iterations.",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Press "),
+            Span::styled("[C]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw(" to Continue   "),
+            Span::styled("[A]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::raw(" to Answer Now"),
         ]),
     ];
 
@@ -909,6 +1058,28 @@ fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             return true;
         }
 
+        // AwaitingContinue popup mode
+        if app.mode == AppMode::AwaitingContinue {
+            match code {
+                KeyCode::Char('c') | KeyCode::Char('C') => {
+                    app.mode = AppMode::Main;
+                    app.is_streaming = true;
+                    app.user_scrolled = false;
+                    if let Some(ref tx) = app.agent_cmd_tx {
+                        tx.send(AgentCommand::Continue).ok();
+                    }
+                }
+                KeyCode::Char('a') | KeyCode::Char('A') => {
+                    app.mode = AppMode::Main;
+                    if let Some(ref tx) = app.agent_cmd_tx {
+                        tx.send(AgentCommand::AnswerNow).ok();
+                    }
+                }
+                _ => {}
+            }
+            return false;
+        }
+
         // Tool approval mode
         if app.awaiting_approval {
             match code {
@@ -947,9 +1118,16 @@ fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             }
             KeyCode::PageUp => {
                 app.scroll_offset = app.scroll_offset.saturating_sub(10);
+                app.user_scrolled = true;
             }
             KeyCode::PageDown => {
-                app.scroll_offset = app.scroll_offset.saturating_add(10);
+                let new_offset = app.scroll_offset.saturating_add(10);
+                // If scrolling to the bottom, clear the manual scroll flag
+                if new_offset == u16::MAX || new_offset > app.scroll_offset {
+                    app.scroll_offset = new_offset;
+                }
+                // If we've scrolled back near the bottom, re-enable auto-scroll
+                app.user_scrolled = app.scroll_offset < u16::MAX.saturating_sub(20);
             }
             KeyCode::Backspace => {
                 if app.cursor_pos > 0 {

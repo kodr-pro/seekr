@@ -31,9 +31,11 @@ pub enum AgentEvent {
     Activity(tools::ActivityEntry),
     /// Token usage update
     TokenUsage { prompt_tokens: u32, completion_tokens: u32, total_tokens: u32 },
+    /// Current iteration count updated
+    IterationUpdate(u32),
     /// The agent finished its turn (no more tool calls)
     TurnComplete,
-    /// Agent loop hit max iterations
+    /// Agent loop hit max iterations — waiting for Continue or AnswerNow
     MaxIterationsReached,
     /// An error occurred
     Error(String),
@@ -60,6 +62,10 @@ pub enum AgentCommand {
     ToolAlwaysApprove,
     /// User provided CLI input
     CliInputResponse(String),
+    /// User chose to continue after max iterations
+    Continue,
+    /// User chose to answer now (stop iterating) after max iterations
+    AnswerNow,
     /// Shutdown the agent
     Shutdown,
 }
@@ -163,9 +169,28 @@ impl AgentLoop {
             // Check iteration limit
             if self.iteration >= self.config.agent.max_iterations {
                 self.event_tx.send(AgentEvent::MaxIterationsReached).ok();
-                break;
+                // Suspend: wait for Continue or AnswerNow from the UI
+                match self.wait_for_continue_or_answer().await {
+                    ContinueAction::Continue => {
+                        // Reset iteration count and keep looping
+                        self.iteration = 0;
+                        self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
+                    }
+                    ContinueAction::AnswerNow => {
+                        // Make one final API call to give a clean summary answer
+                        self.session.messages.push(ChatMessage::user(
+                            "Please stop what you're doing and give me a concise answer or summary of what you've accomplished so far. Do not use any tools."
+                        ));
+                        self.event_tx.send(AgentEvent::IterationUpdate(0)).ok();
+                        self.do_final_answer().await;
+                        return;
+                    }
+                    ContinueAction::Shutdown => return,
+                }
             }
+
             self.iteration += 1;
+            self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
 
             // Prune context if needed before calling API
             self.prune_messages();
@@ -345,24 +370,115 @@ impl AgentLoop {
         false
     }
 
-    /// Prune messages to fit within context limits
+    /// Wait for the user to decide what to do after max iterations are reached.
+    async fn wait_for_continue_or_answer(&mut self) -> ContinueAction {
+        while let Some(cmd) = self.command_rx.recv().await {
+            match cmd {
+                AgentCommand::Continue => return ContinueAction::Continue,
+                AgentCommand::AnswerNow => return ContinueAction::AnswerNow,
+                AgentCommand::Shutdown => return ContinueAction::Shutdown,
+                // A new user message acts as an override — inject and continue
+                AgentCommand::UserMessage(msg) => {
+                    // The user typed something new — treat as "answer now by responding to the user"
+                    self.session.messages.push(ChatMessage::user(&msg));
+                    return ContinueAction::AnswerNow;
+                }
+                _ => {}
+            }
+        }
+        ContinueAction::Shutdown
+    }
+
+    /// Do one non-tool API call to produce a final answer/summary
+    async fn do_final_answer(&mut self) {
+        // Prune first
+        self.prune_messages();
+
+        let stream_result = self
+            .client
+            .chat_completion_stream(
+                self.session.messages.clone(),
+                &self.config.api.model,
+                None, // no tools — forces a text response
+            )
+            .await;
+
+        let mut stream_rx = match stream_result {
+            Ok(rx) => rx,
+            Err(e) => {
+                self.event_tx.send(AgentEvent::Error(format!("API error: {e}"))).ok();
+                self.event_tx.send(AgentEvent::TurnComplete).ok();
+                return;
+            }
+        };
+
+        let mut content_buf = String::new();
+        while let Some(event) = stream_rx.recv().await {
+            match event {
+                crate::api::stream::StreamEvent::ContentDelta(text) => {
+                    content_buf.push_str(&text);
+                    self.event_tx.send(AgentEvent::ContentDelta(text)).ok();
+                }
+                crate::api::stream::StreamEvent::Usage { prompt_tokens, completion_tokens, total_tokens } => {
+                    self.event_tx.send(AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens }).ok();
+                }
+                crate::api::stream::StreamEvent::Done => break,
+                crate::api::stream::StreamEvent::Error(e) => {
+                    self.event_tx.send(AgentEvent::Error(format!("Stream error: {e}"))).ok();
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        if !content_buf.is_empty() {
+            self.session.messages.push(ChatMessage::assistant(&content_buf));
+        }
+        self.session.save().ok();
+        self.event_tx.send(AgentEvent::TurnComplete).ok();
+    }
+
+    /// Prune messages to fit within context limits.
+    /// IMPORTANT: never orphan a tool_result message — a tool_result MUST be
+    /// preceded by an assistant message that has tool_calls. If we slice mid-pair
+    /// the API returns a 400 error.
     fn prune_messages(&mut self) {
-        // Simple sliding window: keep system prompt and last 20 messages
-        // This is a naive implementation; token-based pruning would be better.
         const MAX_MESSAGES: usize = 20;
 
-        if self.session.messages.len() > MAX_MESSAGES {
-            let system_prompt = self.session.messages[0].clone();
-            let mut recent = self.session.messages[self.session.messages.len() - MAX_MESSAGES..].to_vec();
-            
-            // Ensure we keep the system prompt at the start
-            let mut new_messages = vec![system_prompt];
-            new_messages.append(&mut recent);
-            self.session.messages = new_messages;
+        if self.session.messages.len() <= MAX_MESSAGES {
+            return;
         }
+
+        let system_prompt = self.session.messages[0].clone();
+        let total = self.session.messages.len();
+        // Start from the naive window
+        let mut start = total - MAX_MESSAGES;
+
+        // Walk start forward until the first message at `start` is NOT a tool-result.
+        // Tool-result messages have role == "tool". If we start on one, we'd
+        // orphan it from its preceding assistant+tool_calls message.
+        while start < total {
+            let role = self.session.messages[start].role.as_str();
+            if role != "tool" {
+                break;
+            }
+            start += 1;
+        }
+
+        let mut recent = self.session.messages[start..].to_vec();
+        let mut new_messages = vec![system_prompt];
+        new_messages.append(&mut recent);
+        self.session.messages = new_messages;
     }
 
     pub fn task_manager(&self) -> &TaskManager {
         &self.session.task_manager
     }
+}
+
+/// Result of waiting for continue-or-answer decision
+enum ContinueAction {
+    Continue,
+    AnswerNow,
+    Shutdown,
 }
