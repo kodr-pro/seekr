@@ -165,7 +165,7 @@ impl AgentLoop {
 
     /// Execute one full agent turn: call the API, handle tool calls, repeat
     async fn run_agent_turn(&mut self) {
-        loop {
+        'turn: loop {
             // ── INTERRUPT CHECK ──────────────────────────────────────────────
             // Before every API call, drain any commands that arrived while we
             // were busy executing tools. This is what makes the agent responsive:
@@ -238,34 +238,51 @@ impl AgentLoop {
             let mut content_buf = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
 
-            while let Some(event) = stream_rx.recv().await {
-                match event {
-                    StreamEvent::ContentDelta(text) => {
-                        content_buf.push_str(&text);
-                        self.event_tx.send(AgentEvent::ContentDelta(text)).ok();
+            loop {
+                tokio::select! {
+                    Some(event) = stream_rx.recv() => {
+                        match event {
+                            StreamEvent::ContentDelta(text) => {
+                                content_buf.push_str(&text);
+                                self.event_tx.send(AgentEvent::ContentDelta(text)).ok();
+                            }
+                            StreamEvent::ReasoningDelta(text) => {
+                                self.event_tx.send(AgentEvent::ReasoningDelta(text)).ok();
+                            }
+                            StreamEvent::ToolCallComplete(tc) => {
+                                tool_calls.push(tc);
+                            }
+                            StreamEvent::Usage { prompt_tokens, completion_tokens, total_tokens } => {
+                                self.event_tx.send(AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens }).ok();
+                            }
+                            StreamEvent::Done => break,
+                            StreamEvent::Error(e) => {
+                                self.event_tx.send(AgentEvent::Error(format!("Stream error: {e}"))).ok();
+                                break;
+                            }
+                        }
                     }
-                    StreamEvent::ReasoningDelta(text) => {
-                        self.event_tx.send(AgentEvent::ReasoningDelta(text)).ok();
+                    Some(AgentCommand::UserMessage(msg)) = self.command_rx.recv() => {
+                        // USER INTERRUPT mid-stream
+                        self.session.messages.push(ChatMessage::user(&msg));
+                        self.event_tx.send(AgentEvent::Activity(crate::tools::ActivityEntry {
+                            tool_name: "chat".to_string(),
+                            summary: "Interrupted by user message".to_string(),
+                            status: crate::tools::ActivityStatus::Success,
+                            timestamp: chrono::Utc::now(),
+                        })).ok();
+                        
+                        // Finalize what we have so far
+                        if !content_buf.is_empty() {
+                             self.session.messages.push(ChatMessage::assistant(&content_buf));
+                        }
+                        
+                        // Restart the turn (reset iteration and jump to top of 'turn loop)
+                        self.iteration = 0;
+                        self.session.save().ok();
+                        continue 'turn;
                     }
-                    StreamEvent::ToolCallComplete(tc) => {
-                        tool_calls.push(tc);
-                    }
-                    StreamEvent::Usage {
-                        prompt_tokens,
-                        completion_tokens,
-                        total_tokens,
-                    } => {
-                        self.event_tx.send(AgentEvent::TokenUsage {
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens,
-                        }).ok();
-                    }
-                    StreamEvent::Done => break,
-                    StreamEvent::Error(e) => {
-                        self.event_tx.send(AgentEvent::Error(format!("Stream error: {e}"))).ok();
-                        break;
-                    }
+                    else => break,
                 }
             }
 
@@ -293,8 +310,9 @@ impl AgentLoop {
 
                     // Check approval if needed
                     if !self.auto_approve {
+                        // Use the call's original ID or index for reference
                         self.event_tx.send(AgentEvent::ToolApprovalRequest {
-                            call_index: 0, // This logic needs improvement for multiple tools
+                            call_index: tool_calls.iter().position(|t| t.id == tc.id).unwrap_or(0),
                             name: tc.function.name.clone(),
                             arguments: tc.function.arguments.clone(),
                         }).ok();
@@ -466,7 +484,7 @@ impl AgentLoop {
     /// preceded by an assistant message that has tool_calls. If we slice mid-pair
     /// the API returns a 400 error.
     fn prune_messages(&mut self) {
-        const MAX_MESSAGES: usize = 20;
+        const MAX_MESSAGES: usize = 60;
 
         if self.session.messages.len() <= MAX_MESSAGES {
             return;

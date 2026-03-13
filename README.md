@@ -16,13 +16,15 @@
 
 - **Terminal UI (TUI):** Built with `ratatui` for a responsive, multi-tabbed interactive experience.
 - **Native DeepSeek Integration:** Low-latency access to DeepSeek's powerful reasoning and chat models.
+- **Extensible Skills System:** Refactored tool architecture allowing for global and repository-specific custom skills via simple JSON and scripts.
 - **Autonomous Tools:**
-  - **Shell:** Execute terminal commands and capture output.
-  - **File Edit:** Sophisticated file manipulation and management.
-  - **Web:** Search and scrape content from the web for real-time information.
-  - **Task Management:** Track agent goals and progress within the UI.
-- **Configurable Behaviors:** Customize max iterations, auto-approval settings, and UI themes.
-- **Privacy First:** Configuration and API keys are stored locally in `~/.config/seekr/`.
+  - **Shell:** Execute terminal commands with built-in sandboxing and timeouts.
+  - **File Edit:** Sophisticated file manipulation using patches and diffs.
+  - **Web:** Real-time search and scraping.
+  - **Task Management:** Goal planning and progress tracking.
+- **Rich Activity Stream:** Real-time visibility into agent thoughts and tool executions with diff previews.
+- **Session Persistence:** Automatic saving and loading of chat history and agent state.
+- **Seekr Doctor:** Built-in diagnostics command to verify system health and API connectivity.
 
 ---
 
@@ -59,6 +61,27 @@ On your first run, **seekr** will guide you through a setup wizard to configure 
 
 ---
 
+## CLI Commands
+
+| Command | Description |
+| :--- | :--- |
+| `seekr` | Launch the main TUI application. |
+| `seekr doctor` | Run system diagnostics and health checks. |
+| `seekr --resume <session_id>` | Resume a previous session by its ID. |
+
+---
+
+## Skills & Extensibility
+
+**seekr** features a dynamic skills system. It loads tools from:
+1. **Bundled Core Skills:** Essential file, shell, and task tools.
+2. **Global Skills:** Located in `~/.config/seekr/skills/`.
+3. **Local Skills:** Located in `./.seekr/skills/` within your current working directory.
+
+Each skill is a directory containing a `skill.json` definition and any necessary scripts (Python, Shell, etc.).
+
+---
+
 ## Configuration
 
 **seekr** stores its configuration in `~/.config/seekr/config.toml`. You can manually edit this file or use the built-in setup wizard.
@@ -78,17 +101,6 @@ working_directory = "."
 theme = "dark"
 show_reasoning = true
 ```
-
----
-
-## Toolset
-
-| Tool | Description | Capabilities |
-| :--- | :--- | :--- |
-| **Shell** | Command line execution | Run scripts, check system status, install dependencies. |
-| **File Edit** | Local file manager | Read, write, and patch files across your repository. |
-| **Web** | Information retrieval | Search the live web and extract markdown from pages. |
-| **Task** | Planning | Define complex goals and track step-by-step progress. |
 
 ---
 

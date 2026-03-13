@@ -17,6 +17,7 @@ pub struct TitleInfo<'a> {
     pub session_id: Option<&'a str>,
     pub connected: bool,
     pub model: &'a str,
+    pub status: &'a str,
 }
 
 /// Render the title bar
@@ -67,10 +68,22 @@ pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
         )
     };
 
+    let status_color = if info.status.to_lowercase() == "ready" {
+        Color::Green
+    } else {
+        Color::Yellow
+    };
+    let status = Span::styled(
+        format!("[{}]", info.status.to_uppercase()),
+        Style::default().fg(status_color).add_modifier(Modifier::BOLD),
+    );
+
     let line = Line::from(vec![
         Span::raw(" "),
         title,
         version,
+        separator.clone(),
+        status,
         separator.clone(),
         model,
         separator.clone(),

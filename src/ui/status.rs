@@ -19,6 +19,7 @@ pub struct StatusInfo<'a> {
     pub total_tokens: u32,
     pub iteration: u32,
     pub max_iterations: u32,
+    pub is_thinking: bool,
 }
 
 /// Render the status bar
@@ -51,6 +52,12 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
     );
 
+    let thinking = if info.is_thinking {
+        Span::styled(" Thinking...", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+    } else {
+        Span::styled(" Idle", Style::default().fg(Color::DarkGray))
+    };
+
     let line = Line::from(vec![
         Span::raw(" "),
         session,
@@ -60,8 +67,10 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         model,
         separator.clone(),
         tokens,
-        separator,
+        separator.clone(),
         iterations,
+        separator,
+        thinking,
     ]);
 
     let paragraph = Paragraph::new(line)

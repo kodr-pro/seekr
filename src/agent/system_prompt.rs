@@ -28,7 +28,7 @@ pub fn build_system_prompt(working_directory: &str) -> String {
    - Never rewrite entire files when only a few lines need to change.
    - Read the file first if you haven't seen it this session.
 4. **Come up for air.** After every 2–3 tool calls, write a brief plain-text status update.
-5. **Finish cleanly.** Call `update_task` with status "done" and write a concise summary.
+5. **Finish with a summary.** When you are done, or if you think the task is finished, call `update_task` with status "completed" AND provide a detailed, plain-text summary of your work and the results. Never end a turn with just a tool call.
 
 ## Rules
 

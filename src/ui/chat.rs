@@ -187,8 +187,9 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
         }
     }
 
-    // Calculate scroll: clamp so we never scroll past the last line
-    let total_lines = lines.len() as u16;
+    // Calculate scroll: since we don't know the exact height after wrapping,
+    // we allow scrolling up to 4x the number of entries as a safe buffer.
+    let total_lines = (lines.len() * 4) as u16;
     let visible_height = inner.height;
     let max_scroll = total_lines.saturating_sub(visible_height);
     let effective_scroll = scroll_offset.min(max_scroll);

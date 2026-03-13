@@ -788,6 +788,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &App) {
             total_tokens: app.total_tokens,
             iteration: app.iteration,
             max_iterations: max_iter,
+            is_thinking: app.is_streaming,
         },
     );
 }
@@ -799,11 +800,18 @@ fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
         .map(|c| c.api.model.as_str())
         .unwrap_or("unknown");
 
+    let status = if app.is_streaming {
+        "Working"
+    } else {
+        "Ready"
+    };
+
     let title_info = ui::title::TitleInfo {
         version: "0.1.0",
         session_id: app.session_id.as_deref(),
         connected: app.connected,
         model,
+        status,
     };
 
     ui::title::render_title(frame, area, &title_info);
@@ -1184,6 +1192,15 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                 }
                 // If we've scrolled back near the bottom, re-enable auto-scroll
                 app.user_scrolled = app.scroll_offset < u16::MAX.saturating_sub(20);
+            }
+            KeyCode::Up => {
+                app.scroll_offset = app.scroll_offset.saturating_sub(1);
+                app.user_scrolled = true;
+            }
+            KeyCode::Down => {
+                app.scroll_offset = app.scroll_offset.saturating_add(1);
+                // Re-enable auto-scroll if we hit the bottom
+                // We don't know exact bottom yet, so we just increment
             }
             KeyCode::Backspace => {
                 if app.cursor_pos > 0 {
