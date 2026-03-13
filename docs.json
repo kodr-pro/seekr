@@ -6,7 +6,7 @@
   "favicon": "/seekrdot.png",
   "sidebar": [
     {
-      "group": "Getting Started",
+      "group": "Introduction",
       "pages": [
         {
           "title": "Introduction",
@@ -19,12 +19,7 @@
         {
           "title": "Configuration",
           "href": "/configuration"
-        }
-      ]
-    },
-    {
-      "group": "Deep Dive",
-      "pages": [
+        },
         {
           "title": "The Agent Loop",
           "href": "/agent"
@@ -40,9 +35,5 @@
       ]
     }
   ],
-  "theme": {
-    "colors": {
-      "primary": "#00bcd4"
-    }
-  }
+  "theme": "#00bcd4"
 }
