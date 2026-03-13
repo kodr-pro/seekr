@@ -7,7 +7,7 @@
 // - Input handling and keybindings
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -335,8 +335,6 @@ impl App {
                     if !self.user_scrolled {
                         self.scroll_offset = u16::MAX;
                     }
-                    self.streaming_content.clear();
-                    self.streaming_reasoning.clear();
                 }
                 AgentEvent::Activity(entry) => {
                     self.activities.push(entry);
@@ -463,7 +461,7 @@ impl App {
     /// Finalize streaming content into a permanent chat entry
     fn finalize_streaming(&mut self) {
         if !self.streaming_content.is_empty() {
-            // Replace the streaming entry with a finalized one
+            // Replace the streaming entry with a finalized one, or append if not found
             if let Some(pos) = self
                 .chat_entries
                 .iter()
@@ -476,9 +474,21 @@ impl App {
                     self.streaming_content.clone(),
                 ));
             }
+            self.streaming_content.clear();
         }
-        self.streaming_content.clear();
-        self.streaming_reasoning.clear();
+        
+        // Finalize reasoning as well if it exists
+        if !self.streaming_reasoning.is_empty() {
+            if let Some(_pos) = self
+                .chat_entries
+                .iter()
+                .rposition(|e| matches!(e, ChatEntry::Reasoning(_)))
+            {
+                // We keep it as Reasoning entry but it's now "stable" 
+                // since we cleared the reasoning buffer.
+            }
+            self.streaming_reasoning.clear();
+        }
     }
 
     /// Handle tool approval input
@@ -611,6 +621,7 @@ impl App {
 /// Run the full TUI event loop
 pub async fn run_app(mut app: App) -> Result<()> {
     let mut terminal = ratatui::init();
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
 
     // If starting in main mode, start the agent
     if app.mode == AppMode::Main {
@@ -619,6 +630,7 @@ pub async fn run_app(mut app: App) -> Result<()> {
 
     let result = event_loop(&mut terminal, &mut app).await;
 
+    let _ = ratatui::crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
     ratatui::restore();
 
     // Shutdown agent if running
@@ -1164,6 +1176,8 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             }
             KeyCode::Enter => {
                 app.send_message();
+                app.user_scrolled = false;
+                app.scroll_offset = u16::MAX;
             }
             KeyCode::Esc => {
                 app.mode = AppMode::QuitConfirm;
@@ -1180,27 +1194,24 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                 app.show_reasoning = !app.show_reasoning;
             }
-            KeyCode::PageUp => {
+            KeyCode::PageUp if app.focus == Focus::Chat => {
                 app.scroll_offset = app.scroll_offset.saturating_sub(10);
                 app.user_scrolled = true;
             }
-            KeyCode::PageDown => {
-                let new_offset = app.scroll_offset.saturating_add(10);
-                // If scrolling to the bottom, clear the manual scroll flag
-                if new_offset == u16::MAX || new_offset > app.scroll_offset {
-                    app.scroll_offset = new_offset;
-                }
-                // If we've scrolled back near the bottom, re-enable auto-scroll
-                app.user_scrolled = app.scroll_offset < u16::MAX.saturating_sub(20);
+            KeyCode::PageDown if app.focus == Focus::Chat => {
+                app.scroll_offset = app.scroll_offset.saturating_add(10);
+                // Auto-scroll re-enables in poll_agent_events if we're at the bottom
             }
-            KeyCode::Up => {
+            KeyCode::Up if app.focus == Focus::Chat => {
                 app.scroll_offset = app.scroll_offset.saturating_sub(1);
                 app.user_scrolled = true;
             }
-            KeyCode::Down => {
+            KeyCode::Down if app.focus == Focus::Chat => {
                 app.scroll_offset = app.scroll_offset.saturating_add(1);
-                // Re-enable auto-scroll if we hit the bottom
-                // We don't know exact bottom yet, so we just increment
+                // We'll let poll_agent_events handle resetting user_scrolled 
+                // if it detects we've hit the bottom, but for now we stay in manual mode
+                // if the user is explicitly pressing keys.
+                app.user_scrolled = true;
             }
             KeyCode::Backspace => {
                 if app.cursor_pos > 0 {
@@ -1230,6 +1241,20 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                 app.cursor_pos += 1;
             }
             _ => {}
+        }
+    } else if let Event::Mouse(MouseEvent { kind, .. }) = ev {
+        if app.focus == Focus::Chat {
+            match kind {
+                MouseEventKind::ScrollUp => {
+                    app.scroll_offset = app.scroll_offset.saturating_sub(3);
+                    app.user_scrolled = true;
+                }
+                MouseEventKind::ScrollDown => {
+                    app.scroll_offset = app.scroll_offset.saturating_add(3);
+                    app.user_scrolled = true;
+                }
+                _ => {}
+            }
         }
     }
     false
