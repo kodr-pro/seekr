@@ -349,6 +349,20 @@ impl App {
                     self.chat_entries.push(ChatEntry::CliInputPrompt(prompt));
                     self.scroll_offset = u16::MAX;
                 }
+                AgentEvent::TaskCreated(task) => {
+                    // Add or replace task
+                    if let Some(pos) = self.tasks.iter().position(|t| t.id == task.id) {
+                        self.tasks[pos] = task;
+                    } else {
+                        self.tasks.push(task);
+                    }
+                }
+                AgentEvent::TaskUpdated(task) => {
+                    // Update existing task
+                    if let Some(pos) = self.tasks.iter().position(|t| t.id == task.id) {
+                        self.tasks[pos] = task;
+                    }
+                }
             }
         }
     }
