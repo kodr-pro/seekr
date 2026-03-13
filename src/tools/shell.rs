@@ -93,13 +93,16 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
     });
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    task_manager.set_input_tx(input_tx);
+    task_manager.set_input_tx(input_tx.clone());
 
     loop {
         tokio::select! {
             Some(prompt) = rx.recv() => {
                 if let Some(ref event_tx) = task_manager.event_tx {
-                    event_tx.send(crate::agent::AgentEvent::CliInputRequest { prompt }).ok();
+                    event_tx.send(crate::agent::AgentEvent::CliInputRequest { 
+                        prompt, 
+                        input_tx: input_tx.clone() 
+                    }).ok();
                 }
             }
             Some(input) = input_rx.recv() => {

@@ -105,6 +105,7 @@ pub struct App {
     pub awaiting_approval: bool,
     pub awaiting_cli_input: bool,
     pub cli_input_prompt: String,
+    pub cli_input_tx: Option<mpsc::UnboundedSender<String>>,
 
     // Tasks and activity (mirrored from agent for UI rendering)
     pub tasks: Vec<Task>,
@@ -142,6 +143,7 @@ impl App {
             awaiting_approval: false,
             awaiting_cli_input: false,
             cli_input_prompt: String::new(),
+            cli_input_tx: None,
             tasks: Vec::new(),
             activities: Vec::new(),
             streaming_content: String::new(),
@@ -340,9 +342,10 @@ impl App {
                         .push(ChatEntry::ToolApproval { name, arguments });
                     self.scroll_offset = u16::MAX;
                 }
-                AgentEvent::CliInputRequest { prompt } => {
+                AgentEvent::CliInputRequest { prompt, input_tx } => {
                     self.awaiting_cli_input = true;
                     self.cli_input_prompt = prompt.clone();
+                    self.cli_input_tx = Some(input_tx);
                     self.chat_entries.push(ChatEntry::CliInputPrompt(prompt));
                     self.scroll_offset = u16::MAX;
                 }
@@ -455,9 +458,10 @@ impl App {
             self.chat_entries.remove(pos);
         }
 
-        if let Some(ref tx) = self.agent_cmd_tx {
-            tx.send(AgentCommand::CliInputResponse(input)).ok();
+        if let Some(ref tx) = self.cli_input_tx {
+            tx.send(input).ok();
         }
+        self.cli_input_tx = None;
     }
 
     /// Clear chat history

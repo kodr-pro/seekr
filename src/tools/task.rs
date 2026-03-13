@@ -9,6 +9,8 @@ use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::Tool;
 use anyhow::{Result, anyhow};
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Possible task statuses
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -71,7 +73,7 @@ pub struct ActivityEntry {
 
 pub type InputSender = tokio::sync::mpsc::UnboundedSender<String>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskManager {
     pub tasks: Vec<Task>,
     pub activities: Vec<ActivityEntry>,
@@ -79,7 +81,7 @@ pub struct TaskManager {
     #[serde(skip)]
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>>,
     #[serde(skip)]
-    pub input_tx: Option<InputSender>,
+    pub input_tx: Arc<Mutex<Option<InputSender>>>,
 }
 
 impl Default for TaskManager {
@@ -95,7 +97,7 @@ impl TaskManager {
             activities: Vec::new(),
             next_id: 1,
             event_tx: None,
-            input_tx: None,
+            input_tx: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -110,8 +112,10 @@ impl TaskManager {
         }
     }
 
-    pub fn set_input_tx(&mut self, tx: InputSender) {
-        self.input_tx = Some(tx);
+    pub fn set_input_tx(&self, tx: InputSender) {
+        if let Ok(mut lock) = self.input_tx.try_lock() {
+            *lock = Some(tx);
+        }
     }
 
     pub fn with_sender(mut self, tx: tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>) -> Self {

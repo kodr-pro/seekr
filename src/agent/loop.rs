@@ -40,7 +40,7 @@ pub enum AgentEvent {
     /// Request tool approval from the user
     ToolApprovalRequest { call_index: usize, name: String, arguments: String },
     /// Request CLI input (e.g. for sudo password, [y/n] prompt)
-    CliInputRequest { prompt: String },
+    CliInputRequest { prompt: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
 }
 
 /// Events sent from the UI to the agent loop
@@ -122,33 +122,33 @@ impl AgentLoop {
 
     /// Run the agent loop, processing commands from the UI
     pub async fn run(mut self) {
-        while let Some(command) = self.command_rx.recv().await {
-            match command {
-                AgentCommand::UserMessage(msg) => {
-                    // Update session title on first message if it's still default
-                    if self.session.title == "New Chat" {
-                        let title = if msg.len() > 30 {
-                            format!("{}...", &msg[..27])
-                        } else {
-                            msg.clone()
-                        };
-                        self.session.title = title;
+        loop {
+            tokio::select! {
+                Some(command) = self.command_rx.recv() => {
+                    match command {
+                        AgentCommand::UserMessage(msg) => {
+                            // Update session title on first message if it's still default
+                            if self.session.title == "New Chat" {
+                                let title = if msg.len() > 30 {
+                                    format!("{}...", &msg[..27])
+                                } else {
+                                    msg.clone()
+                                };
+                                self.session.title = title;
+                            }
+                            
+                            self.session.messages.push(ChatMessage::user(&msg));
+                            self.iteration = 0;
+                            self.run_agent_turn().await;
+                            self.session.save().ok();
+                        }
+                        AgentCommand::ToolAlwaysApprove => {
+                            self.auto_approve = true;
+                        }
+                        AgentCommand::Shutdown => break,
+                        _ => {}
                     }
-                    
-                    self.session.messages.push(ChatMessage::user(&msg));
-                    self.iteration = 0;
-                    self.run_agent_turn().await;
-                    self.session.save().ok();
                 }
-                AgentCommand::ToolAlwaysApprove => {
-                    self.auto_approve = true;
-                }
-                AgentCommand::CliInputResponse(input) => {
-                    if let Some(ref tx) = self.session.task_manager.input_tx {
-                        tx.send(input).ok();
-                    }
-                }
-                _ => {}
             }
         }
     }

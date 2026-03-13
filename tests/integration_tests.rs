@@ -2,8 +2,6 @@ use seekr::tools::shell::shell_command;
 use seekr::tools::task::TaskManager;
 use tokio::sync::mpsc;
 use serde_json::json;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use seekr::agent::AgentEvent;
 
 #[tokio::test]
@@ -28,12 +26,9 @@ async fn test_shell_command_interactive() {
         "command": "echo 'Password:'; read val; echo \"RESULT:$val\""
     });
     
-    let tm_arc = Arc::new(Mutex::new(tm));
-    let tm_clone = tm_arc.clone();
-    
+    let mut tm_clone = tm.clone();
     let handle = tokio::spawn(async move {
-        let mut tm_locked = tm_clone.lock().await;
-        shell_command(&args, &mut tm_locked).await
+        shell_command(&args, &mut tm_clone).await
     });
     
     // 1. Skip the Activity event
@@ -46,22 +41,16 @@ async fn test_shell_command_interactive() {
 
     // 2. Wait for the CliInputRequest event
     println!("Waiting for CliInputRequest event...");
-    let prompt = match tokio::time::timeout(std::time::Duration::from_secs(10), evt_rx.recv()).await {
-        Ok(Some(AgentEvent::CliInputRequest { prompt })) => prompt,
+    let (prompt, input_tx_from_event) = match tokio::time::timeout(std::time::Duration::from_secs(10), evt_rx.recv()).await {
+        Ok(Some(AgentEvent::CliInputRequest { prompt, input_tx })) => (prompt, input_tx),
         e => panic!("Expected CliInputRequest, got {:?}", e),
     };
     println!("Got prompt: {}", prompt);
     assert!(prompt.contains("Password"));
     
-    // 3. Get the input_tx from the task_manager
-    let input_tx_from_tm = {
-        let tm_locked = tm_arc.lock().await;
-        tm_locked.input_tx.clone().expect("input_tx should be set by shell_command")
-    };
-    
-    // 4. Send response
+    // 3. Send response directly via the provided sender
     println!("Sending response...");
-    input_tx_from_tm.send("hello_from_test\n".to_string()).ok();
+    input_tx_from_event.send("hello_from_test\n".to_string()).ok();
     
     // 5. Check result
     println!("Waiting for result...");
