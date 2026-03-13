@@ -12,6 +12,12 @@ async fn main() -> Result<()> {
     init_logging();
 
     let args: Vec<String> = std::env::args().collect();
+    
+    // Handle 'doctor' command
+    if args.len() >= 2 && args[1] == "doctor" {
+        return seekr::doctor::run_diagnostics().await;
+    }
+
     let resume_id = if args.len() >= 3 && args[1] == "--resume" {
         Some(args[2].clone())
     } else {

@@ -13,6 +13,7 @@ use ratatui::{
 
 /// Status information for the bar
 pub struct StatusInfo<'a> {
+    pub session_id: &'a str,
     pub connected: bool,
     pub model: &'a str,
     pub total_tokens: u32,
@@ -45,8 +46,15 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         Style::default().fg(Color::Magenta).add_modifier(Modifier::DIM),
     );
 
+    let session = Span::styled(
+        format!("Session: {}", info.session_id),
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+    );
+
     let line = Line::from(vec![
         Span::raw(" "),
+        session,
+        separator.clone(),
         conn_indicator,
         separator.clone(),
         model,

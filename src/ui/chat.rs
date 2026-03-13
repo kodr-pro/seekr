@@ -105,16 +105,42 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 ]));
             }
             ChatEntry::ToolResult { name, result } => {
-                let result_short = if result.len() > 200 {
-                    format!("{}...", &result[..200])
+                lines.push(Line::from(vec![
+                    Span::styled("  = ", Style::default().fg(Color::Blue)),
+                    Span::styled(format!("[{}]", name), Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+                ]));
+
+                let lines_to_show = if result.len() > 1000 {
+                    let mut s = result.chars().take(1000).collect::<String>();
+                    s.push_str("...");
+                    s
                 } else {
                     result.clone()
                 };
-                lines.push(Line::from(vec![
-                    Span::styled("  = ", Style::default().fg(Color::Blue)),
-                    Span::styled(format!("[{}] ", name), Style::default().fg(Color::Blue)),
-                    Span::styled(result_short, Style::default().fg(Color::DarkGray)),
-                ]));
+
+                for line in lines_to_show.split('\n') {
+                    if line.starts_with('+') {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Green)),
+                        ]));
+                    } else if line.starts_with('-') {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Red)),
+                        ]));
+                    } else if line.starts_with("@@") {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::Cyan)),
+                        ]));
+                    } else {
+                        lines.push(Line::from(vec![
+                            Span::styled("    ", Style::default()),
+                            Span::styled(line.to_string(), Style::default().fg(Color::DarkGray)),
+                        ]));
+                    }
+                }
                 lines.push(Line::from(""));
             }
             ChatEntry::Error(msg) => {

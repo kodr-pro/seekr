@@ -65,10 +65,19 @@ pub struct Task {
     pub status: TaskStatus,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum ActivityStatus {
+    Starting,
+    Success,
+    Failure,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActivityEntry {
     pub tool_name: String,
     pub summary: String,
+    pub status: ActivityStatus,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
 pub type InputSender = tokio::sync::mpsc::UnboundedSender<String>;
@@ -101,10 +110,12 @@ impl TaskManager {
         }
     }
 
-    pub fn log_activity(&mut self, tool_name: &str, summary: &str) {
+    pub fn log_activity(&mut self, tool_name: &str, summary: &str, status: ActivityStatus) {
         let activity = ActivityEntry {
             tool_name: tool_name.to_string(),
             summary: summary.to_string(),
+            status,
+            timestamp: chrono::Utc::now(),
         };
         self.activities.push(activity.clone());
         if let Some(ref tx) = self.event_tx {

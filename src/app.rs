@@ -35,6 +35,8 @@ pub enum AppMode {
     AwaitingContinue,
     /// Session list view for resuming or deleting sessions
     SessionList,
+    /// Help menu showing keyboard shortcuts
+    Help,
 }
 
 /// Focus area in the main view
@@ -78,7 +80,7 @@ impl Default for SetupState {
             api_key_input: String::new(),
             model_selection: 0,
             auto_approve_selection: 0,
-            working_dir_input: ".".to_string(),
+            working_dir_input: String::new(),
             error_message: None,
             validating: false,
         }
@@ -122,6 +124,9 @@ pub struct App {
     pub streaming_reasoning: String,
     pub is_streaming: bool,
 
+    // Manager
+    pub manager: Option<std::sync::Arc<crate::manager::SeekrManager>>,
+
     // Setup wizard state
     pub setup_state: SetupState,
 
@@ -141,6 +146,7 @@ impl App {
             mode: AppMode::Setup,
             focus: Focus::Chat,
             config: None,
+            manager: None,
             chat_entries: Vec::new(),
             input: String::new(),
             cursor_pos: 0,
@@ -172,9 +178,11 @@ impl App {
     /// Create a new app in main mode with an existing config
     pub fn new_main(config: AppConfig) -> Self {
         let show_reasoning = config.ui.show_reasoning;
+        let manager = std::sync::Arc::new(crate::manager::SeekrManager::new(config.clone()));
         let mut app = Self {
             mode: AppMode::Main,
             config: Some(config),
+            manager: Some(manager),
             show_reasoning,
             ..Self::new_setup()
         };
@@ -524,22 +532,33 @@ impl App {
     }
 
     /// Load session list from disk
-    pub fn load_sessions(&mut self) {
-        match crate::session::Session::list_all() {
-            Ok(sessions) => {
-                self.sessions = sessions;
-                self.session_list_error = None;
-            }
-            Err(e) => {
+    pub async fn load_sessions(&mut self) {
+        if let Some(ref mgr) = self.manager {
+            if let Err(e) = mgr.load_sessions().await {
                 self.session_list_error = Some(format!("Failed to load sessions: {}", e));
                 self.sessions.clear();
+            } else {
+                self.sessions = mgr.list_sessions().await;
+                self.session_list_error = None;
+            }
+        } else {
+            // Fallback for when manager is not yet initialized (e.g. during setup)
+            match crate::session::Session::list_all() {
+                Ok(sessions) => {
+                    self.sessions = sessions;
+                    self.session_list_error = None;
+                }
+                Err(e) => {
+                    self.session_list_error = Some(format!("Failed to load sessions: {}", e));
+                    self.sessions.clear();
+                }
             }
         }
     }
 
     /// Switch to session list mode
-    pub fn show_session_list(&mut self) {
-        self.load_sessions();
+    pub async fn show_session_list(&mut self) {
+        self.load_sessions().await;
         self.mode = AppMode::SessionList;
         self.session_selection = 0;
     }
@@ -547,35 +566,43 @@ impl App {
     /// Resume a selected session
     pub fn resume_selected_session(&mut self) {
         if let Some(session) = self.sessions.get(self.session_selection) {
-            self.session_id = Some(session.id.clone());
+            let id = session.id.clone();
+            self.session_id = Some(id.clone());
             self.mode = AppMode::Main;
-            self.resume_session(session.id.clone());
+            self.resume_session(id);
             self.start_agent();
         }
     }
 
     /// Delete the selected session
-    pub fn delete_selected_session(&mut self) {
+    pub async fn delete_selected_session(&mut self) {
         if let Some(session) = self.sessions.get(self.session_selection) {
-            let dir = match crate::session::Session::sessions_dir() {
-                Ok(dir) => dir,
-                Err(e) => {
-                    self.session_list_error = Some(format!("Failed to get sessions directory: {}", e));
+            let id = session.id.clone();
+            if let Some(ref mgr) = self.manager {
+                if let Err(e) = mgr.delete_session(&id).await {
+                    self.session_list_error = Some(format!("Failed to delete session: {}", e));
                     return;
                 }
-            };
-            let path = dir.join(format!("{}.json", session.id));
-            match std::fs::remove_file(&path) {
-                Ok(_) => {
-                    // Remove from list and adjust selection
-                    self.sessions.remove(self.session_selection);
-                    if self.session_selection >= self.sessions.len() && !self.sessions.is_empty() {
-                        self.session_selection = self.sessions.len() - 1;
+                // Refresh list
+                self.sessions = mgr.list_sessions().await;
+            } else {
+                // Fallback
+                let dir = match crate::session::Session::sessions_dir() {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        self.session_list_error = Some(format!("Failed to get sessions directory: {}", e));
+                        return;
                     }
+                };
+                let path = dir.join(format!("{}.json", id));
+                if path.exists() {
+                    let _ = std::fs::remove_file(&path);
                 }
-                Err(e) => {
-                    self.session_list_error = Some(format!("Failed to delete session: {}", e));
-                }
+                self.sessions.retain(|s| s.id != id);
+            }
+
+            if self.session_selection >= self.sessions.len() && !self.sessions.is_empty() {
+                self.session_selection = self.sessions.len() - 1;
             }
         }
     }
@@ -626,7 +653,7 @@ async fn event_loop(
                     }
                 }
                 AppMode::Main | AppMode::AwaitingContinue => {
-                    if handle_main_event(app, &ev) {
+                    if handle_main_event(app, &ev).await {
                         return Ok(());
                     }
                 }
@@ -635,27 +662,35 @@ async fn event_loop(
                         return Ok(());
                     }
                 }
-                AppMode::SessionList => {
-                    // Session list keybindings handled here
+                AppMode::SessionList | AppMode::Help => {
+                    // Session list and Help keybindings handled here
                     if let crossterm::event::Event::Key(key) = &ev {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => {
                                 app.mode = AppMode::Main;
                             }
-                            KeyCode::Up => {
-                                app.session_selection = app.session_selection.saturating_sub(1);
+                            _ => {
+                                if app.mode == AppMode::Help {
+                                    app.mode = AppMode::Main;
+                                } else if app.mode == AppMode::SessionList {
+                                     match key.code {
+                                        KeyCode::Up => {
+                                            app.session_selection = app.session_selection.saturating_sub(1);
+                                        }
+                                        KeyCode::Down => {
+                                            app.session_selection = (app.session_selection + 1)
+                                                .min(app.sessions.len().saturating_sub(1));
+                                        }
+                                        KeyCode::Enter => {
+                                            app.resume_selected_session();
+                                        }
+                                        KeyCode::Char('d') | KeyCode::Delete => {
+                                            app.delete_selected_session().await;
+                                        }
+                                        _ => {}
+                                    }
+                                }
                             }
-                            KeyCode::Down => {
-                                app.session_selection = (app.session_selection + 1)
-                                    .min(app.sessions.len().saturating_sub(1));
-                            }
-                            KeyCode::Enter => {
-                                app.resume_selected_session();
-                            }
-                            KeyCode::Char('d') | KeyCode::Delete => {
-                                app.delete_selected_session();
-                            }
-                            _ => {}
                         }
                     }
                 }
@@ -683,6 +718,10 @@ fn render(frame: &mut Frame, app: &App) {
         AppMode::SessionList => {
             // Placeholder: render main layout behind a session list overlay
             render_main(frame, area, app);
+        }
+        AppMode::Help => {
+            render_main(frame, area, app);
+            render_help_dialog(frame, area);
         }
     }
 }
@@ -743,6 +782,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &App) {
         frame,
         layout.status_bar,
         &ui::status::StatusInfo {
+            session_id: app.session_id.as_deref().unwrap_or("none"),
             connected: app.connected,
             model,
             total_tokens: app.total_tokens,
@@ -1046,7 +1086,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 }
 
 /// Handle events in main mode. Returns true if the app should exit.
-fn handle_main_event(app: &mut App, ev: &Event) -> bool {
+pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
     if let Event::Key(KeyEvent {
         code, modifiers, ..
     }) = ev
@@ -1056,6 +1096,19 @@ fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             && modifiers.contains(KeyModifiers::CONTROL)
         {
             return true;
+        }
+
+        // Ctrl+S: Session List
+        if *code == KeyCode::Char('s')
+            && modifiers.contains(KeyModifiers::CONTROL)
+        {
+            app.show_session_list().await;
+            return false;
+        }
+
+        if app.mode == AppMode::Help {
+            app.mode = AppMode::Main;
+            return false;
         }
 
         // AwaitingContinue popup mode
@@ -1098,6 +1151,9 @@ fn handle_main_event(app: &mut App, ev: &Event) -> bool {
         }
 
         match code {
+            KeyCode::F(1) => {
+                app.mode = AppMode::Help;
+            }
             KeyCode::Enter => {
                 app.send_message();
             }
@@ -1176,4 +1232,72 @@ fn handle_quit_confirm(app: &mut App, ev: &Event) -> bool {
         }
     }
     false
+}
+
+fn render_help_dialog(frame: &mut Frame, area: Rect) {
+    let dialog_width = 60u16;
+    let dialog_height = 14u16;
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
+    let dialog_area = Rect::new(
+        x,
+        y,
+        dialog_width.min(area.width),
+        dialog_height.min(area.height),
+    );
+
+    frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    
+    let block = ratatui::widgets::Block::default()
+        .title(" Seekr Help & Shortcuts ")
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Navigation", Style::default().add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("    Tab       ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Switch focus between Chat and Tasks"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Up/Down   ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Scroll chat or task list"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  Commands", Style::default().add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled("    Enter     ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Send message"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Ctrl+S    ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Open Session List"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Ctrl+R    ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Toggle Reasoning visibility"),
+        ]),
+        Line::from(vec![
+            Span::styled("    F1        ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Show this help menu"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Esc/Ctrl+C", Style::default().fg(Color::Yellow)),
+            Span::raw(" Quit Seekr"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Press "),
+            Span::styled("any key", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" to close"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block);
+    frame.render_widget(paragraph, dialog_area);
 }

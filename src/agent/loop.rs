@@ -216,7 +216,7 @@ impl AgentLoop {
 
 
             // Call the API with streaming
-            let tool_defs = tools::all_tool_definitions();
+            let tool_defs = tools::all_tool_definitions(Some(&self.config.agent.working_directory));
             let stream_result = self
                 .client
                 .chat_completion_stream(
@@ -320,6 +320,7 @@ impl AgentLoop {
                             &tc.function.name,
                             &tc.function.arguments,
                             &mut self.session.task_manager,
+                            Some(&self.config.agent.working_directory),
                         )
                         .await;
 
@@ -337,10 +338,11 @@ impl AgentLoop {
                         let arguments = tc.function.arguments.clone();
                         let id = tc.id.clone();
                         let event_tx_clone = self.event_tx.clone();
+                        let wd = self.config.agent.working_directory.clone();
                         
                         tool_futures.push(async move {
                             let mut dummy_tm = TaskManager::new().with_sender(event_tx_clone); 
-                            let (result, activity) = tools::execute_tool(&name, &arguments, &mut dummy_tm).await;
+                            let (result, activity) = tools::execute_tool(&name, &arguments, &mut dummy_tm, Some(&wd)).await;
                             (id, name, result, activity)
                         });
                     }
@@ -360,6 +362,7 @@ impl AgentLoop {
                 }
 
                 // Continue the loop - call the API again with tool results
+                self.session.save().ok();
                 continue;
             }
 
