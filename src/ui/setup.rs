@@ -4,7 +4,7 @@
 // Guides the user through API key, model selection, and preferences.
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
@@ -27,32 +27,25 @@ pub fn render_setup(frame: &mut Frame, area: Rect, state: &SetupState) {
     // Clear the area first
     frame.render_widget(Clear, area);
 
-    let layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(8), // logo
-            Constraint::Min(8),    // content
-            Constraint::Length(2), // footer
-        ])
-        .split(area);
+    let layout = crate::ui::layout::SetupLayout::new(area);
 
     // Logo
-    render_logo(frame, layout[0]);
+    render_logo(frame, layout.header);
 
     // Step content
     match state.current_step {
-        0 => render_welcome(frame, layout[1]),
-        1 => render_api_key_step(frame, layout[1], state),
-        2 => render_model_step(frame, layout[1], state),
-        3 => render_auto_approve_step(frame, layout[1], state),
-        4 => render_working_dir_step(frame, layout[1], state),
-        5 => render_validating_step(frame, layout[1], state),
-        6 => render_complete_step(frame, layout[1], state),
+        0 => render_welcome(frame, layout.content),
+        1 => render_api_key_step(frame, layout.content, state),
+        2 => render_model_step(frame, layout.content, state),
+        3 => render_auto_approve_step(frame, layout.content, state),
+        4 => render_working_dir_step(frame, layout.content, state),
+        5 => render_validating_step(frame, layout.content, state),
+        6 => render_complete_step(frame, layout.content, state),
         _ => {}
     }
 
     // Footer with navigation hints
-    render_footer(frame, layout[2], state);
+    render_footer(frame, layout.footer, state);
 }
 
 fn render_logo(frame: &mut Frame, area: Rect) {

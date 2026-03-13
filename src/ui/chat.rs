@@ -43,18 +43,22 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
             ChatEntry::AssistantContent(text) => {
                 // Wrap long assistant messages
                 for line_str in text.lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled(line_str, Style::default().fg(Color::White)),
-                    ]));
+                    if !line_str.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::styled(line_str, Style::default().fg(Color::White)),
+                        ]));
+                    }
                 }
                 lines.push(Line::from(""));
             }
             ChatEntry::AssistantStreaming(text) => {
                 if !text.is_empty() {
                     for line_str in text.lines() {
-                        lines.push(Line::from(vec![
-                            Span::styled(line_str, Style::default().fg(Color::White)),
-                        ]));
+                        if !line_str.trim().is_empty() {
+                            lines.push(Line::from(vec![
+                                Span::styled(line_str, Style::default().fg(Color::White)),
+                            ]));
+                        }
                     }
                 }
                 lines.push(Line::from(vec![
@@ -66,9 +70,11 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                     Span::styled("[thinking] ", Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM)),
                 ]));
                 for line_str in text.lines() {
-                    lines.push(Line::from(vec![
-                        Span::styled(line_str, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
-                    ]));
+                    if !line_str.trim().is_empty() {
+                        lines.push(Line::from(vec![
+                            Span::styled(line_str, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
+                        ]));
+                    }
                 }
                 lines.push(Line::from(""));
             }
@@ -120,6 +126,20 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                 lines.push(Line::from(vec![
                     Span::styled(
                         "  [Y]es / [N]o / [A]lways",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+            }
+            ChatEntry::CliInputPrompt(prompt) => {
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("CLI Input Required: {}", prompt),
+                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        "  Type your response in the input bar below.",
                         Style::default().fg(Color::Yellow),
                     ),
                 ]));

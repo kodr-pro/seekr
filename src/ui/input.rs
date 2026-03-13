@@ -12,15 +12,23 @@ use ratatui::{
 };
 
 /// Render the input bar
-pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usize, active: bool) {
-    let border_style = if active {
+pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usize, active: bool, prompt: Option<&str>) {
+    let border_style = if prompt.is_some() {
+        Style::default().fg(Color::Yellow)
+    } else if active {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default().fg(Color::DarkGray)
     };
 
+    let title = if let Some(p) = prompt {
+        format!(" [PROMPT] {} ", p)
+    } else {
+        " > Type your message (Enter=Send, Esc=Quit, Tab=Focus) ".to_string()
+    };
+
     let block = Block::default()
-        .title(" > Type your message (Enter=Send, Esc=Quit, Tab=Focus) ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -48,6 +56,8 @@ pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usiz
         ])
     };
 
-    let paragraph = Paragraph::new(display_text).block(block);
+    let paragraph = Paragraph::new(display_text)
+        .block(block)
+        .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(paragraph, area);
 }

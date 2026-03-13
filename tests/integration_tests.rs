@@ -1,0 +1,108 @@
+use seekr::tools::shell::shell_command;
+use seekr::tools::task::TaskManager;
+use tokio::sync::mpsc;
+use serde_json::json;
+use seekr::agent::AgentEvent;
+
+#[tokio::test]
+async fn test_shell_command_simple() {
+    let mut tm = TaskManager::new();
+    let args = json!({
+        "command": "echo 'hello world'"
+    });
+    
+    let (result, summary) = shell_command(&args, &mut tm).await.expect("shell_command failed");
+    assert!(result.to_lowercase().contains("hello world"), "Result was: {}", result);
+    assert!(summary.contains("echo 'hello world'"));
+}
+
+#[tokio::test]
+async fn test_shell_command_interactive() {
+    let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
+    
+    let tm = TaskManager::new().with_sender(evt_tx);
+    
+    let args = json!({
+        "command": "echo 'Password:'; read val; echo \"RESULT:$val\""
+    });
+    
+    let mut tm_clone = tm.clone();
+    let handle = tokio::spawn(async move {
+        shell_command(&args, &mut tm_clone).await
+    });
+    
+    // 1. Skip the Activity event
+    println!("Waiting for Activity event...");
+    let event1 = tokio::time::timeout(std::time::Duration::from_secs(5), evt_rx.recv())
+        .await.expect("Timeout waiting for first event")
+        .expect("Stream closed");
+    println!("Got event: {:?}", event1);
+    assert!(matches!(event1, AgentEvent::Activity(_)), "Expected Activity event, got {:?}", event1);
+
+    // 2. Wait for the CliInputRequest event
+    println!("Waiting for CliInputRequest event...");
+    let (prompt, input_tx_from_event) = match tokio::time::timeout(std::time::Duration::from_secs(10), evt_rx.recv()).await {
+        Ok(Some(AgentEvent::CliInputRequest { prompt, input_tx })) => (prompt, input_tx),
+        e => panic!("Expected CliInputRequest, got {:?}", e),
+    };
+    println!("Got prompt: {}", prompt);
+    assert!(prompt.contains("Password"));
+    
+    // 3. Send response directly via the provided sender
+    println!("Sending response...");
+    input_tx_from_event.send("hello_from_test\n".to_string()).ok();
+    
+    // 5. Check result
+    println!("Waiting for result...");
+    let (result, _) = handle.await.unwrap().expect("shell_command inner failed");
+    println!("Got result: {}", result);
+    assert!(result.contains("RESULT:hello_from_test"), "Result was: {}", result);
+}
+
+#[tokio::test]
+async fn test_session_save_load() {
+    use seekr::session::Session;
+    let mut session = Session::new("test-session".to_string(), "Test Title".to_string());
+    session.save().expect("Save failed");
+    
+    let loaded = Session::load("test-session").expect("Load failed");
+    assert_eq!(loaded.id, "test-session");
+    assert_eq!(loaded.title, "Test Title");
+    
+    // Clean up
+    let path = session.file_path().unwrap();
+    if path.exists() {
+        std::fs::remove_file(path).ok();
+    }
+}
+
+#[tokio::test]
+async fn test_task_manager_activities() {
+    let mut tm = TaskManager::new();
+    tm.log_activity("test_tool", "test summary");
+    assert_eq!(tm.activities.len(), 1);
+    assert_eq!(tm.activities[0].tool_name, "test_tool");
+    assert_eq!(tm.activities[0].summary, "test summary");
+}
+
+#[tokio::test]
+async fn test_tool_registry() {
+    use seekr::tools::ToolRegistry;
+    let registry = ToolRegistry::new();
+    assert!(registry.get("shell_command").is_some());
+    assert!(registry.get("read_file").is_some());
+    assert!(registry.get("web_search").is_some());
+    assert!(registry.all_definitions().len() >= 9);
+}
+
+#[tokio::test]
+async fn test_execute_tool_mock() {
+    use seekr::tools::execute_tool;
+    let mut tm = TaskManager::new();
+    let args = json!({ "command": "echo 'execute_tool test'" }).to_string();
+    
+    let (result, activity) = execute_tool("shell_command", &args, &mut tm).await;
+    assert!(result.contains("execute_tool test"));
+    assert_eq!(activity.tool_name, "shell_command");
+    assert!(activity.summary.contains("shell_command"));
+}

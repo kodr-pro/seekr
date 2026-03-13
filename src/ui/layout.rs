@@ -23,7 +23,7 @@ impl AppLayout {
             .constraints([
                 Constraint::Length(1), // title bar
                 Constraint::Min(5),    // main area (chat + tasks)
-                Constraint::Length(3), // input bar
+                Constraint::Length(5), // input bar
                 Constraint::Length(1), // status bar
             ])
             .split(area);
@@ -48,7 +48,6 @@ impl AppLayout {
 }
 
 /// Layout for the setup wizard
-#[allow(dead_code)]
 pub struct SetupLayout {
     pub header: Rect,
     pub content: Rect,
@@ -56,7 +55,6 @@ pub struct SetupLayout {
 }
 
 impl SetupLayout {
-    #[allow(dead_code)]
     pub fn new(area: Rect) -> Self {
         let vertical = Layout::default()
             .direction(Direction::Vertical)

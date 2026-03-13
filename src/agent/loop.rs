@@ -30,7 +30,6 @@ pub enum AgentEvent {
     /// Activity log entry
     Activity(tools::ActivityEntry),
     /// Token usage update
-    #[allow(dead_code)]
     TokenUsage { prompt_tokens: u32, completion_tokens: u32, total_tokens: u32 },
     /// The agent finished its turn (no more tool calls)
     TurnComplete,
@@ -39,8 +38,9 @@ pub enum AgentEvent {
     /// An error occurred
     Error(String),
     /// Request tool approval from the user
-    #[allow(dead_code)]
     ToolApprovalRequest { call_index: usize, name: String, arguments: String },
+    /// Request CLI input (e.g. for sudo password, [y/n] prompt)
+    CliInputRequest { prompt: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
 }
 
 /// Events sent from the UI to the agent loop
@@ -49,13 +49,13 @@ pub enum AgentCommand {
     /// User sent a new message
     UserMessage(String),
     /// User approved a tool call
-    #[allow(dead_code)]
     ToolApproved { call_index: usize },
     /// User denied a tool call
-    #[allow(dead_code)]
     ToolDenied { call_index: usize },
     /// User chose "always approve" for the session
     ToolAlwaysApprove,
+    /// User provided CLI input
+    CliInputResponse(String),
     /// Shutdown the agent
     Shutdown,
 }
@@ -84,6 +84,7 @@ impl AgentLoop {
         // Start a new session with a random ID
         let session_id = uuid::Uuid::new_v4().to_string();
         let mut session = Session::new(session_id, "New Chat".to_string());
+        session.task_manager = session.task_manager.with_sender(event_tx.clone());
         session.messages.push(ChatMessage::system(&system_prompt));
 
         Self {
@@ -97,8 +98,6 @@ impl AgentLoop {
         }
     }
 
-    /// Resume a session from disk
-    #[allow(dead_code)]
     pub fn resume(
         config: AppConfig,
         session_id: &str,
@@ -106,7 +105,8 @@ impl AgentLoop {
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
     ) -> Result<Self> {
         let client = DeepSeekClient::new(&config);
-        let session = Session::load(session_id)?;
+        let mut session = Session::load(session_id)?;
+        session.task_manager = session.task_manager.with_sender(event_tx.clone());
         let auto_approve = config.agent.auto_approve_tools;
 
         Ok(Self {
@@ -122,32 +122,33 @@ impl AgentLoop {
 
     /// Run the agent loop, processing commands from the UI
     pub async fn run(mut self) {
-        while let Some(command) = self.command_rx.recv().await {
-            match command {
-                AgentCommand::UserMessage(msg) => {
-                    // Update session title on first message if it's still default
-                    if self.session.title == "New Chat" {
-                        let title = if msg.len() > 30 {
-                            format!("{}...", &msg[..27])
-                        } else {
-                            msg.clone()
-                        };
-                        self.session.title = title;
+        loop {
+            tokio::select! {
+                Some(command) = self.command_rx.recv() => {
+                    match command {
+                        AgentCommand::UserMessage(msg) => {
+                            // Update session title on first message if it's still default
+                            if self.session.title == "New Chat" {
+                                let title = if msg.len() > 30 {
+                                    format!("{}...", &msg[..27])
+                                } else {
+                                    msg.clone()
+                                };
+                                self.session.title = title;
+                            }
+                            
+                            self.session.messages.push(ChatMessage::user(&msg));
+                            self.iteration = 0;
+                            self.run_agent_turn().await;
+                            self.session.save().ok();
+                        }
+                        AgentCommand::ToolAlwaysApprove => {
+                            self.auto_approve = true;
+                        }
+                        AgentCommand::Shutdown => break,
+                        _ => {}
                     }
-                    
-                    self.session.messages.push(ChatMessage::user(&msg));
-                    self.iteration = 0;
-                    self.run_agent_turn().await;
-                    let _ = self.session.save();
                 }
-                AgentCommand::ToolAlwaysApprove => {
-                    self.auto_approve = true;
-                }
-                AgentCommand::Shutdown => {
-                    break;
-                }
-                // Approval/denial handled within run_agent_turn
-                _ => {}
             }
         }
     }
@@ -157,7 +158,7 @@ impl AgentLoop {
         loop {
             // Check iteration limit
             if self.iteration >= self.config.agent.max_iterations {
-                let _ = self.event_tx.send(AgentEvent::MaxIterationsReached);
+                self.event_tx.send(AgentEvent::MaxIterationsReached).ok();
                 break;
             }
             self.iteration += 1;
@@ -179,9 +180,7 @@ impl AgentLoop {
             let mut stream_rx = match stream_result {
                 Ok(rx) => rx,
                 Err(e) => {
-                    let _ = self
-                        .event_tx
-                        .send(AgentEvent::Error(format!("API error: {e}")));
+                    self.event_tx.send(AgentEvent::Error(format!("API error: {e}"))).ok();
                     break;
                 }
             };
@@ -194,10 +193,10 @@ impl AgentLoop {
                 match event {
                     StreamEvent::ContentDelta(text) => {
                         content_buf.push_str(&text);
-                        let _ = self.event_tx.send(AgentEvent::ContentDelta(text));
+                        self.event_tx.send(AgentEvent::ContentDelta(text)).ok();
                     }
                     StreamEvent::ReasoningDelta(text) => {
-                        let _ = self.event_tx.send(AgentEvent::ReasoningDelta(text));
+                        self.event_tx.send(AgentEvent::ReasoningDelta(text)).ok();
                     }
                     StreamEvent::ToolCallComplete(tc) => {
                         tool_calls.push(tc);
@@ -207,17 +206,15 @@ impl AgentLoop {
                         completion_tokens,
                         total_tokens,
                     } => {
-                        let _ = self.event_tx.send(AgentEvent::TokenUsage {
+                        self.event_tx.send(AgentEvent::TokenUsage {
                             prompt_tokens,
                             completion_tokens,
                             total_tokens,
-                        });
+                        }).ok();
                     }
                     StreamEvent::Done => break,
                     StreamEvent::Error(e) => {
-                        let _ = self
-                            .event_tx
-                            .send(AgentEvent::Error(format!("Stream error: {e}")));
+                        self.event_tx.send(AgentEvent::Error(format!("Stream error: {e}"))).ok();
                         break;
                     }
                 }
@@ -240,18 +237,18 @@ impl AgentLoop {
                 let mut tool_futures = Vec::new();
                 
                 for tc in &tool_calls {
-                    let _ = self.event_tx.send(AgentEvent::ToolCallStart {
+                    self.event_tx.send(AgentEvent::ToolCallStart {
                         name: tc.function.name.clone(),
                         arguments: tc.function.arguments.clone(),
-                    });
+                    }).ok();
 
                     // Check approval if needed
                     if !self.auto_approve {
-                        let _ = self.event_tx.send(AgentEvent::ToolApprovalRequest {
+                        self.event_tx.send(AgentEvent::ToolApprovalRequest {
                             call_index: 0, // This logic needs improvement for multiple tools
                             name: tc.function.name.clone(),
                             arguments: tc.function.arguments.clone(),
-                        });
+                        }).ok();
 
                         // Wait for approval
                         let approved = self.wait_for_approval().await;
@@ -260,10 +257,10 @@ impl AgentLoop {
                                 &tc.id,
                                 "Tool execution denied by user.",
                             ));
-                            let _ = self.event_tx.send(AgentEvent::ToolCallResult {
+                            self.event_tx.send(AgentEvent::ToolCallResult {
                                 name: tc.function.name.clone(),
                                 result: "Denied by user".to_string(),
-                            });
+                            }).ok();
                             continue;
                         }
                     }
@@ -277,11 +274,11 @@ impl AgentLoop {
                         )
                         .await;
 
-                        let _ = self.event_tx.send(AgentEvent::Activity(activity));
-                        let _ = self.event_tx.send(AgentEvent::ToolCallResult {
+                        self.event_tx.send(AgentEvent::Activity(activity)).ok();
+                        self.event_tx.send(AgentEvent::ToolCallResult {
                             name: tc.function.name.clone(),
                             result: result.clone(),
-                        });
+                        }).ok();
 
                         self.session.messages.push(ChatMessage::tool_result(&tc.id, &result));
                     } else {
@@ -290,11 +287,10 @@ impl AgentLoop {
                         let name = tc.function.name.clone();
                         let arguments = tc.function.arguments.clone();
                         let id = tc.id.clone();
+                        let event_tx_clone = self.event_tx.clone();
                         
                         tool_futures.push(async move {
-                            // Note: We bypass TaskManager here because non-task tools don't use it
-                            // This is a bit of a hack until we have a better registry
-                            let mut dummy_tm = TaskManager::new(); 
+                            let mut dummy_tm = TaskManager::new().with_sender(event_tx_clone); 
                             let (result, activity) = tools::execute_tool(&name, &arguments, &mut dummy_tm).await;
                             (id, name, result, activity)
                         });
@@ -305,11 +301,11 @@ impl AgentLoop {
                 if !tool_futures.is_empty() {
                     let results = futures::future::join_all(tool_futures).await;
                     for (id, name, result, activity) in results {
-                        let _ = self.event_tx.send(AgentEvent::Activity(activity));
-                        let _ = self.event_tx.send(AgentEvent::ToolCallResult {
+                        self.event_tx.send(AgentEvent::Activity(activity)).ok();
+                        self.event_tx.send(AgentEvent::ToolCallResult {
                             name,
                             result: result.clone(),
-                        });
+                        }).ok();
                         self.session.messages.push(ChatMessage::tool_result(&id, &result));
                     }
                 }
@@ -322,8 +318,8 @@ impl AgentLoop {
             if !content_buf.is_empty() {
                 self.session.messages.push(ChatMessage::assistant(&content_buf));
             }
-            let _ = self.session.save();
-            let _ = self.event_tx.send(AgentEvent::TurnComplete);
+            self.session.save().ok();
+            self.event_tx.send(AgentEvent::TurnComplete).ok();
             break;
         }
     }
@@ -362,8 +358,6 @@ impl AgentLoop {
         }
     }
 
-    /// Get task manager reference (for UI rendering)
-    #[allow(dead_code)]
     pub fn task_manager(&self) -> &TaskManager {
         &self.session.task_manager
     }

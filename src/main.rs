@@ -3,14 +3,7 @@
 // Detects first-run (no config file) and launches either the setup wizard
 // or the main TUI application.
 
-mod agent;
-mod api;
-mod app;
-mod config;
-mod session;
-mod tools;
-mod ui;
-
+use seekr::{app, config};
 use anyhow::Result;
 
 #[tokio::main]
@@ -18,8 +11,15 @@ async fn main() -> Result<()> {
     // Initialize tracing for debug logging (writes to a file so it doesn't interfere with TUI)
     init_logging();
 
+    let args: Vec<String> = std::env::args().collect();
+    let resume_id = if args.len() >= 3 && args[1] == "--resume" {
+        Some(args[2].clone())
+    } else {
+        None
+    };
+
     // First-run detection: check if config exists
-    let app = if config::AppConfig::exists() {
+    let mut app = if config::AppConfig::exists() {
         match config::AppConfig::load() {
             Ok(cfg) => app::App::new_main(cfg),
             Err(e) => {
@@ -33,6 +33,12 @@ async fn main() -> Result<()> {
     } else {
         app::App::new_setup()
     };
+
+    if let Some(sid) = resume_id {
+        if app.mode == app::AppMode::Main {
+            app.resume_session(sid);
+        }
+    }
 
     // Run the TUI event loop
     app::run_app(app).await

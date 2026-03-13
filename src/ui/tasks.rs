@@ -59,12 +59,13 @@ fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], border_style:
         )));
     } else {
         for task in tasks {
-            let (icon, color) = match task.status {
-                TaskStatus::Pending => ("○", Color::DarkGray),
-                TaskStatus::InProgress => ("●", Color::Yellow),
-                TaskStatus::Completed => ("✓", Color::Green),
-                TaskStatus::Failed => ("✗", Color::Red),
+            let color = match task.status {
+                TaskStatus::Pending => Color::DarkGray,
+                TaskStatus::InProgress => Color::Yellow,
+                TaskStatus::Completed => Color::Green,
+                TaskStatus::Failed => Color::Red,
             };
+            let icon = task.status.icon();
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{} ", icon),

@@ -9,6 +9,8 @@ use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::Tool;
 use anyhow::{Result, anyhow};
 use serde_json::json;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Possible task statuses
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -63,19 +65,62 @@ pub struct Task {
     pub status: TaskStatus,
 }
 
-/// Task manager that holds the list of active tasks
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActivityEntry {
+    pub tool_name: String,
+    pub summary: String,
+}
+
+pub type InputSender = tokio::sync::mpsc::UnboundedSender<String>;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskManager {
     pub tasks: Vec<Task>,
+    pub activities: Vec<ActivityEntry>,
     next_id: usize,
+    #[serde(skip)]
+    pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>>,
+    #[serde(skip)]
+    pub input_tx: Arc<Mutex<Option<InputSender>>>,
+}
+
+impl Default for TaskManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl TaskManager {
     pub fn new() -> Self {
         Self {
             tasks: Vec::new(),
+            activities: Vec::new(),
             next_id: 1,
+            event_tx: None,
+            input_tx: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn log_activity(&mut self, tool_name: &str, summary: &str) {
+        let activity = ActivityEntry {
+            tool_name: tool_name.to_string(),
+            summary: summary.to_string(),
+        };
+        self.activities.push(activity.clone());
+        if let Some(ref tx) = self.event_tx {
+            tx.send(crate::agent::AgentEvent::Activity(activity)).ok();
+        }
+    }
+
+    pub fn set_input_tx(&self, tx: InputSender) {
+        if let Ok(mut lock) = self.input_tx.try_lock() {
+            *lock = Some(tx);
+        }
+    }
+
+    pub fn with_sender(mut self, tx: tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>) -> Self {
+        self.event_tx = Some(tx);
+        self
     }
 
     /// Create a new task and return its ID
