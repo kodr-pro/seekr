@@ -10,7 +10,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
     DefaultTerminal, Frame,
@@ -571,12 +571,19 @@ fn render_main(frame: &mut Frame, area: Rect, app: &App) {
     );
 
     // Input bar
+    let input_prompt = if app.awaiting_cli_input {
+        Some(app.cli_input_prompt.as_str())
+    } else {
+        None
+    };
+
     ui::input::render_input(
         frame,
         layout.input_bar,
         &app.input,
         app.cursor_pos,
         !app.awaiting_approval,
+        input_prompt,
     );
 
     // Status bar
@@ -636,10 +643,10 @@ fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_quit_dialog(frame: &mut Frame, area: Rect) {
-    let dialog_width = 40u16;
-    let dialog_height = 5u16;
-    let x = area.width.saturating_sub(dialog_width) / 2;
-    let y = area.height.saturating_sub(dialog_height) / 2;
+    let dialog_width = 44u16;
+    let dialog_height = 7u16;
+    let x = (area.width.saturating_sub(dialog_width)) / 2;
+    let y = (area.height.saturating_sub(dialog_height)) / 2;
     let dialog_area = Rect::new(
         x,
         y,
@@ -647,26 +654,32 @@ fn render_quit_dialog(frame: &mut Frame, area: Rect) {
         dialog_height.min(area.height),
     );
 
+    // Clear the dialog area and draw a block with a solid background
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
+    
+    let block = ratatui::widgets::Block::default()
+        .title(" Confirmation ")
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .style(Style::default().bg(Color::Reset)); // Use Reset or specific background if needed
 
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "  Quit Seekr?",
+            "    Are you sure you want to quit?",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(ratatui::style::Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "  [Y]es  /  [N]o",
-            Style::default().fg(Color::Yellow),
-        )),
+        Line::from(vec![
+            Span::raw("    Press "),
+            Span::styled("[Y]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" to Yes, "),
+            Span::styled("[N]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(" to No"),
+        ]),
     ];
-
-    let block = ratatui::widgets::Block::default()
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
 
     let paragraph = Paragraph::new(text).block(block);
     frame.render_widget(paragraph, dialog_area);
@@ -796,7 +809,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                         .to_string(),
                                 },
                                 agent: crate::config::AgentConfig {
-                                    max_iterations: 25,
+                                    max_iterations: 15,
                                     auto_approve_tools: auto_approve,
                                     working_directory: working_dir,
                                 },
