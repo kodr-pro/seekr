@@ -1,7 +1,7 @@
 {
   "name": "seekr",
   "logo": "./logo.png",
-  "logoDark": "./icon.png",
+  "logoDark": "./logo.png",
   "favicon": "./favicon.ico",
   "sidebar": [
     {

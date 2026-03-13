@@ -1,7 +1,7 @@
 # seekr
 
 <p align="center">
-  <img src="docs/seekr-logo.png" alt="seekr Logo">
+  <img src="docs/logo.png" alt="seekr Logo">
 </p>
 
 **seekr** is a high-performance AI Agent Manager featuring a sleek Terminal UI, powered by the DeepSeek native API. It brings the power of autonomous agents directly to your terminal with a robust toolset for shell execution, file management, and web exploration.
