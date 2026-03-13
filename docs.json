@@ -1,5 +1,8 @@
 {
   "name": "seekr",
+  "logo": "./logo.png",
+  "logoDark": "./logo.png",
+  "favicon": "./favicon.ico",
   "sidebar": [
     {
       "group": "Documentation",
