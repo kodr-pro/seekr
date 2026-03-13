@@ -4,18 +4,42 @@
   "logo": "/seekr-logo.png",
   "logoDark": "/seekr-logo.png",
   "favicon": "/seekrdot.png",
-  "sidebar": {
-    "Getting Started": [
-      ["Introduction", "/"],
-      ["Installation", "/installation"],
-      ["Configuration", "/configuration"]
-    ],
-    "Deep Dive": [
-      ["The Agent Loop", "/agent"],
-      ["Built-in Tools", "/tools"],
-      ["User Interface", "/ui"]
-    ]
-  },
+  "sidebar": [
+    {
+      "group": "Getting Started",
+      "pages": [
+        {
+          "title": "Introduction",
+          "href": "/"
+        },
+        {
+          "title": "Installation",
+          "href": "/installation"
+        },
+        {
+          "title": "Configuration",
+          "href": "/configuration"
+        }
+      ]
+    },
+    {
+      "group": "Deep Dive",
+      "pages": [
+        {
+          "title": "The Agent Loop",
+          "href": "/agent"
+        },
+        {
+          "title": "Built-in Tools",
+          "href": "/tools"
+        },
+        {
+          "title": "User Interface",
+          "href": "/ui"
+        }
+      ]
+    }
+  ],
   "theme": {
     "colors": {
       "primary": "#00bcd4"
