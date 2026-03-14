@@ -194,6 +194,11 @@ impl AgentLoop {
                         // Reset iteration count and keep looping
                         self.iteration = 0;
                         self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
+                        
+                        // Inject a momentum message to remind the agent to keep going
+                        self.session.messages.push(ChatMessage::user(
+                            "I have authorized you to continue. Please proceed with the next steps of the task."
+                        ));
                     }
                     ContinueAction::AnswerNow => {
                         // Make one final API call to give a clean summary answer
@@ -484,16 +489,25 @@ impl AgentLoop {
     /// preceded by an assistant message that has tool_calls. If we slice mid-pair
     /// the API returns a 400 error.
     fn prune_messages(&mut self) {
-        const MAX_MESSAGES: usize = 60;
+        const MAX_MESSAGES: usize = 100;
 
         if self.session.messages.len() <= MAX_MESSAGES {
             return;
         }
 
-        let system_prompt = self.session.messages[0].clone();
+        // Always keep the system prompt and the first 4 messages (usually the initial user request and response)
+        // to ensure the agent doesn't forget its core objective.
+        let mut new_messages = Vec::new();
+        let keep_initial = 5;
+        if self.session.messages.len() > keep_initial {
+            new_messages.extend(self.session.messages.iter().take(keep_initial).cloned());
+        }
+
         let total = self.session.messages.len();
-        // Start from the naive window
-        let mut start = total - MAX_MESSAGES;
+        let remaining_slots = MAX_MESSAGES - new_messages.len();
+        
+        // Start from the naive window for the remaining messages
+        let mut start = total.saturating_sub(remaining_slots);
 
         // Walk start forward until the first message at `start` is NOT a tool-result.
         // Tool-result messages have role == "tool". If we start on one, we'd
@@ -506,9 +520,10 @@ impl AgentLoop {
             start += 1;
         }
 
-        let mut recent = self.session.messages[start..].to_vec();
-        let mut new_messages = vec![system_prompt];
-        new_messages.append(&mut recent);
+        if start < total {
+            new_messages.extend(self.session.messages[start..].iter().cloned());
+        }
+        
         self.session.messages = new_messages;
     }
 
