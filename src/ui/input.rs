@@ -2,27 +2,70 @@
 //
 // Renders the text input area at the bottom of the screen.
 // Shows the current input text with a cursor indicator.
+// When InputMode::ShellStdin is active, shows an orange tint and context lines.
 
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 
-/// Render the input bar
-pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usize, active: bool, prompt: Option<&str>) {
-    let border_style = if prompt.is_some() {
-        Style::default().fg(Color::Yellow)
-    } else if active {
-        Style::default().fg(Color::Cyan)
+/// Render the input bar.
+/// `prompt` overrides the title when shell input is required.
+/// `shell_context` is the last few lines of process output shown above the input.
+pub fn render_input(
+    frame: &mut Frame,
+    area: Rect,
+    input: &str,
+    cursor_pos: usize,
+    active: bool,
+    prompt: Option<&str>,
+    shell_context: Option<&str>,
+) {
+    let is_shell = prompt.is_some();
+
+    // If there is shell context, split the area vertically
+    let (context_area, input_area) = if is_shell && shell_context.is_some() {
+        let context_lines = shell_context.unwrap().lines().count().max(1) as u16;
+        let context_height = (context_lines + 2).min(area.height.saturating_sub(4));
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(context_height),
+                Constraint::Min(3),
+            ])
+            .split(area);
+        (Some(chunks[0]), chunks[1])
     } else {
-        Style::default().fg(Color::DarkGray)
+        (None, area)
+    };
+
+    // Render context block if present
+    if let (Some(ctx_area), Some(ctx_text)) = (context_area, shell_context) {
+        let ctx_block = Block::default()
+            .title(" Process output ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow));
+        let ctx_para = Paragraph::new(ctx_text)
+            .block(ctx_block)
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(ctx_para, ctx_area);
+    }
+
+    // Border color: orange for shell mode, cyan for active chat, gray otherwise
+    let border_color = if is_shell {
+        Color::Rgb(255, 165, 0)
+    } else if active {
+        Color::Cyan
+    } else {
+        Color::DarkGray
     };
 
     let title = if let Some(p) = prompt {
-        format!(" [PROMPT] {} ", p)
+        format!(" ⌨ {} ", p)
     } else {
         " > Type your message (Enter=Send, Esc=Quit, Tab=Focus) ".to_string()
     };
@@ -30,19 +73,19 @@ pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usiz
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(border_style);
+        .border_style(Style::default().fg(border_color));
 
-    let display_text = if input.is_empty() && !active {
+    let display_text = if input.is_empty() && !active && !is_shell {
         Line::from(Span::styled(
             "Type your message...",
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
         ))
     } else {
-        // Show the input with cursor position
-        let before = &input[..cursor_pos.min(input.len())];
-        let cursor_char = input.get(cursor_pos..cursor_pos + 1).unwrap_or(" ");
-        let after_start = (cursor_pos + 1).min(input.len());
-        let after = &input[after_start..];
+        // Show the input with cursor position (character-aware)
+        let chars: Vec<char> = input.chars().collect();
+        let before: String = chars.iter().take(cursor_pos).collect();
+        let cursor_char = chars.get(cursor_pos).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+        let after: String = chars.iter().skip(cursor_pos + 1).collect();
 
         Line::from(vec![
             Span::styled(before, Style::default().fg(Color::White)),
@@ -50,7 +93,7 @@ pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usiz
                 cursor_char,
                 Style::default()
                     .fg(Color::Black)
-                    .bg(Color::White),
+                    .bg(if is_shell { Color::Rgb(255, 165, 0) } else { Color::White }),
             ),
             Span::styled(after, Style::default().fg(Color::White)),
         ])
@@ -59,5 +102,5 @@ pub fn render_input(frame: &mut Frame, area: Rect, input: &str, cursor_pos: usiz
     let paragraph = Paragraph::new(display_text)
         .block(block)
         .wrap(ratatui::widgets::Wrap { trim: true });
-    frame.render_widget(paragraph, area);
+    frame.render_widget(paragraph, input_area);
 }

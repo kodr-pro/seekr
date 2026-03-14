@@ -46,6 +46,26 @@ pub enum Focus {
     Tasks,
 }
 
+/// Input mode — normal chat vs shell waiting for stdin
+#[derive(Debug, Clone)]
+pub enum InputMode {
+    /// Normal chat with the agent
+    Normal,
+    /// A shell command is waiting for user input (e.g. sudo password, y/n)
+    ShellStdin {
+        /// Last few lines of output from the process, for context
+        context: String,
+        /// Channel to send the user's response to the process stdin
+        input_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    },
+}
+
+impl PartialEq for InputMode {
+    fn eq(&self, other: &Self) -> bool {
+        matches!((self, other), (InputMode::Normal, InputMode::Normal) | (InputMode::ShellStdin { .. }, InputMode::ShellStdin { .. }))
+    }
+}
+
 /// A chat entry displayed in the chat panel
 #[derive(Debug, Clone)]
 pub enum ChatEntry {
@@ -111,9 +131,7 @@ pub struct App {
     pub iteration: u32,
     pub connected: bool,
     pub awaiting_approval: bool,
-    pub awaiting_cli_input: bool,
-    pub cli_input_prompt: String,
-    pub cli_input_tx: Option<mpsc::UnboundedSender<String>>,
+    pub input_mode: InputMode,
 
     // Tasks and activity (mirrored from agent for UI rendering)
     pub tasks: Vec<Task>,
@@ -160,9 +178,7 @@ impl App {
             iteration: 0,
             connected: false,
             awaiting_approval: false,
-            awaiting_cli_input: false,
-            cli_input_prompt: String::new(),
-            cli_input_tx: None,
+            input_mode: InputMode::Normal,
             tasks: Vec::new(),
             activities: Vec::new(),
             streaming_content: String::new(),
@@ -267,8 +283,10 @@ impl App {
         self.input.clear();
         self.cursor_pos = 0;
 
-        if self.awaiting_cli_input {
-            self.handle_cli_input(msg);
+        // If a shell process is waiting for input, forward directly to its stdin
+        if let InputMode::ShellStdin { ref input_tx, .. } = self.input_mode.clone() {
+            let _ = input_tx.send(msg);
+            self.input_mode = InputMode::Normal;
             return;
         }
 
@@ -383,11 +401,8 @@ impl App {
                         self.scroll_offset = self.chat_max_scroll;
                     }
                 }
-                AgentEvent::CliInputRequest { prompt, input_tx } => {
-                    self.awaiting_cli_input = true;
-                    self.cli_input_prompt = prompt.clone();
-                    self.cli_input_tx = Some(input_tx);
-                    self.chat_entries.push(ChatEntry::CliInputPrompt(prompt));
+                AgentEvent::ShellInputNeeded { context, input_tx } => {
+                    self.input_mode = InputMode::ShellStdin { context, input_tx };
                     if !self.user_scrolled {
                         self.scroll_offset = self.chat_max_scroll;
                     }
@@ -513,24 +528,6 @@ impl App {
                 tx.send(AgentCommand::ToolDenied { call_index: 0 }).ok();
             }
         }
-    }
-
-    /// Handle CLI input
-    pub fn handle_cli_input(&mut self, input: String) {
-        self.awaiting_cli_input = false;
-        // Remove the prompt from chat
-        if let Some(pos) = self
-            .chat_entries
-            .iter()
-            .rposition(|e| matches!(e, ChatEntry::CliInputPrompt(_)))
-        {
-            self.chat_entries.remove(pos);
-        }
-
-        if let Some(ref tx) = self.cli_input_tx {
-            tx.send(input).ok();
-        }
-        self.cli_input_tx = None;
     }
 
     /// Clear chat history
@@ -765,10 +762,12 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 
     // Input bar
-    let input_prompt = if app.awaiting_cli_input {
-        Some(app.cli_input_prompt.as_str())
-    } else {
-        None
+    let (shell_context, input_prompt) = match &app.input_mode {
+        InputMode::ShellStdin { context, .. } => {
+            let ctx = if context.is_empty() { None } else { Some(context.as_str()) };
+            (ctx, Some("Shell input required"))
+        }
+        InputMode::Normal => (None, None),
     };
 
     ui::input::render_input(
@@ -778,6 +777,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         app.cursor_pos,
         !app.awaiting_approval,
         input_prompt,
+        shell_context,
     );
 
     // Status bar
@@ -1223,30 +1223,45 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             }
             KeyCode::Backspace => {
                 if app.cursor_pos > 0 {
-                    app.input.remove(app.cursor_pos - 1);
-                    app.cursor_pos -= 1;
+                    let mut chars: Vec<char> = app.input.chars().collect();
+                    if app.cursor_pos <= chars.len() {
+                        chars.remove(app.cursor_pos - 1);
+                        app.input = chars.into_iter().collect();
+                        app.cursor_pos -= 1;
+                    }
                 }
             }
             KeyCode::Delete => {
-                if app.cursor_pos < app.input.len() {
-                    app.input.remove(app.cursor_pos);
+                let chars: Vec<char> = app.input.chars().collect();
+                if app.cursor_pos < chars.len() {
+                    let mut new_chars = chars;
+                    new_chars.remove(app.cursor_pos);
+                    app.input = new_chars.into_iter().collect();
                 }
             }
             KeyCode::Left => {
                 app.cursor_pos = app.cursor_pos.saturating_sub(1);
             }
             KeyCode::Right => {
-                app.cursor_pos = (app.cursor_pos + 1).min(app.input.len());
+                let char_count = app.input.chars().count();
+                app.cursor_pos = (app.cursor_pos + 1).min(char_count);
             }
             KeyCode::Home => {
                 app.cursor_pos = 0;
             }
             KeyCode::End => {
-                app.cursor_pos = app.input.len();
+                app.cursor_pos = app.input.chars().count();
             }
             KeyCode::Char(c) => {
-                app.input.insert(app.cursor_pos, *c);
-                app.cursor_pos += 1;
+                let mut chars: Vec<char> = app.input.chars().collect();
+                if app.cursor_pos <= chars.len() {
+                    chars.insert(app.cursor_pos, *c);
+                    app.input = chars.into_iter().collect();
+                    app.cursor_pos += 1;
+                } else {
+                    app.input.push(*c);
+                    app.cursor_pos = app.input.chars().count();
+                }
             }
             _ => {}
         }

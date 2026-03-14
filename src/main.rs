@@ -10,6 +10,7 @@ use anyhow::Result;
 async fn main() -> Result<()> {
     // Initialize tracing for debug logging (writes to a file so it doesn't interfere with TUI)
     init_logging();
+    setup_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
     
@@ -64,4 +65,14 @@ fn init_logging() {
             .with_writer(std::sync::Mutex::new(file))
             .init();
     }
+}
+
+/// Ensure terminal is restored on panic
+fn setup_panic_hook() {
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        let _ = ratatui::crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
+        ratatui::restore();
+        original_hook(panic_info);
+    }));
 }
