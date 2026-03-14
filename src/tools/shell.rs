@@ -5,12 +5,47 @@
 
 use anyhow::{Context, Result, anyhow};
 use tokio::process::Command;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use std::process::Stdio;
 use async_trait::async_trait;
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{Tool, truncate, task::TaskManager};
 use serde_json::json;
+
+/// Strips ANSI escape codes from a string
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+    let mut iter = s.chars();
+    
+    while let Some(c) = iter.next() {
+        if c == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        if in_escape {
+            // ANSI escape sequences usually end with a letter (A-Z, a-z)
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+        result.push(c);
+    }
+    result
+}
+
+/// Checks if a line contains any interactive prompt patterns
+fn detect_prompt(line: &str) -> Option<String> {
+    let stripped = strip_ansi_codes(line);
+    let prompt_patterns = ["[sudo] password", "(y/n)", "[Y/n]", "Password:", "confirm", "Enter something:"];
+    for pattern in prompt_patterns {
+        if stripped.to_lowercase().contains(&pattern.to_lowercase()) {
+            return Some(stripped);
+        }
+    }
+    None
+}
 
 /// Execute a shell command and return the combined output
 pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
@@ -54,6 +89,9 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
     let result_clone = result_arc.clone();
     let result_clone_err = result_arc.clone();
 
+    let tx_stdout = tx.clone();
+    let tx_err = tx.clone();
+
     // Spawn stdout reader
     tokio::spawn(async move {
         let mut line = String::new();
@@ -68,13 +106,9 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
                         res.push(c);
                     }
                     
-                    // Check for common prompt patterns
-                    let prompt_patterns = ["[sudo] password", "(y/n)", "[Y/n]", "Password:", "confirm", "Enter something:"];
-                    for pattern in prompt_patterns {
-                        if line.to_lowercase().contains(&pattern.to_lowercase()) {
-                            tx.send(line.clone()).ok();
-                            line.clear();
-                        }
+                    if let Some(prompt) = detect_prompt(&line) {
+                        tx_stdout.send(prompt).ok();
+                        line.clear();
                     }
                     
                     if c == '\n' {
@@ -89,12 +123,31 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
     // Spawn stderr reader
     tokio::spawn(async move {
         let mut line = String::new();
-        while let Ok(n) = stderr_reader.read_line(&mut line).await {
-            if n == 0 { break; }
-            let mut res = result_clone_err.lock().await;
-            res.push_str("[stderr] ");
-            res.push_str(&line);
-            line.clear();
+        loop {
+            let mut byte = [0u8; 1];
+            match stderr_reader.read_exact(&mut byte).await {
+                Ok(_) => {
+                    let c = byte[0] as char;
+                    line.push(c);
+                    {
+                        let mut res = result_clone_err.lock().await;
+                        if line.len() == 1 {
+                             res.push_str("[stderr] ");
+                        }
+                        res.push(c);
+                    }
+                    
+                    if let Some(prompt) = detect_prompt(&line) {
+                        tx_err.send(prompt).ok();
+                        line.clear();
+                    }
+                    
+                    if c == '\n' {
+                        line.clear();
+                    }
+                }
+                Err(_) => break,
+            }
         }
     });
 
@@ -176,5 +229,28 @@ impl Tool for ShellCommandTool {
 
     async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
         shell_command(args, task_manager).await
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_ansi_codes() {
+        let input = "\x1b[2K[sudo] password for user: ";
+        let expected = "[sudo] password for user: ";
+        assert_eq!(strip_ansi_codes(input), expected);
+
+        let input2 = "\x1b[31mError:\x1b[0m critical failure";
+        let expected2 = "Error: critical failure";
+        assert_eq!(strip_ansi_codes(input2), expected2);
+    }
+
+    #[test]
+    fn test_detect_prompt() {
+        assert!(detect_prompt("[sudo] password for user: ").is_some());
+        assert!(detect_prompt("\x1b[2KPassword:").is_some());
+        assert!(detect_prompt("regular output").is_none());
+        assert!(detect_prompt("confirm execution? (y/n)").is_some());
     }
 }

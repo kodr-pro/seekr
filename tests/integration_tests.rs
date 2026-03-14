@@ -60,6 +60,42 @@ async fn test_shell_command_interactive() {
 }
 
 #[tokio::test]
+async fn test_shell_command_stderr_prompt() {
+    let (evt_tx, mut evt_rx) = mpsc::unbounded_channel();
+    let tm = TaskManager::new().with_sender(evt_tx);
+    
+    // Simulate sudo-like output on stderr with ANSI codes
+    let args = json!({
+        "command": "printf '\\x1b[2K[sudo] password for user: ' >&2; read val; echo \"RESULT:$val\""
+    });
+    
+    let mut tm_clone = tm.clone();
+    let handle = tokio::spawn(async move {
+        shell_command(&args, &mut tm_clone).await
+    });
+    
+    // 1. Skip Activity event
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), evt_rx.recv()).await.unwrap();
+
+    // 2. Wait for CliInputRequest
+    let event = tokio::time::timeout(std::time::Duration::from_secs(10), evt_rx.recv()).await.unwrap().unwrap();
+    let (prompt, input_tx) = match event {
+        AgentEvent::CliInputRequest { prompt, input_tx } => (prompt, input_tx),
+        e => panic!("Expected CliInputRequest, got {:?}", e),
+    };
+    
+    assert!(prompt.contains("[sudo] password"), "Prompt was: {}", prompt);
+    assert!(!prompt.contains("\x1b[2K"), "Prompt still contains ANSI codes: {}", prompt);
+    
+    // 3. Send response
+    input_tx.send("secret_pass".to_string()).ok();
+    
+    // 4. Check result
+    let (result, _) = handle.await.unwrap().expect("shell_command failed");
+    assert!(result.contains("RESULT:secret_pass"), "Result was: {}", result);
+}
+
+#[tokio::test]
 async fn test_session_save_load() {
     use seekr::session::Session;
     let mut session = Session::new("test-session".to_string(), "Test Title".to_string());
