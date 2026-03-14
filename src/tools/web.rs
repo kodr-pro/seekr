@@ -203,7 +203,13 @@ impl Tool for WebFetchTool {
             },
         }
     }
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let url = args["url"].as_str().ok_or_else(|| anyhow!("Missing url"))?;
         let selector = args["selector"].as_str();
         
@@ -213,7 +219,7 @@ impl Tool for WebFetchTool {
             short_url.push_str("...");
         }
         let summary = format!("web_fetch {}", short_url);
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting);
+        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         
         let result = web_fetch(url, selector).await?;
         Ok((result, summary))
@@ -241,10 +247,16 @@ impl Tool for WebSearchTool {
             },
         }
     }
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let query = args["query"].as_str().ok_or_else(|| anyhow!("Missing query"))?;
         let summary = format!("web_search \"{}\"", truncate(query, 20));
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting);
+        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = web_search(query).await?;
         Ok((result, summary))
     }

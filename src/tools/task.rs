@@ -55,6 +55,8 @@ impl TaskStatus {
     }
 }
 
+use std::sync::{Arc, Mutex};
+
 /// A tracked task
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -76,17 +78,46 @@ pub struct ActivityEntry {
     pub summary: String,
     pub status: ActivityStatus,
     pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub thread_id: Option<usize>,
+    pub total_threads: Option<usize>,
 }
 
 pub type InputSender = tokio::sync::mpsc::UnboundedSender<String>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskManager {
+struct TaskManagerState {
     pub tasks: Vec<Task>,
     pub activities: Vec<ActivityEntry>,
-    next_id: usize,
-    #[serde(skip)]
+    pub next_id: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct TaskManager {
+    state: Arc<Mutex<TaskManagerState>>,
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>>,
+}
+
+impl Serialize for TaskManager {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let state = self.state.lock().unwrap();
+        state.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for TaskManager {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let state = TaskManagerState::deserialize(deserializer)?;
+        Ok(Self {
+            state: Arc::new(Mutex::new(state)),
+            event_tx: None,
+        })
+    }
 }
 
 impl Default for TaskManager {
@@ -98,21 +129,42 @@ impl Default for TaskManager {
 impl TaskManager {
     pub fn new() -> Self {
         Self {
-            tasks: Vec::new(),
-            activities: Vec::new(),
-            next_id: 1,
+            state: Arc::new(Mutex::new(TaskManagerState {
+                tasks: Vec::new(),
+                activities: Vec::new(),
+                next_id: 1,
+            })),
             event_tx: None,
         }
     }
 
-    pub fn log_activity(&mut self, tool_name: &str, summary: &str, status: ActivityStatus) {
+    pub fn activities(&self) -> Vec<ActivityEntry> {
+        self.state.lock().unwrap().activities.clone()
+    }
+
+    pub fn tasks(&self) -> Vec<Task> {
+        self.state.lock().unwrap().tasks.clone()
+    }
+
+    pub fn log_activity(
+        &self, 
+        tool_name: &str, 
+        summary: &str, 
+        status: ActivityStatus,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) {
         let activity = ActivityEntry {
             tool_name: tool_name.to_string(),
             summary: summary.to_string(),
             status,
             timestamp: chrono::Utc::now(),
+            thread_id,
+            total_threads,
         };
-        self.activities.push(activity.clone());
+        if let Ok(mut state) = self.state.lock() {
+            state.activities.push(activity.clone());
+        }
         if let Some(ref tx) = self.event_tx {
             tx.send(crate::agent::AgentEvent::Activity(activity)).ok();
         }
@@ -124,9 +176,11 @@ impl TaskManager {
     }
 
     /// Create a new task and return its ID
-    pub fn create_task(&mut self, title: &str, status: Option<&str>) -> usize {
-        let id = self.next_id;
-        self.next_id += 1;
+    pub fn create_task(&self, title: &str, status: Option<&str>) -> usize {
+        let mut state = self.state.lock().unwrap();
+        let id = state.next_id;
+        state.next_id += 1;
+        
         let task = Task {
             id,
             title: title.to_string(),
@@ -134,7 +188,8 @@ impl TaskManager {
                 .map(|s| TaskStatus::from_str_loose(s))
                 .unwrap_or(TaskStatus::Pending),
         };
-        self.tasks.push(task.clone());
+        
+        state.tasks.push(task.clone());
         
         // Send event if we have a channel
         if let Some(ref tx) = self.event_tx {
@@ -145,13 +200,15 @@ impl TaskManager {
     }
 
     /// Update an existing task's status. Returns Ok with a message, or Err if not found.
-    pub fn update_task(&mut self, task_id: usize, status: &str) -> Result<String, String> {
-        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == task_id) {
+    pub fn update_task(&self, task_id: usize, status: &str) -> Result<String, String> {
+        let mut state = self.state.lock().map_err(|_| "Lock poisoned".to_string())?;
+        if let Some(task) = state.tasks.iter_mut().find(|t| t.id == task_id) {
             task.status = TaskStatus::from_str_loose(status);
+            let updated_task = task.clone();
             
             // Send event if we have a channel
             if let Some(ref tx) = self.event_tx {
-                tx.send(crate::agent::AgentEvent::TaskUpdated(task.clone())).ok();
+                tx.send(crate::agent::AgentEvent::TaskUpdated(updated_task)).ok();
             }
             
             Ok(format!("Task {} updated to {}", task_id, task.status))
@@ -195,12 +252,19 @@ impl Tool for CreateTaskTool {
         }
     }
 
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let title = args["title"].as_str().ok_or_else(|| anyhow!("Missing title"))?;
         let status = args["status"].as_str();
-        let id = task_manager.create_task(title, status);
-        let summary = format!("create_task #{}", id);
-        Ok((format!("Created task #{}: {}", id, title), summary))
+        let task_id = task_manager.create_task(title, status);
+        let summary = format!("Created task {}: {}", task_id, title);
+        task_manager.log_activity(self.name(), &summary, ActivityStatus::Success, thread_id, total_threads);
+        Ok((format!("Created task ID: {}", task_id), summary))
     }
 }
 
@@ -221,7 +285,7 @@ impl Tool for UpdateTaskTool {
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "task_id": {
+                        "id": {
                             "type": "integer",
                             "description": "Task ID (1-based index)"
                         },
@@ -230,20 +294,27 @@ impl Tool for UpdateTaskTool {
                             "description": "New status: pending, in_progress, completed, failed"
                         }
                     },
-                    "required": ["task_id", "status"]
+                    "required": ["id", "status"]
                 }),
             },
         }
     }
 
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
-        let task_id = args["task_id"].as_u64().ok_or_else(|| anyhow!("Missing task_id"))? as usize;
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
+        let id_raw = args["id"].as_u64().ok_or_else(|| anyhow!("Missing id"))? as usize;
         let status = args["status"].as_str().ok_or_else(|| anyhow!("Missing status"))?;
-        let summary = format!("update_task #{}", task_id);
-        match task_manager.update_task(task_id, status) {
-            Ok(msg) => Ok((msg, summary)),
-            Err(e) => Err(anyhow!(e)),
-        }
+        
+        task_manager.update_task(id_raw, status)
+            .map_err(|e| anyhow!(e))?;
+        let summary = format!("Updated task {} to {}", id_raw, status);
+        task_manager.log_activity(self.name(), &summary, ActivityStatus::Success, thread_id, total_threads);
+        Ok((format!("Successfully updated task to {}", status), summary))
     }
 }
 
@@ -259,16 +330,16 @@ mod tests {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         
         // Create a task manager with the event sender
-        let mut task_manager = TaskManager::new().with_sender(event_tx);
+        let task_manager = TaskManager::new().with_sender(event_tx);
         
         // Test 1: Create a task
         let task_id = task_manager.create_task("Test Task", Some("in_progress"));
         
         // Check that the task was created
-        assert_eq!(task_manager.tasks.len(), 1);
-        assert_eq!(task_manager.tasks[0].id, task_id);
-        assert_eq!(task_manager.tasks[0].title, "Test Task");
-        assert_eq!(task_manager.tasks[0].status, TaskStatus::InProgress);
+        assert_eq!(task_manager.tasks().len(), 1);
+        assert_eq!(task_manager.tasks()[0].id, task_id);
+        assert_eq!(task_manager.tasks()[0].title, "Test Task");
+        assert_eq!(task_manager.tasks()[0].status, TaskStatus::InProgress);
         
         // Check that an event was sent
         let event = event_rx.try_recv().unwrap();
@@ -286,7 +357,7 @@ mod tests {
         assert!(result.is_ok());
         
         // Check that the task was updated
-        assert_eq!(task_manager.tasks[0].status, TaskStatus::Completed);
+        assert_eq!(task_manager.tasks()[0].status, TaskStatus::Completed);
         
         // Check that an event was sent
         let event = event_rx.try_recv().unwrap();
@@ -302,10 +373,10 @@ mod tests {
         let task_id2 = task_manager.create_task("Another Task", None);
         
         // Check that the task was created
-        assert_eq!(task_manager.tasks.len(), 2);
-        assert_eq!(task_manager.tasks[1].id, task_id2);
-        assert_eq!(task_manager.tasks[1].title, "Another Task");
-        assert_eq!(task_manager.tasks[1].status, TaskStatus::Pending);
+        assert_eq!(task_manager.tasks().len(), 2);
+        assert_eq!(task_manager.tasks()[1].id, task_id2);
+        assert_eq!(task_manager.tasks()[1].title, "Another Task");
+        assert_eq!(task_manager.tasks()[1].status, TaskStatus::Pending);
         
         // Check that an event was sent
         let event = event_rx.try_recv().unwrap();

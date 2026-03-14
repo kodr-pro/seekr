@@ -36,7 +36,7 @@ pub struct AgentConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            max_iterations: 50,
+            max_iterations: 100,
             auto_approve_tools: false,
             working_directory: ".".to_string(),
         }

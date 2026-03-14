@@ -59,10 +59,17 @@ fn detect_prompt(line: &str) -> Option<String> {
 }
 
 /// Execute a shell command and return the combined output
-pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+pub async fn shell_command(
+    args: &serde_json::Value, 
+    task_manager: &TaskManager,
+    thread_id: Option<usize>,
+    total_threads: Option<usize>,
+) -> Result<(String, String)> {
     let command = args["command"].as_str().ok_or_else(|| anyhow!("Missing command"))?;
+    let background = args["background"].as_bool().unwrap_or(false);
+    
     let summary = format!("shell_command {}", truncate(command, 20));
-    task_manager.log_activity("shell_command", &summary, crate::tools::task::ActivityStatus::Starting);
+    task_manager.log_activity("shell_command", &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
 
     // Basic security check: prevent dangerous commands
     let dangerous_patterns = [
@@ -73,6 +80,21 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
         if command.contains(pattern) {
             return Err(anyhow!("Security Error: Command contains a forbidden pattern: '{}'", pattern));
         }
+    }
+
+    if background {
+        // Run in background: spawn and return immediately
+        let _child = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null()) // For now, we discard background output to keep it simple
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("Failed to spawn background command: {}", command))?;
+        
+        let res = format!("Command started in background: {}\nUse shell_command to check results if applicable.", command);
+        return Ok((res, format!("bg: {}", truncate(command, 15))));
     }
 
     // Use a timeout to prevent runaway processes
@@ -284,6 +306,10 @@ impl Tool for ShellCommandTool {
                         "command": {
                             "type": "string",
                             "description": "The shell command to execute"
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": "Whether to run the command in the background and return immediately. Use for long-running processes."
                         }
                     },
                     "required": ["command"]
@@ -292,8 +318,14 @@ impl Tool for ShellCommandTool {
         }
     }
 
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
-        shell_command(args, task_manager).await
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
+        shell_command(args, task_manager, thread_id, total_threads).await
     }
 }
 #[cfg(test)]

@@ -105,10 +105,16 @@ impl Tool for ReadFileTool {
             },
         }
     }
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let path = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
         let summary = format!("read_file {}", short_path(path));
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting);
+        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = read_file(path).await?;
         Ok((result, summary))
     }
@@ -136,11 +142,17 @@ impl Tool for WriteFileTool {
             },
         }
     }
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let path = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
         let content = args["content"].as_str().ok_or_else(|| anyhow!("Missing content"))?;
         let summary = format!("write_file {}", short_path(path));
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting);
+        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = write_file(path, content).await?;
         Ok((result, summary))
     }
@@ -169,12 +181,18 @@ impl Tool for EditFileTool {
             },
         }
     }
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let path = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
         let old = args["old_string"].as_str().ok_or_else(|| anyhow!("Missing old_string"))?;
         let new = args["new_string"].as_str().ok_or_else(|| anyhow!("Missing new_string"))?;
         let summary = format!("edit_file {}", short_path(path));
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting);
+        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = edit_file(path, old, new).await?;
         Ok((result, summary))
     }
@@ -201,10 +219,16 @@ impl Tool for ListDirectoryTool {
             },
         }
     }
-    async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
+    async fn execute(
+        &self, 
+        args: &serde_json::Value, 
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
+    ) -> Result<(String, String)> {
         let path = args["path"].as_str().unwrap_or(".");
         let summary = format!("list_directory {}", short_path(path));
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting);
+        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = list_directory(path).await?;
         Ok((result, summary))
     }
