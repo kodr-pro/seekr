@@ -15,6 +15,7 @@
 ## 🌟 Highlights
 
 - **Interruptible Agent Loop:** Real-time user steering. Interrupt the agent mid-thought to provide new context or directions.
+- **True Multi-Tool Parallelism:** Execute multiple independent tool calls (reading files, searching web, etc.) concurrently for 5-10x performance gains.
 - **Premium TUI Experience:** Beautiful, icon-based headers and a custom-built, wrapping-aware scrolling engine for a smooth conversation flow.
 - **Dynamic Skills System:** Load and execute custom tools via simple JSON definitions and shell scripts (Python, JS, Bash, etc.).
 
@@ -24,11 +25,12 @@
 - **Native DeepSeek Integration:** Low-latency access to DeepSeek's powerful reasoning and chat models.
 - **Extensible Skills System:** Refactored tool architecture allowing for global and repository-specific custom skills.
 - **Autonomous Tools:**
-  - **Shell:** Execute terminal commands with built-in sandboxing and timeouts.
+  - **Shell:** Execute terminal commands with built-in sandboxing, timeouts, and **background execution**.
   - **File Edit:** Sophisticated file manipulation using patches and diffs.
   - **Web:** Real-time search and scraping.
   - **Task Management:** Goal planning and progress tracking.
-- **Rich Activity Stream:** Real-time visibility into agent thoughts and tool executions with diff previews.
+- **Parallel Execution Engine:** Optimized batch processing of independent actions in a single turn.
+- **Rich Activity Stream:** Real-time visibility into agent thoughts and tool executions with diff previews and parallel task numbering.
 - **Session Persistence:** Automatic saving and loading of chat history and agent state.
 - **Seekr Doctor:** Built-in diagnostics command to verify system health and API connectivity.
 
@@ -37,9 +39,9 @@
 ## 🛠️ TODO (Missing Features)
 
 - [ ] **Syntax Highlighting:** Add full syntax highlighting for code blocks in the chat window.
-- [ ] **Parallel Tool Execution:** Execute multiple independent tools concurrently for significant performance gains.
 - [ ] **Visual Planner:** Display the agent's internal step-by-step plan as a checklist in the UI.
 - [ ] **Advanced Context Management:** Implement sliding-window and summary-based pruning for long-running conversations.
+- [ ] **Advanced Thread Management:** Add a dedicated UI view for managing long-running background processes.
 
 ---
 
@@ -151,5 +153,5 @@ Distributed under the Polyform Prosperity License 1.0.0. See `LICENSE` for more 
 ---
 
 <p align="center">
-  Built with care by the kodr team
+  Built with care by [kodr](https://kodr.pro)
 </p>
