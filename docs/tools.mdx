@@ -7,6 +7,7 @@ The power of **seekr** lies in its toolset. These tools allow the AI agent to in
 ### 🐚 Shell Tool
 The shell tool allows the agent to execute commands on your system.
 - **Capabilities:** Run scripts, install packages, check system logs, etc.
+- **Background Execution:** Long-running tasks like server starts or complex builds can be run in the background (`background: true`), allowing the agent to continue its loop.
 - **Safety:** Features a 5-minute execution timeout and a blacklist of dangerous commands to prevent system instability.
 
 ### 📂 File Edit Tool
@@ -23,6 +24,14 @@ Connects the agent to the internet.
 Used by the agent to manage its own internal state and goals.
 - **Capabilities:** Break down complex objectives into smaller, manageable tasks.
 - **Tracking:** Users can see the current active task and the history of completed tasks in the **Tasks** tab.
+
+---
+
+## ⚡ Concurrency & Parallelism
+**seekr** features a high-performance execution engine that allows for:
+1. **Multi-Tool Parallelism:** Independent tool calls (e.g., reading multiple files or fetching multiple URLs) are executed concurrently in separate threads.
+2. **Asynchronous Observation:** The agent can observe results as they come in, significantly reducing wait times for slow I/O operations.
+3. **Thread Tracking:** Every activity in the log is tagged with its thread ID (e.g., `1/3`, `2/3`), providing clear visibility into parallel execution.
 
 ---
 

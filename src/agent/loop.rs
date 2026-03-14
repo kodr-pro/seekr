@@ -283,6 +283,8 @@ impl AgentLoop {
                             summary: "Interrupted by user message".to_string(),
                             status: crate::tools::ActivityStatus::Success,
                             timestamp: chrono::Utc::now(),
+                            thread_id: None,
+                            total_threads: None,
                         })).ok();
                         
                         // Finalize what we have so far
@@ -345,38 +347,21 @@ impl AgentLoop {
                         }
                     }
 
-                    // Special case: task tools must be executed sequentially because they mutate state
-                    if tc.function.name.contains("task") {
-                        let (result, activity) = tools::execute_tool(
-                            &tc.function.name,
-                            &tc.function.arguments,
-                            &mut self.session.task_manager,
-                            Some(&self.config.agent.working_directory),
-                        )
-                        .await;
-
-                        self.event_tx.send(AgentEvent::Activity(activity)).ok();
-                        self.event_tx.send(AgentEvent::ToolCallResult {
-                            name: tc.function.name.clone(),
-                            result: result.clone(),
-                        }).ok();
-
-                        self.session.messages.push(ChatMessage::tool_result(&tc.id, &result));
-                    } else {
-                        // Other tools can be prepared for parallel execution
-                        // We need to clone what we need since we'll be moving into a future
-                        let name = tc.function.name.clone();
-                        let arguments = tc.function.arguments.clone();
-                        let id = tc.id.clone();
-                        let event_tx_clone = self.event_tx.clone();
-                        let wd = self.config.agent.working_directory.clone();
-                        
-                        tool_futures.push(async move {
-                            let mut dummy_tm = TaskManager::new().with_sender(event_tx_clone); 
-                            let (result, activity) = tools::execute_tool(&name, &arguments, &mut dummy_tm, Some(&wd)).await;
-                            (id, name, result, activity)
-                        });
-                    }
+                    // All tools can be prepared for parallel execution
+                    // We need to clone what we need since we'll be moving into a future
+                    let name = tc.function.name.clone();
+                    let arguments = tc.function.arguments.clone();
+                    let id = tc.id.clone();
+                    let tm_clone = self.session.task_manager.clone();
+                    let wd = self.config.agent.working_directory.clone();
+                    
+                    let thread_id = tool_futures.len() + 1;
+                    let total_threads = tool_calls.len();
+                    
+                    tool_futures.push(async move {
+                        let (result, activity) = tools::execute_tool(&name, &arguments, &tm_clone, Some(&wd), Some(thread_id), Some(total_threads)).await;
+                        (id, name, result, activity)
+                    });
                 }
 
                 // Execute independent tools in parallel

@@ -6,8 +6,8 @@ The "brain" of **seekr** is a sophisticated implementation of the ReAct (Reasoni
 
 1. **Input:** The agent receives a task and its current system prompt.
 2. **Reasoning:** It analyzes the task, previous actions, and observations.
-3. **Action:** It selects a tool and provides the necessary arguments.
-4. **Observation:** The result of the tool execution is fed back into the agent's context.
+3. **Action:** It selects one or more tools and provides the necessary arguments. **seekr** leverages multi-tool parallelism to execute independent actions concurrently.
+4. **Observation:** The results of the tool executions are fed back into the agent's context.
 
 ## System Prompts
 **seekr** uses carefully crafted system prompts that define its capabilities, limitations, and "personality". These prompts are designed to minimize hallucinations and ensure the agent stays on task.

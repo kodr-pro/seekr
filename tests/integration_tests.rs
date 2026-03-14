@@ -6,12 +6,12 @@ use seekr::agent::AgentEvent;
 
 #[tokio::test]
 async fn test_shell_command_simple() {
-    let mut tm = TaskManager::new();
+    let tm = TaskManager::new();
     let args = json!({
         "command": "echo 'hello world'"
     });
     
-    let (result, summary) = shell_command(&args, &mut tm).await.expect("shell_command failed");
+    let (result, summary) = shell_command(&args, &tm, Some(1), Some(1)).await.expect("shell_command failed");
     assert!(result.to_lowercase().contains("hello world"), "Result was: {}", result);
     assert!(summary.contains("echo 'hello world'"));
 }
@@ -26,9 +26,9 @@ async fn test_shell_command_interactive() {
         "command": "echo 'Password:'; read val; echo \"RESULT:$val\""
     });
     
-    let mut tm_clone = tm.clone();
+    let tm_clone = tm.clone();
     let handle = tokio::spawn(async move {
-        shell_command(&args, &mut tm_clone).await
+        shell_command(&args, &tm_clone, Some(1), Some(1)).await
     });
     
     // 1. Skip the Activity event
@@ -69,9 +69,9 @@ async fn test_shell_command_stderr_prompt() {
         "command": "printf '\\x1b[2K[sudo] password for user: ' >&2; read val; echo \"RESULT:$val\""
     });
     
-    let mut tm_clone = tm.clone();
+    let tm_clone = tm.clone();
     let handle = tokio::spawn(async move {
-        shell_command(&args, &mut tm_clone).await
+        shell_command(&args, &tm_clone, Some(1), Some(1)).await
     });
     
     // 1. Skip Activity event
@@ -114,11 +114,11 @@ async fn test_session_save_load() {
 
 #[tokio::test]
 async fn test_task_manager_activities() {
-    let mut tm = TaskManager::new();
-    tm.log_activity("test_tool", "test summary", seekr::tools::task::ActivityStatus::Success);
-    assert_eq!(tm.activities.len(), 1);
-    assert_eq!(tm.activities[0].tool_name, "test_tool");
-    assert_eq!(tm.activities[0].summary, "test summary");
+    let tm = TaskManager::new();
+    tm.log_activity("test_tool", "test summary", seekr::tools::task::ActivityStatus::Success, None, None);
+    assert_eq!(tm.activities().len(), 1);
+    assert_eq!(tm.activities()[0].tool_name, "test_tool");
+    assert_eq!(tm.activities()[0].summary, "test summary");
 }
 
 #[tokio::test]
@@ -134,10 +134,10 @@ async fn test_skill_registry() {
 #[tokio::test]
 async fn test_execute_tool_mock() {
     use seekr::tools::execute_tool;
-    let mut tm = TaskManager::new();
+    let tm = TaskManager::new();
     let args = json!({ "command": "echo 'execute_tool test'" }).to_string();
     
-    let (result, activity) = execute_tool("shell_command", &args, &mut tm, None).await;
+    let (result, activity) = execute_tool("shell_command", &args, &tm, None, Some(1), Some(1)).await;
     // The shell command might output with newline or exit code, so check for the content
     // It might return "Command completed with exit code: 0" if output is empty
     // or it might contain the actual output
@@ -150,6 +150,44 @@ async fn test_execute_tool_mock() {
     }
     assert_eq!(activity.tool_name, "shell_command");
     assert!(activity.summary.contains("shell_command"));
+}
+
+#[tokio::test]
+async fn test_parallel_file_reads() {
+    use seekr::tools::execute_tool;
+    let tm = TaskManager::new();
+    
+    // Create two files
+    let f1 = "/tmp/seekr_test_1.txt";
+    let f2 = "/tmp/seekr_test_2.txt";
+    std::fs::write(f1, "file1 content").unwrap();
+    std::fs::write(f2, "file2 content").unwrap();
+    
+    let args1 = json!({ "path": f1 }).to_string();
+    let args2 = json!({ "path": f2 }).to_string();
+    
+    let tm1 = tm.clone();
+    let tm2 = tm.clone();
+    
+    let h1 = tokio::spawn(async move {
+        execute_tool("read_file", &args1, &tm1, None, Some(1), Some(2)).await
+    });
+    let h2 = tokio::spawn(async move {
+        execute_tool("read_file", &args2, &tm2, None, Some(2), Some(2)).await
+    });
+    
+    let (res1, _) = h1.await.unwrap();
+    let (res2, _) = h2.await.unwrap();
+    
+    assert_eq!(res1, "file1 content");
+    assert_eq!(res2, "file2 content");
+    
+    // Check activities - both should be logged in the same TaskManager
+    // We expect 4: (2 for read_file starting, 2 for read_file success)
+    assert_eq!(tm.activities().len(), 4);
+    
+    std::fs::remove_file(f1).ok();
+    std::fs::remove_file(f2).ok();
 }
 
 #[tokio::test]

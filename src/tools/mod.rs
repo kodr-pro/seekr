@@ -38,7 +38,9 @@ pub trait Tool: Send + Sync {
     async fn execute(
         &self, 
         args: &serde_json::Value, 
-        task_manager: &mut TaskManager
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
     ) -> Result<(String, String)>; // (ResultString, Summary)
 }
 
@@ -190,8 +192,13 @@ impl Tool for ScriptTool {
     async fn execute(
         &self, 
         args: &serde_json::Value, 
-        _task_manager: &mut TaskManager
+        task_manager: &TaskManager,
+        thread_id: Option<usize>,
+        total_threads: Option<usize>,
     ) -> Result<(String, String)> {
+        let summary = format!("script_tool {}", self.name);
+        task_manager.log_activity(&self.name, &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
+
         // Replace placeholders in command with args
         let mut final_command = self.command.clone();
         if let Some(obj) = args.as_object() {
@@ -253,44 +260,59 @@ impl Skill for CoreSkill {
 /// Legacy wrapper for the agent loop to use the new registry system
 pub async fn execute_tool(
     name: &str,
-    arguments: &str,
-    task_manager: &mut TaskManager,
+    args_json: &str,
+    task_manager: &TaskManager,
     working_dir: Option<&str>,
+    thread_id: Option<usize>,
+    total_threads: Option<usize>,
 ) -> (String, ActivityEntry) {
     let registry = SkillRegistry::new(working_dir);
-    let args: serde_json::Value = serde_json::from_str(arguments).unwrap_or(serde_json::json!({}));
+    let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
 
-    if let Some(tool) = registry.get_tool(name) {
-        match tool.execute(&args, task_manager).await {
-            Ok((result, summary)) => (
-                result,
-                ActivityEntry {
-                    tool_name: name.to_string(),
-                    summary,
-                    status: ActivityStatus::Success,
-                    timestamp: chrono::Utc::now(),
-                },
-            ),
-            Err(e) => (
-                format!("Error: {}", e),
-                ActivityEntry {
-                    tool_name: name.to_string(),
-                    summary: format!("{} failed", name),
-                    status: ActivityStatus::Failure,
-                    timestamp: chrono::Utc::now(),
-                },
-            ),
-        }
+    let tool = if let Some(t) = registry.get_tool(name) {
+        t
     } else {
-        (
-            format!("Unknown tool: {}", name),
-            ActivityEntry {
+        task_manager.log_activity(
+            name,
+            &format!("Error: Unknown tool {}", name),
+            ActivityStatus::Failure,
+            thread_id,
+            total_threads,
+        );
+        return (format!("Error: Unknown tool '{}'", name), ActivityEntry {
+            tool_name: name.to_string(),
+            summary: format!("Unknown tool: {}", name),
+            status: ActivityStatus::Failure,
+            timestamp: chrono::Utc::now(),
+            thread_id,
+            total_threads,
+        });
+    };
+
+    match tool.execute(&args, task_manager, thread_id, total_threads).await {
+        Ok((result, summary)) => {
+            task_manager.log_activity(name, &summary, ActivityStatus::Success, thread_id, total_threads);
+            (result, ActivityEntry {
                 tool_name: name.to_string(),
-                summary: format!("unknown: {}", name),
+                summary,
+                status: ActivityStatus::Success,
+                timestamp: chrono::Utc::now(),
+                thread_id,
+                total_threads,
+            })
+        }
+        Err(e) => {
+            let error_msg = format!("Error: {}", e);
+            task_manager.log_activity(name, &error_msg, ActivityStatus::Failure, thread_id, total_threads);
+            (error_msg, ActivityEntry {
+                tool_name: name.to_string(),
+                summary: format!("Failed: {}", name),
                 status: ActivityStatus::Failure,
                 timestamp: chrono::Utc::now(),
-            },
-        )
+                thread_id,
+                total_threads,
+            })
+        }
     }
 }
 

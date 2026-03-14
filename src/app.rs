@@ -266,7 +266,7 @@ impl App {
                         _ => {}
                     }
                 }
-                self.tasks = session.task_manager.tasks.clone();
+                self.tasks = session.task_manager.tasks();
             }
             Err(e) => {
                 self.chat_entries.push(ChatEntry::Error(format!("Failed to load session: {}", e)));
@@ -309,7 +309,7 @@ impl App {
     pub fn poll_agent_events(&mut self) {
         // Drain events into a temporary vec to avoid borrow conflicts
         let events: Vec<AgentEvent> = {
-            let rx = match self.agent_event_rx.as_mut() {
+            let rx: &mut mpsc::UnboundedReceiver<AgentEvent> = match self.agent_event_rx.as_mut() {
                 Some(rx) => rx,
                 None => return,
             };

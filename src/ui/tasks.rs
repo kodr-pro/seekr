@@ -38,15 +38,25 @@ pub fn render_tasks(
         .split(area);
 
     // Task list
-    render_task_list(frame, chunks[0], tasks, border_style);
+    render_task_list(frame, chunks[0], tasks, activities, border_style);
 
     // Activity log
     render_activity_log(frame, chunks[1], activities, border_style);
 }
 
-fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], border_style: Style) {
+fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], activities: &[ActivityEntry], border_style: Style) {
+    let active_threads = activities.iter()
+        .filter(|a| matches!(a.status, crate::tools::task::ActivityStatus::Starting))
+        .count();
+    
+    let title = if active_threads > 0 {
+        format!(" Tasks [Concurrency: {}] ", active_threads)
+    } else {
+        " Tasks ".to_string()
+    };
+
     let block = Block::default()
-        .title(" Tasks ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(border_style);
 
@@ -115,13 +125,20 @@ fn render_activity_log(frame: &mut Frame, area: Rect, activities: &[ActivityEntr
             
             let time_str = activity.timestamp.format("%H:%M:%S").to_string();
             
-            lines.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(format!("{} ", icon), Style::default().fg(color)),
                 Span::styled(format!("[{}] ", time_str), Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
-                Span::styled(activity.tool_name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-                Span::styled(": ", Style::default().fg(Color::DarkGray)),
-                Span::styled(activity.summary.as_str(), Style::default().fg(Color::Gray)),
-            ]));
+            ];
+
+            if let (Some(tid), Some(tot)) = (activity.thread_id, activity.total_threads) {
+                spans.push(Span::styled(format!("{}/{} ", tid, tot), Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)));
+            }
+
+            spans.push(Span::styled(activity.tool_name.as_str(), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(": ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(activity.summary.as_str(), Style::default().fg(Color::Gray)));
+
+            lines.push(Line::from(spans));
         }
     }
 

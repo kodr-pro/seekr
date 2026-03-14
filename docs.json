@@ -1,7 +1,10 @@
 {
+  "$schema": "https://docs.page/schema.json",
   "name": "SEEKR",
-  "logo": "/logo.png",
-  "logoDark": "/logo.png",
+  "logo": {
+    "light": "/logo.png",
+    "dark": "/logo.png"
+  },
   "favicon": "/favicon.ico",
   "sidebar": [
     {
