@@ -5,12 +5,58 @@
 
 use anyhow::{Context, Result, anyhow};
 use tokio::process::Command;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use std::process::Stdio;
 use async_trait::async_trait;
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{Tool, truncate, task::TaskManager};
 use serde_json::json;
+
+/// Strips ANSI escape codes from a string using a regex-like approach for robustness
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut iter = s.chars().peekable();
+    
+    while let Some(c) = iter.next() {
+        if c == '\x1b' {
+            if let Some('[') = iter.peek() {
+                iter.next(); // consume '['
+                // Consume until a terminator (usually A-Z, a-z, or @)
+                while let Some(&next) = iter.peek() {
+                    iter.next();
+                    if (next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') || next == '@' {
+                        break;
+                    }
+                }
+                continue;
+            } else if let Some(']') = iter.peek() {
+                // OSC (Operating System Command) sequence
+                iter.next(); // consume ']'
+                while let Some(&next) = iter.peek() {
+                    iter.next();
+                    if next == '\x07' || next == '\x5c' { // BEL or ST
+                        break;
+                    }
+                }
+                continue;
+            }
+        }
+        result.push(c);
+    }
+    result
+}
+
+/// Checks if a line contains any interactive prompt patterns
+fn detect_prompt(line: &str) -> Option<String> {
+    let stripped = strip_ansi_codes(line);
+    let prompt_patterns = ["[sudo] password", "(y/n)", "[Y/n]", "Password:", "confirm", "Enter something:"];
+    for pattern in prompt_patterns {
+        if stripped.to_lowercase().contains(&pattern.to_lowercase()) {
+            return Some(stripped);
+        }
+    }
+    None
+}
 
 /// Execute a shell command and return the combined output
 pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
@@ -45,40 +91,68 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
     let stderr = child.stderr.take().context("Failed to open stderr")?;
     let mut stdin = child.stdin.take().context("Failed to open stdin")?;
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-    let mut reader = BufReader::new(stdout);
-    let mut stderr_reader = BufReader::new(stderr);
+    // Accumulate recent output lines (last 5) for context
+    let context_arc = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+    let context_clone_out = context_arc.clone();
+    let context_clone_err = context_arc.clone();
+
+    let tx_out = prompt_tx.clone();
+    let tx_err = prompt_tx.clone();
+
+    let mut reader = tokio::io::BufReader::new(stdout);
+    let mut stderr_reader = tokio::io::BufReader::new(stderr);
 
     let result_arc = std::sync::Arc::new(tokio::sync::Mutex::new(String::new()));
     let result_clone = result_arc.clone();
     let result_clone_err = result_arc.clone();
 
     // Spawn stdout reader
-    tokio::spawn(async move {
+    let stdout_handle = tokio::spawn(async move {
         let mut line = String::new();
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 1024];
         loop {
-            let mut byte = [0u8; 1];
-            match reader.read_exact(&mut byte).await {
-                Ok(_) => {
-                    let c = byte[0] as char;
-                    line.push(c);
-                    {
-                        let mut res = result_clone.lock().await;
-                        res.push(c);
-                    }
-                    
-                    // Check for common prompt patterns
-                    let prompt_patterns = ["[sudo] password", "(y/n)", "[Y/n]", "Password:", "confirm", "Enter something:"];
-                    for pattern in prompt_patterns {
-                        if line.to_lowercase().contains(&pattern.to_lowercase()) {
-                            tx.send(line.clone()).ok();
-                            line.clear();
+            match reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    buffer.extend_from_slice(&chunk[..n]);
+                    let (valid_up_to, more_needed) = match std::str::from_utf8(&buffer) {
+                        Ok(s) => (s.len(), false),
+                        Err(e) => (e.valid_up_to(), e.error_len().is_none()),
+                    };
+                    if valid_up_to > 0 {
+                        let s = String::from_utf8_lossy(&buffer[..valid_up_to]).into_owned();
+                        for c in s.chars() {
+                            line.push(c);
+                            {
+                                let mut res = result_clone.lock().await;
+                                res.push(c);
+                            }
+                            if c == '\n' {
+                                let trimmed = line.trim().to_string();
+                                if !trimmed.is_empty() {
+                                    let mut ctx = context_clone_out.lock().await;
+                                    ctx.push(trimmed.clone());
+                                    if ctx.len() > 5 { ctx.remove(0); }
+                                }
+                                if let Some(prompt) = detect_prompt(&line) {
+                                    tx_out.send(prompt).ok();
+                                }
+                                line.clear();
+                            }
                         }
+                        // No newline yet but prompt detected (e.g. sudo password prompt)
+                        if !line.is_empty() {
+                            if let Some(prompt) = detect_prompt(&line) {
+                                tx_out.send(prompt).ok();
+                            }
+                        }
+                        buffer.drain(..valid_up_to);
                     }
-                    
-                    if c == '\n' {
-                        line.clear();
+                    if !more_needed && !buffer.is_empty() {
+                        buffer.remove(0);
                     }
                 }
                 Err(_) => break,
@@ -87,33 +161,76 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
     });
 
     // Spawn stderr reader
-    tokio::spawn(async move {
+    let stderr_handle = tokio::spawn(async move {
         let mut line = String::new();
-        while let Ok(n) = stderr_reader.read_line(&mut line).await {
-            if n == 0 { break; }
-            let mut res = result_clone_err.lock().await;
-            res.push_str("[stderr] ");
-            res.push_str(&line);
-            line.clear();
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stderr_reader.read(&mut chunk).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    buffer.extend_from_slice(&chunk[..n]);
+                    let (valid_up_to, more_needed) = match std::str::from_utf8(&buffer) {
+                        Ok(s) => (s.len(), false),
+                        Err(e) => (e.valid_up_to(), e.error_len().is_none()),
+                    };
+                    if valid_up_to > 0 {
+                        let s = String::from_utf8_lossy(&buffer[..valid_up_to]).into_owned();
+                        for c in s.chars() {
+                            line.push(c);
+                            {
+                                let mut res = result_clone_err.lock().await;
+                                if line.len() == 1 { res.push_str("[stderr] "); }
+                                res.push(c);
+                            }
+                            if c == '\n' {
+                                let trimmed = line.trim().to_string();
+                                if !trimmed.is_empty() {
+                                    let mut ctx = context_clone_err.lock().await;
+                                    ctx.push(trimmed.clone());
+                                    if ctx.len() > 5 { ctx.remove(0); }
+                                }
+                                if let Some(prompt) = detect_prompt(&line) {
+                                    tx_err.send(prompt).ok();
+                                }
+                                line.clear();
+                            }
+                        }
+                        // No newline yet — check for inline prompt (e.g. password:)
+                        if !line.is_empty() {
+                            if let Some(prompt) = detect_prompt(&line) {
+                                tx_err.send(prompt).ok();
+                            }
+                        }
+                        buffer.drain(..valid_up_to);
+                    }
+                    if !more_needed && !buffer.is_empty() {
+                        buffer.remove(0);
+                    }
+                }
+                Err(_) => break,
+            }
         }
     });
 
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    task_manager.set_input_tx(input_tx.clone());
 
     loop {
         tokio::select! {
-            Some(prompt) = rx.recv() => {
+            Some(_prompt) = prompt_rx.recv() => {
                 if let Some(ref event_tx) = task_manager.event_tx {
-                    event_tx.send(crate::agent::AgentEvent::CliInputRequest { 
-                        prompt, 
-                        input_tx: input_tx.clone() 
+                    let ctx_lines = context_arc.lock().await.join("\n");
+                    event_tx.send(crate::agent::AgentEvent::ShellInputNeeded {
+                        context: ctx_lines,
+                        input_tx: input_tx.clone(),
                     }).ok();
                 }
             }
             Some(input) = input_rx.recv() => {
                 let _ = stdin.write_all(input.as_bytes()).await;
-                let _ = stdin.write_all(b"\n").await;
+                if !input.ends_with('\n') {
+                    let _ = stdin.write_all(b"\n").await;
+                }
                 let _ = stdin.flush().await;
             }
             status = tokio::time::timeout(timeout_duration, child.wait()) => {
@@ -124,16 +241,17 @@ pub async fn shell_command(args: &serde_json::Value, task_manager: &mut TaskMana
                         return Err(anyhow!("Command timed out after {} seconds", timeout_duration.as_secs()));
                     }
                 };
+
+                // Wait for readers to finish draining
+                let _ = stdout_handle.await;
+                let _ = stderr_handle.await;
+
                 let mut final_res = result_arc.lock().await.clone();
                 if final_res.is_empty() {
                     final_res = format!("Command completed with exit code: {}", status.code().unwrap_or(-1));
                 } else {
-                    final_res.push_str(&format!(
-                        "\n[exit code: {}]",
-                        status.code().unwrap_or(-1)
-                    ));
+                    final_res.push_str(&format!("\n[exit code: {}]", status.code().unwrap_or(-1)));
                 }
-                
                 if final_res.len() > 16_000 {
                     final_res.truncate(16_000);
                     final_res.push_str("\n... [output truncated]");
@@ -176,5 +294,28 @@ impl Tool for ShellCommandTool {
 
     async fn execute(&self, args: &serde_json::Value, task_manager: &mut TaskManager) -> Result<(String, String)> {
         shell_command(args, task_manager).await
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_ansi_codes() {
+        let input = "\x1b[2K[sudo] password for user: ";
+        let expected = "[sudo] password for user: ";
+        assert_eq!(strip_ansi_codes(input), expected);
+
+        let input2 = "\x1b[31mError:\x1b[0m critical failure";
+        let expected2 = "Error: critical failure";
+        assert_eq!(strip_ansi_codes(input2), expected2);
+    }
+
+    #[test]
+    fn test_detect_prompt() {
+        assert!(detect_prompt("[sudo] password for user: ").is_some());
+        assert!(detect_prompt("\x1b[2KPassword:").is_some());
+        assert!(detect_prompt("regular output").is_none());
+        assert!(detect_prompt("confirm execution? (y/n)").is_some());
     }
 }

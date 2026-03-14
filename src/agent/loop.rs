@@ -41,8 +41,8 @@ pub enum AgentEvent {
     Error(String),
     /// Request tool approval from the user
     ToolApprovalRequest { call_index: usize, name: String, arguments: String },
-    /// Request CLI input (e.g. for sudo password, [y/n] prompt)
-    CliInputRequest { prompt: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
+    /// Request shell stdin input (e.g. sudo password, [y/n] prompt)
+    ShellInputNeeded { context: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
     /// A new task was created
     TaskCreated(crate::tools::task::Task),
     /// An existing task was updated
@@ -60,8 +60,8 @@ pub enum AgentCommand {
     ToolDenied { call_index: usize },
     /// User chose "always approve" for the session
     ToolAlwaysApprove,
-    /// User provided CLI input
-    CliInputResponse(String),
+    /// User provided shell stdin input
+    ShellInputResponse(String),
     /// User chose to continue after max iterations
     Continue,
     /// User chose to answer now (stop iterating) after max iterations
