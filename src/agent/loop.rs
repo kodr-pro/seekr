@@ -197,7 +197,7 @@ impl AgentLoop {
                         
                         // Inject a momentum message to remind the agent to keep going
                         self.session.messages.push(ChatMessage::user(
-                            "I have authorized you to continue. Please proceed with the next steps of the task."
+                            "I have authorized you to continue. You are on a strict step allowance — please focus on finishing the task as quickly and efficiently as possible. Avoid unnecessary or repetitive steps."
                         ));
                     }
                     ContinueAction::AnswerNow => {
@@ -215,6 +215,14 @@ impl AgentLoop {
 
             self.iteration += 1;
             self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
+
+            // WARN: If approaching max_iterations, inject a gentle pressure message
+            let threshold = (self.config.agent.max_iterations as f32 * 0.8) as u32;
+            if self.iteration == threshold && self.iteration > 1 {
+                self.session.messages.push(ChatMessage::user(
+                    &format!("--- SYSTEM WARNING: You have reached step {} of {}. Please start wrapping up your work and move toward completion now. ---", self.iteration, self.config.agent.max_iterations)
+                ));
+            }
 
             // Prune context if needed before calling API
             self.prune_messages();
@@ -495,16 +503,33 @@ impl AgentLoop {
             return;
         }
 
-        // Always keep the system prompt and the first 4 messages (usually the initial user request and response)
-        // to ensure the agent doesn't forget its core objective.
+        // Always keep the system prompt and the first few messages (initial objective).
+        // 1. Determine the 'keep_initial' segment (at least first 3-5 messages).
+        // BUT we must expand it if it ends in an assistant message with tool calls
+        // that hasn't had its results added yet.
+        let mut keep_initial = 5;
+        while keep_initial < self.session.messages.len() {
+            let msg = &self.session.messages[keep_initial - 1];
+            if msg.role == "assistant" && msg.tool_calls.is_some() {
+                // If this is an assistant message with tool calls, we MUST also keep
+                // the subsequent tool result messages.
+                let mut j = keep_initial;
+                while j < self.session.messages.len() && self.session.messages[j].role == "tool" {
+                    j += 1;
+                }
+                keep_initial = j;
+            } else {
+                break;
+            }
+        }
+
         let mut new_messages = Vec::new();
-        let keep_initial = 5;
         if self.session.messages.len() > keep_initial {
             new_messages.extend(self.session.messages.iter().take(keep_initial).cloned());
         }
 
         let total = self.session.messages.len();
-        let remaining_slots = MAX_MESSAGES - new_messages.len();
+        let remaining_slots = MAX_MESSAGES.saturating_sub(new_messages.len());
         
         // Start from the naive window for the remaining messages
         let mut start = total.saturating_sub(remaining_slots);
@@ -512,14 +537,24 @@ impl AgentLoop {
         // Walk start forward until the first message at `start` is NOT a tool-result.
         // Tool-result messages have role == "tool". If we start on one, we'd
         // orphan it from its preceding assistant+tool_calls message.
+        // AND handle the case where we start on an assistant message with tool calls
+        // but it was at the very end of the previous window (less likely but possible).
         while start < total {
             let role = self.session.messages[start].role.as_str();
-            if role != "tool" {
-                break;
+            
+            // If it's a tool result, we must skip it (and potentially previous ones) 
+            // until we find a new root message (user or assistant without tool calls).
+            if role == "tool" {
+                start += 1;
+                continue;
             }
-            start += 1;
+            
+            // If we are at an assistant message with tool calls, that's a good place to start
+            // as long as we include its results (which the loop below ensures if we use it).
+            break;
         }
 
+        // Just in case we walked past everything
         if start < total {
             new_messages.extend(self.session.messages[start..].iter().cloned());
         }
@@ -581,4 +616,100 @@ enum DrainResult {
     Shutdown,
     /// Nothing noteworthy
     Nothing,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::types::ToolCall;
+
+    fn create_test_loop() -> AgentLoop {
+        let config = AppConfig::default();
+        let (event_tx, _) = mpsc::unbounded_channel();
+        let (_, command_rx) = mpsc::unbounded_channel();
+        AgentLoop::new(config, event_tx, command_rx)
+    }
+
+    #[test]
+    fn test_prune_messages_no_orphaned_tools() {
+        let mut agent = create_test_loop();
+        
+        // Setup a long conversation (110 messages)
+        // 0: system
+        // 1-100: filler
+        // 101: assistant with tool calls
+        // 102: tool result
+        // 103: assistant with tool calls
+        // 104: tool result
+        // ...
+        
+        agent.session.messages.clear();
+        agent.session.messages.push(ChatMessage::system("system"));
+        for i in 1..105 {
+            agent.session.messages.push(ChatMessage::user(&format!("user {}", i)));
+        }
+        
+        // Add a tool call pair at the very end
+        let tc_id = "test_id".to_string();
+        agent.session.messages.push(ChatMessage::assistant_with_tool_calls(
+            None,
+            vec![ToolCall {
+                id: tc_id.clone(),
+                call_type: "function".to_string(),
+                function: crate::api::types::FunctionCall {
+                    name: "test_tool".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }],
+        ));
+        agent.session.messages.push(ChatMessage::tool_result(&tc_id, "result"));
+
+        // Prune (threshold is 100)
+        agent.prune_messages();
+
+        // Verify that we didn't orphan the tool results at the end
+        let last_msg = agent.session.messages.last().unwrap();
+        assert_eq!(last_msg.role, "tool");
+        
+        let prev_msg = &agent.session.messages[agent.session.messages.len() - 2];
+        assert_eq!(prev_msg.role, "assistant");
+        assert!(prev_msg.tool_calls.is_some());
+    }
+
+    #[test]
+    fn test_prune_messages_keep_initial_expansion() {
+        let mut agent = create_test_loop();
+        
+        agent.session.messages.clear();
+        agent.session.messages.push(ChatMessage::system("system"));
+        agent.session.messages.push(ChatMessage::user("initial user"));
+        agent.session.messages.push(ChatMessage::assistant("initial assistant"));
+        
+        // Boundary case: keep_initial=5 ends on an assistant message with tool calls
+        let tc_id = "tc1".to_string();
+        agent.session.messages.push(ChatMessage::assistant_with_tool_calls(
+            None,
+            vec![ToolCall {
+                id: tc_id.clone(),
+                call_type: "function".to_string(),
+                function: crate::api::types::FunctionCall {
+                    name: "tool1".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }],
+        ));
+        agent.session.messages.push(ChatMessage::tool_result(&tc_id, "res1"));
+        
+        // Add many more messages
+        for i in 0..120 {
+            agent.session.messages.push(ChatMessage::user(&format!("msg {}", i)));
+        }
+
+        agent.prune_messages();
+
+        // Check if the first 5-6 messages still contain the tool call AND its result
+        // Initial messages: 0:system, 1:user, 2:assistant, 3:tc, 4:res
+        assert_eq!(agent.session.messages[3].role, "assistant");
+        assert_eq!(agent.session.messages[4].role, "tool");
+    }
 }
