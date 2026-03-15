@@ -39,9 +39,10 @@
 ## 🛠️ TODO (Missing Features)
 
 - [ ] **Syntax Highlighting:** Add full syntax highlighting for code blocks in the chat window.
-- [ ] **Visual Planner:** Display the agent's internal step-by-step plan as a checklist in the UI.
-- [ ] **Advanced Context Management:** Implement sliding-window and summary-based pruning for long-running conversations.
+- [ ] **Focus Actions:** Add context-aware option menus and interactive actions based on the current panel focus (Chat vs Tasks).
 - [ ] **Advanced Thread Management:** Add a dedicated UI view for managing long-running background processes.
+- [x] **Advanced Context Management:** Sliding-window and basic pruning for long-running conversations.
+- [x] **Parallel Execution Engine:** Optimized batch processing of independent actions.
 
 ---
 
@@ -92,6 +93,20 @@ On your first run, **seekr** will guide you through a setup wizard to configure 
 | `seekr` | Launch the main TUI application. |
 | `seekr doctor` | Run system diagnostics and health checks. |
 | `seekr --resume <session_id>` | Resume a previous session by its ID. |
+
+---
+
+## ⌨️ TUI Shortcuts
+
+| Key | Action |
+| :--- | :--- |
+| `Tab` | Switch focus between Chat and Tasks panel. |
+| `Ctrl+S` | Open **Session List** (resume/delete previous chats). |
+| `Ctrl+R` | Toggle visibility of agent reasoning tokens. |
+| `Ctrl+L` | Clear the current chat history. |
+| `F1` | Show the help / shortcut guide. |
+| `PageUp/Dn`| Scroll chat or tasks quickly. |
+| `Esc`/`Ctrl+C` | Quit the application. |
 
 ---
 

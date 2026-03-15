@@ -216,9 +216,11 @@ impl App {
             let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
             let agent_res = if let Some(ref sid) = self.session_id {
-                crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx)
+                let registry = self.manager.as_ref().unwrap().tool_registry();
+                crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, registry)
             } else {
-                Ok(crate::agent::loop_mod::AgentLoop::new(config.clone(), evt_tx, cmd_rx))
+                let registry = self.manager.as_ref().unwrap().tool_registry();
+                Ok(crate::agent::loop_mod::AgentLoop::new(config.clone(), evt_tx, cmd_rx, registry))
             };
 
             match agent_res {

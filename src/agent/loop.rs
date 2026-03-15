@@ -15,6 +15,8 @@ use crate::tools::task::TaskManager;
 use crate::session::Session;
 use anyhow::Result;
 use super::system_prompt::build_system_prompt;
+use crate::tools::SkillRegistry;
+use std::sync::Arc;
 
 /// Events sent from the agent loop to the UI
 #[derive(Debug, Clone)]
@@ -86,6 +88,7 @@ impl AgentLoop {
         config: AppConfig,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
+        registry: Arc<SkillRegistry>,
     ) -> Self {
         let client = DeepSeekClient::new(&config);
         let system_prompt = build_system_prompt(&config.agent.working_directory);
@@ -95,6 +98,7 @@ impl AgentLoop {
         let session_id = uuid::Uuid::new_v4().to_string();
         let mut session = Session::new(session_id, "New Chat".to_string());
         session.task_manager = session.task_manager.with_sender(event_tx.clone());
+        session.tool_registry = Some(registry);
         session.messages.push(ChatMessage::system(&system_prompt));
 
         Self {
@@ -113,10 +117,12 @@ impl AgentLoop {
         session_id: &str,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
+        registry: Arc<SkillRegistry>,
     ) -> Result<Self> {
         let client = DeepSeekClient::new(&config);
         let mut session = Session::load(session_id)?;
         session.task_manager = session.task_manager.with_sender(event_tx.clone());
+        session.tool_registry = Some(registry);
         let auto_approve = config.agent.auto_approve_tools;
 
         Ok(Self {
@@ -229,7 +235,9 @@ impl AgentLoop {
 
 
             // Call the API with streaming
-            let tool_defs = tools::all_tool_definitions(Some(&self.config.agent.working_directory));
+            let registry = self.session.tool_registry.as_ref()
+                .expect("Tool registry must be initialized");
+            let tool_defs = tools::all_tool_definitions(registry);
             let stream_result = self
                 .client
                 .chat_completion_stream(
@@ -315,7 +323,7 @@ impl AgentLoop {
                 ));
 
                 // Execute each tool call
-                let mut tool_futures = Vec::new();
+                let mut join_set = tokio::task::JoinSet::new();
                 
                 for tc in &tool_calls {
                     self.event_tx.send(AgentEvent::ToolCallStart {
@@ -348,26 +356,31 @@ impl AgentLoop {
                     }
 
                     // All tools can be prepared for parallel execution
-                    // We need to clone what we need since we'll be moving into a future
                     let name = tc.function.name.clone();
                     let arguments = tc.function.arguments.clone();
                     let id = tc.id.clone();
                     let tm_clone = self.session.task_manager.clone();
-                    let wd = self.config.agent.working_directory.clone();
+                    let registry_clone = self.session.tool_registry.as_ref().unwrap().clone();
                     
-                    let thread_id = tool_futures.len() + 1;
+                    let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
                     
-                    tool_futures.push(async move {
-                        let (result, activity) = tools::execute_tool(&name, &arguments, &tm_clone, Some(&wd), Some(thread_id), Some(total_threads)).await;
+                    join_set.spawn(async move {
+                        let (result, activity) = tools::execute_tool(
+                            &name, 
+                            &arguments, 
+                            &tm_clone, 
+                            &registry_clone, 
+                            Some(thread_id), 
+                            Some(total_threads)
+                        ).await;
                         (id, name, result, activity)
                     });
                 }
 
-                // Execute independent tools in parallel
-                if !tool_futures.is_empty() {
-                    let results = futures::future::join_all(tool_futures).await;
-                    for (id, name, result, activity) in results {
+                // Process tool results as they complete
+                while let Some(res) = join_set.join_next().await {
+                    if let Ok((id, name, result, activity)) = res {
                         self.event_tx.send(AgentEvent::Activity(activity)).ok();
                         self.event_tx.send(AgentEvent::ToolCallResult {
                             name,
@@ -612,7 +625,8 @@ mod tests {
         let config = AppConfig::default();
         let (event_tx, _) = mpsc::unbounded_channel();
         let (_, command_rx) = mpsc::unbounded_channel();
-        AgentLoop::new(config, event_tx, command_rx)
+        let registry = Arc::new(SkillRegistry::new(None));
+        AgentLoop::new(config, event_tx, command_rx, registry)
     }
 
     #[test]

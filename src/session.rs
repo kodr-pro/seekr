@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 
 use crate::api::types::ChatMessage;
 use crate::tools::task::TaskManager;
+use crate::tools::SkillRegistry;
+use std::sync::Arc;
 
 /// A point-in-time snapshot of the agent's state
 #[derive(Debug, Serialize, Deserialize)]
@@ -20,6 +22,9 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
     pub messages: Vec<ChatMessage>,
     pub task_manager: TaskManager,
+    
+    #[serde(skip)]
+    pub tool_registry: Option<Arc<SkillRegistry>>,
 }
 
 impl Session {
@@ -31,6 +36,7 @@ impl Session {
             updated_at: Utc::now(),
             messages: Vec::new(),
             task_manager: TaskManager::new(),
+            tool_registry: None,
         }
     }
 
@@ -72,8 +78,9 @@ impl Session {
         let path = dir.join(format!("{}.json", id));
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read session file: {}", path.display()))?;
-        let session: Session = serde_json::from_str(&contents)
+        let mut session: Session = serde_json::from_str(&contents)
             .with_context(|| "Failed to parse session JSON")?;
+        session.tool_registry = None;
         Ok(session)
     }
 

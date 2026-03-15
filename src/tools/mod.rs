@@ -54,9 +54,19 @@ pub trait Skill: Send + Sync {
 }
 
 /// Registry containing all available skills and their tools
+#[derive(Clone)]
 pub struct SkillRegistry {
     skills: Vec<Arc<dyn Skill>>,
     tools: HashMap<String, Arc<dyn Tool>>,
+}
+
+impl std::fmt::Debug for SkillRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillRegistry")
+            .field("skills_count", &self.skills.len())
+            .field("tools_count", &self.tools.len())
+            .finish()
+    }
 }
 
 impl SkillRegistry {
@@ -212,18 +222,19 @@ impl Tool for ScriptTool {
             }
         }
 
-        // Execute the command
-        let output = std::process::Command::new("sh")
+        // Execute the command using tokio::process for non-blocking I/O
+        let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&final_command)
             .current_dir(&self.working_dir)
-            .output()?;
+            .output()
+            .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         
         if output.status.success() {
-            Ok((stdout.clone(), format!("Executed tool {}: {}", self.name, stdout.chars().take(50).collect::<String>())))
+            Ok((stdout.clone(), format!("Executed tool {}: {}", self.name, truncate(&stdout.trim(), 50))))
         } else {
             Ok((format!("Error: {}\n{}", stderr, stdout), format!("Failed to execute tool {}", self.name)))
         }
@@ -262,11 +273,10 @@ pub async fn execute_tool(
     name: &str,
     args_json: &str,
     task_manager: &TaskManager,
-    working_dir: Option<&str>,
+    registry: &SkillRegistry,
     thread_id: Option<usize>,
     total_threads: Option<usize>,
 ) -> (String, ActivityEntry) {
-    let registry = SkillRegistry::new(working_dir);
     let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
 
     let tool = if let Some(t) = registry.get_tool(name) {
@@ -317,8 +327,8 @@ pub async fn execute_tool(
 }
 
 /// Build all tool definitions for the DeepSeek API request
-pub fn all_tool_definitions(working_dir: Option<&str>) -> Vec<ToolDefinition> {
-    SkillRegistry::new(working_dir).all_definitions()
+pub fn all_tool_definitions(registry: &SkillRegistry) -> Vec<ToolDefinition> {
+    registry.all_definitions()
 }
 
 // Utility functions for tool implementations
@@ -373,7 +383,7 @@ mod tests {
         
         assert!(registry.get_tool("test_tool").is_some());
         let tool = registry.get_tool("test_tool").unwrap();
-        let (res, _) = tool.execute(&serde_json::json!({}), &mut TaskManager::new()).await?;
+        let (res, _) = tool.execute(&serde_json::json!({}), &mut TaskManager::new(), None, None).await?;
         assert_eq!(res.trim(), "hello");
         
         Ok(())

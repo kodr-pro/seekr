@@ -15,16 +15,26 @@ At the top of the screen, you'll find the main navigation:
 ### 2. Interaction Area
 The largest portion of the screen, where chat messages, reasoning, and tool executions are displayed. The **Activity Log** within this area numbers parallel tool calls (e.g., `7/12`) for better visibility.
 
-### 3. Status Bar
-Located at the bottom, showing the current state of the agent (Idle, Thinking, Running Tool), the selected model, and shortcut keys.
+### 3. Popups & Dialogs
+- **Session List:** Press `Ctrl+S` to view, resume, or delete previous chat sessions.
+- **Help Menu:** Press `F1` to toggle a cheat sheet of all available shortcuts.
+- **Confirmation Dialogs:** Standard `[Y]es / [N]o` prompts for quitting or approving dangerous tool calls.
+
+### 4. Status Bar
+Located at the bottom, showing the current state of the agent (Idle, Thinking, Running Tool), the selected model, resource usage, and active shortcuts.
 
 ## Key Shortcuts
 
 | Key | Action |
 | :--- | :--- |
-| `Tab` | Cycle through navigation tabs. |
+| `Tab` | Cycle focus between Chat and Tasks panel. |
 | `Enter` | Send message / Confirm selection. |
-| `Esc` | Cancel / Go back. |
+| `Ctrl+S` | Open **Session List** to resume or delete chats. |
+| `Ctrl+R` | Toggle visibility of agent **Reasoning** tokens. |
+| `Ctrl+L` | Clear the current chat view. |
+| `F1` | Show the **Help** shortcut menu. |
+| `Esc` | Cancel / Go back / Open Quit dialog. |
+| `PageUp/Dn`| Scroll the focused panel quickly. |
 | `Ctrl+C` | Force quit the application. |
 
 ## Themes
