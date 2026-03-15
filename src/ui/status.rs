@@ -1,8 +1,3 @@
-// ui/status.rs - Status bar rendering
-//
-// Shows connection status, model name, token count, and iteration count
-// at the bottom of the application.
-
 use ratatui::{
     Frame,
     layout::Rect,
@@ -11,7 +6,6 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-/// Status information for the bar
 pub struct StatusInfo<'a> {
     pub session_id: &'a str,
     pub connected: bool,
@@ -22,7 +16,6 @@ pub struct StatusInfo<'a> {
     pub is_thinking: bool,
 }
 
-/// Render the status bar
 pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
     let conn_indicator = if info.connected {
         Span::styled("● Connected", Style::default().fg(Color::Green))
@@ -77,13 +70,12 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         .style(Style::default().bg(Color::DarkGray).fg(Color::White));
 
     frame.render_widget(paragraph, area);
-}
+} // render_status
 
-/// Format token count with K suffix for readability
 fn format_tokens(tokens: u32) -> String {
     if tokens >= 1000 {
         format!("{:.1}k", tokens as f64 / 1000.0)
     } else {
         tokens.to_string()
     }
-}
+} // format_tokens

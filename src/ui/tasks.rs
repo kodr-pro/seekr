@@ -1,8 +1,3 @@
-// ui/tasks.rs - Task and activity panel rendering
-//
-// Renders the task list with status indicators and the activity log
-// of recent tool executions.
-
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,7 +9,6 @@ use ratatui::{
 use crate::tools::task::{Task, TaskStatus};
 use crate::tools::ActivityEntry;
 
-/// Render the right-side task + activity panel
 pub fn render_tasks(
     frame: &mut Frame,
     area: Rect,
@@ -28,7 +22,6 @@ pub fn render_tasks(
         Style::default().fg(Color::DarkGray)
     };
 
-    // Split vertically: tasks (top half) | activity log (bottom half)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -37,12 +30,9 @@ pub fn render_tasks(
         ])
         .split(area);
 
-    // Task list
     render_task_list(frame, chunks[0], tasks, activities, border_style);
-
-    // Activity log
     render_activity_log(frame, chunks[1], activities, border_style);
-}
+} // render_tasks
 
 fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], activities: &[ActivityEntry], border_style: Style) {
     let active_threads = activities.iter()
@@ -77,18 +67,12 @@ fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], activities: &
             };
             let icon = task.status.icon();
             lines.push(Line::from(vec![
-                Span::styled(
-                    format!("{} ", icon),
-                    Style::default().fg(color),
-                ),
+                Span::styled(format!("{} ", icon), Style::default().fg(color)),
                 Span::styled(
                     format!("[{}] ", task.status),
                     Style::default().fg(color).add_modifier(Modifier::DIM),
                 ),
-                Span::styled(
-                    task.title.as_str(),
-                    Style::default().fg(Color::White),
-                ),
+                Span::styled(task.title.as_str(), Style::default().fg(Color::White)),
             ]));
         }
     }
@@ -98,7 +82,7 @@ fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], activities: &
         .wrap(Wrap { trim: true });
 
     frame.render_widget(paragraph, area);
-}
+} // render_task_list
 
 fn render_activity_log(frame: &mut Frame, area: Rect, activities: &[ActivityEntry], border_style: Style) {
     let block = Block::default()
@@ -114,7 +98,6 @@ fn render_activity_log(frame: &mut Frame, area: Rect, activities: &[ActivityEntr
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        // Show the most recent activities (last N that fit)
         let start = activities.len().saturating_sub(20);
         for activity in &activities[start..] {
             let (icon, color) = match activity.status {
@@ -147,4 +130,4 @@ fn render_activity_log(frame: &mut Frame, area: Rect, activities: &[ActivityEntr
         .wrap(Wrap { trim: true });
 
     frame.render_widget(paragraph, area);
-}
+} // render_activity_log

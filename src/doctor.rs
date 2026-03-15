@@ -1,21 +1,15 @@
-// doctor.rs - Health checks and troubleshooting diagnostics
-//
-// Verifies configuration, API connectivity, and system environment.
-
 use anyhow::Result;
 use crate::config::AppConfig;
 use crate::api::client::DeepSeekClient;
 use std::path::Path;
 use colored::*;
 
-/// Summary of a doctor check result
 pub enum CheckResult {
     Ok(String),
     Warning(String),
     Error(String),
 }
 
-/// Runs all diagnostic checks and prints results to stdout
 pub async fn run_diagnostics() -> Result<()> {
     println!("\n{}", "Seekr Doctor 🩺".bold().cyan());
     println!("Checking your setup for any issues...\n");
@@ -57,7 +51,7 @@ pub async fn run_diagnostics() -> Result<()> {
     }
 
     Ok(())
-}
+} // run_diagnostics
 
 fn check_config() -> CheckResult {
     if !AppConfig::exists() {
@@ -74,7 +68,7 @@ fn check_config() -> CheckResult {
         }
         Err(e) => CheckResult::Error(format!("Failed to parse config: {}", e)),
     }
-}
+} // check_config
 
 async fn check_api() -> CheckResult {
     let cfg = match AppConfig::load() {
@@ -83,8 +77,6 @@ async fn check_api() -> CheckResult {
     };
 
     let client = DeepSeekClient::new(&cfg);
-    // Simple test message to check connectivity and key validity
-    // We use a very short prompt to keep it cheap/fast
     match client.chat_completion_stream(
         vec![crate::api::types::ChatMessage::user("ping")],
         &cfg.api.model,
@@ -93,7 +85,7 @@ async fn check_api() -> CheckResult {
         Ok(_) => CheckResult::Ok("Connected to DeepSeek API successfully.".to_string()),
         Err(e) => CheckResult::Error(format!("DeepSeek API error: {}", e)),
     }
-}
+} // check_api
 
 fn check_working_dir() -> CheckResult {
     let cfg = match AppConfig::load() {
@@ -111,7 +103,6 @@ fn check_working_dir() -> CheckResult {
         return CheckResult::Error(format!("Working path is not a directory: {}", cfg.agent.working_directory));
     }
 
-    // Check for write permissions by trying to create a temp file
     let test_file = path.join(".seekr_doctor_test");
     match std::fs::write(&test_file, "test") {
         Ok(_) => {
@@ -120,17 +111,15 @@ fn check_working_dir() -> CheckResult {
         }
         Err(e) => CheckResult::Warning(format!("Detected limited write permissions in {}: {}", expanded_path, e)),
     }
-}
+} // check_working_dir
 
 fn check_system_tools() -> CheckResult {
     let mut missing = Vec::new();
     
-    // Check for git
     if std::process::Command::new("git").arg("--version").output().is_err() {
         missing.push("git");
     }
     
-    // Check for rustc (since it's a Rust dev tool)
     if std::process::Command::new("rustc").arg("--version").output().is_err() {
         missing.push("rustc");
     }
@@ -140,4 +129,4 @@ fn check_system_tools() -> CheckResult {
     } else {
         CheckResult::Warning(format!("Missing system tools: {}. Some tools might not work correctly.", missing.join(", ")))
     }
-}
+} // check_system_tools

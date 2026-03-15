@@ -1,8 +1,3 @@
-// tools/file_edit.rs - File reading, writing, and editing tools
-//
-// Provides read_file, write_file, edit_file, and list_directory tool implementations.
-// All operations are relative to the configured working directory.
-
 use anyhow::{Context, Result, anyhow};
 use std::path::Path;
 use async_trait::async_trait;
@@ -10,18 +5,15 @@ use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{Tool, task::TaskManager, short_path};
 use serde_json::json;
 
-/// Read the contents of a file at the given path
 pub async fn read_file(path: &str) -> Result<String> {
     let path = Path::new(path);
     tokio::fs::read_to_string(path)
         .await
         .with_context(|| format!("Failed to read file: {}", path.display()))
-}
+} // read_file
 
-/// Write content to a file, creating it if it doesn't exist
 pub async fn write_file(path: &str, content: &str) -> Result<String> {
     let path = Path::new(path);
-    // Create parent directories if they don't exist
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             tokio::fs::create_dir_all(parent)
@@ -33,9 +25,8 @@ pub async fn write_file(path: &str, content: &str) -> Result<String> {
         .await
         .with_context(|| format!("Failed to write file: {}", path.display()))?;
     Ok(format!("Successfully wrote {} bytes to {}", content.len(), path.display()))
-}
+} // write_file
 
-/// Edit a file by replacing an exact string match with a new string
 pub async fn edit_file(path: &str, old_string: &str, new_string: &str) -> Result<String> {
     let path = Path::new(path);
     let contents = tokio::fs::read_to_string(path)
@@ -55,9 +46,8 @@ pub async fn edit_file(path: &str, old_string: &str, new_string: &str) -> Result
         .with_context(|| format!("Failed to write edited file: {}", path.display()))?;
 
     Ok(format!("Successfully edited {}", path.display()))
-}
+} // edit_file
 
-/// List files and directories at the given path
 pub async fn list_directory(path: &str) -> Result<String> {
     let dir_path = if path.is_empty() { "." } else { path };
     let path = Path::new(dir_path);
@@ -80,31 +70,27 @@ pub async fn list_directory(path: &str) -> Result<String> {
     } else {
         Ok(items.join("\n"))
     }
-}
-
-// --- Tools ---
+} // list_directory
 
 pub struct ReadFileTool;
 
 #[async_trait]
 impl Tool for ReadFileTool {
-    fn name(&self) -> &str { "read_file" }
+    fn name(&self) -> &str { "read_file" } // name
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Read the contents of a file. Returns the file content as a string.".to_string(),
+                description: "Read the contents of a file.".to_string(),
                 parameters: json!({
                     "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Path to the file to read" }
-                    },
+                    "properties": { "path": { "type": "string", "description": "Path to the file to read" } },
                     "required": ["path"]
                 }),
             },
         }
-    }
+    } // definition
     async fn execute(
         &self, 
         args: &serde_json::Value, 
@@ -117,20 +103,20 @@ impl Tool for ReadFileTool {
         task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = read_file(path).await?;
         Ok((result, summary))
-    }
-}
+    } // execute
+} // impl ReadFileTool
 
 pub struct WriteFileTool;
 
 #[async_trait]
 impl Tool for WriteFileTool {
-    fn name(&self) -> &str { "write_file" }
+    fn name(&self) -> &str { "write_file" } // name
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does.".to_string(),
+                description: "Write content to a file.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -141,7 +127,7 @@ impl Tool for WriteFileTool {
                 }),
             },
         }
-    }
+    } // definition
     async fn execute(
         &self, 
         args: &serde_json::Value, 
@@ -155,20 +141,20 @@ impl Tool for WriteFileTool {
         task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = write_file(path, content).await?;
         Ok((result, summary))
-    }
-}
+    } // execute
+} // impl WriteFileTool
 
 pub struct EditFileTool;
 
 #[async_trait]
 impl Tool for EditFileTool {
-    fn name(&self) -> &str { "edit_file" }
+    fn name(&self) -> &str { "edit_file" } // name
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Edit a file by replacing a specific string with a new string. Use read_file first to see current content.".to_string(),
+                description: "Edit a file by replacing a specific string with a new string.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -180,7 +166,7 @@ impl Tool for EditFileTool {
                 }),
             },
         }
-    }
+    } // definition
     async fn execute(
         &self, 
         args: &serde_json::Value, 
@@ -195,14 +181,14 @@ impl Tool for EditFileTool {
         task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = edit_file(path, old, new).await?;
         Ok((result, summary))
-    }
-}
+    } // execute
+} // impl EditFileTool
 
 pub struct ListDirectoryTool;
 
 #[async_trait]
 impl Tool for ListDirectoryTool {
-    fn name(&self) -> &str { "list_directory" }
+    fn name(&self) -> &str { "list_directory" } // name
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
@@ -211,14 +197,12 @@ impl Tool for ListDirectoryTool {
                 description: "List files and directories at the given path.".to_string(),
                 parameters: json!({
                     "type": "object",
-                    "properties": {
-                        "path": { "type": "string", "description": "Directory path to list (default: current directory)" }
-                    },
+                    "properties": { "path": { "type": "string", "description": "Directory path to list" } },
                     "required": []
                 }),
             },
         }
-    }
+    } // definition
     async fn execute(
         &self, 
         args: &serde_json::Value, 
@@ -231,5 +215,5 @@ impl Tool for ListDirectoryTool {
         task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = list_directory(path).await?;
         Ok((result, summary))
-    }
-}
+    } // execute
+} // impl ListDirectoryTool

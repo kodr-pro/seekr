@@ -1,8 +1,3 @@
-// tools/shell.rs - Shell command execution tool
-//
-// Runs shell commands via /bin/sh and captures stdout/stderr.
-// Includes security sandboxing to prevent dangerous commands.
-
 use anyhow::{Context, Result, anyhow};
 use tokio::process::Command;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -12,7 +7,6 @@ use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{Tool, truncate, task::TaskManager};
 use serde_json::json;
 
-/// Strips ANSI escape codes from a string using a regex-like approach for robustness
 fn strip_ansi_codes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut iter = s.chars().peekable();
@@ -20,8 +14,7 @@ fn strip_ansi_codes(s: &str) -> String {
     while let Some(c) = iter.next() {
         if c == '\x1b' {
             if let Some('[') = iter.peek() {
-                iter.next(); // consume '['
-                // Consume until a terminator (usually A-Z, a-z, or @)
+                iter.next();
                 while let Some(&next) = iter.peek() {
                     iter.next();
                     if (next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') || next == '@' {
@@ -30,11 +23,10 @@ fn strip_ansi_codes(s: &str) -> String {
                 }
                 continue;
             } else if let Some(']') = iter.peek() {
-                // OSC (Operating System Command) sequence
-                iter.next(); // consume ']'
+                iter.next();
                 while let Some(&next) = iter.peek() {
                     iter.next();
-                    if next == '\x07' || next == '\x5c' { // BEL or ST
+                    if next == '\x07' || next == '\x5c' {
                         break;
                     }
                 }
@@ -44,9 +36,8 @@ fn strip_ansi_codes(s: &str) -> String {
         result.push(c);
     }
     result
-}
+} // strip_ansi_codes
 
-/// Checks if a line contains any interactive prompt patterns
 fn detect_prompt(line: &str) -> Option<String> {
     let stripped = strip_ansi_codes(line);
     let prompt_patterns = ["[sudo] password", "(y/n)", "[Y/n]", "Password:", "confirm", "Enter something:"];
@@ -56,9 +47,8 @@ fn detect_prompt(line: &str) -> Option<String> {
         }
     }
     None
-}
+} // detect_prompt
 
-/// Execute a shell command and return the combined output
 pub async fn shell_command(
     args: &serde_json::Value, 
     task_manager: &TaskManager,
@@ -71,7 +61,6 @@ pub async fn shell_command(
     let summary = format!("shell_command {}", truncate(command, 20));
     task_manager.log_activity("shell_command", &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
 
-    // Basic security check: prevent dangerous commands
     let dangerous_patterns = [
         "rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", 
         "> /dev/sda", "> /dev/nvme", "chmod -R 777 /", "chown -R"
@@ -83,22 +72,20 @@ pub async fn shell_command(
     }
 
     if background {
-        // Run in background: spawn and return immediately
-        let _child = Command::new("sh")
+        Command::new("sh")
             .arg("-c")
             .arg(command)
             .stdin(Stdio::null())
-            .stdout(Stdio::null()) // For now, we discard background output to keep it simple
+            .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
             .with_context(|| format!("Failed to spawn background command: {}", command))?;
         
-        let res = format!("Command started in background: {}\nUse shell_command to check results if applicable.", command);
+        let res = format!("Command started in background: {}", command);
         return Ok((res, format!("bg: {}", truncate(command, 15))));
     }
 
-    // Use a timeout to prevent runaway processes
-    let timeout_duration = std::time::Duration::from_secs(300); // 5 minutes
+    let timeout_duration = std::time::Duration::from_secs(300);
 
     let mut child = Command::new("sh")
         .arg("-c")
@@ -114,8 +101,6 @@ pub async fn shell_command(
     let mut stdin = child.stdin.take().context("Failed to open stdin")?;
 
     let (prompt_tx, mut prompt_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
-    // Accumulate recent output lines (last 5) for context
     let context_arc = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
     let context_clone_out = context_arc.clone();
     let context_clone_err = context_arc.clone();
@@ -130,7 +115,6 @@ pub async fn shell_command(
     let result_clone = result_arc.clone();
     let result_clone_err = result_arc.clone();
 
-    // Spawn stdout reader
     let stdout_handle = tokio::spawn(async move {
         let mut line = String::new();
         let mut buffer = Vec::new();
@@ -165,7 +149,6 @@ pub async fn shell_command(
                                 line.clear();
                             }
                         }
-                        // No newline yet but prompt detected (e.g. sudo password prompt)
                         if !line.is_empty() {
                             if let Some(prompt) = detect_prompt(&line) {
                                 tx_out.send(prompt).ok();
@@ -182,7 +165,6 @@ pub async fn shell_command(
         }
     });
 
-    // Spawn stderr reader
     let stderr_handle = tokio::spawn(async move {
         let mut line = String::new();
         let mut buffer = Vec::new();
@@ -218,7 +200,6 @@ pub async fn shell_command(
                                 line.clear();
                             }
                         }
-                        // No newline yet — check for inline prompt (e.g. password:)
                         if !line.is_empty() {
                             if let Some(prompt) = detect_prompt(&line) {
                                 tx_err.send(prompt).ok();
@@ -264,7 +245,6 @@ pub async fn shell_command(
                     }
                 };
 
-                // Wait for readers to finish draining
                 let _ = stdout_handle.await;
                 let _ = stderr_handle.await;
 
@@ -282,9 +262,7 @@ pub async fn shell_command(
             }
         }
     }
-}
-
-// --- Tools ---
+} // shell_command
 
 pub struct ShellCommandTool;
 
@@ -292,31 +270,25 @@ pub struct ShellCommandTool;
 impl Tool for ShellCommandTool {
     fn name(&self) -> &str {
         "shell_command"
-    }
+    } // name
 
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Execute a shell command and return stdout/stderr. Use for compilation, running tests, git operations, etc.".to_string(),
+                description: "Execute a shell command and return stdout/stderr.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "The shell command to execute"
-                        },
-                        "background": {
-                            "type": "boolean",
-                            "description": "Whether to run the command in the background and return immediately. Use for long-running processes."
-                        }
+                        "command": { "type": "string", "description": "The shell command to execute" },
+                        "background": { "type": "boolean", "description": "Whether to run the command in the background" }
                     },
                     "required": ["command"]
                 }),
             },
         }
-    }
+    } // definition
 
     async fn execute(
         &self, 
@@ -326,8 +298,9 @@ impl Tool for ShellCommandTool {
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
         shell_command(args, task_manager, thread_id, total_threads).await
-    }
-}
+    } // execute
+} // impl ShellCommandTool
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,7 +314,7 @@ mod tests {
         let input2 = "\x1b[31mError:\x1b[0m critical failure";
         let expected2 = "Error: critical failure";
         assert_eq!(strip_ansi_codes(input2), expected2);
-    }
+    } // test_strip_ansi_codes
 
     #[test]
     fn test_detect_prompt() {
@@ -349,5 +322,5 @@ mod tests {
         assert!(detect_prompt("\x1b[2KPassword:").is_some());
         assert!(detect_prompt("regular output").is_none());
         assert!(detect_prompt("confirm execution? (y/n)").is_some());
-    }
-}
+    } // test_detect_prompt
+} // tests

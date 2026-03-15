@@ -1,11 +1,5 @@
-// ui/layout.rs - Layout management for the TUI
-//
-// Defines the main application layout with title bar, chat panel,
-// task panel, input bar, and status bar.
-
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-/// The computed layout areas for the main application
 pub struct AppLayout {
     pub title_bar: Rect,
     pub chat_panel: Rect,
@@ -15,20 +9,17 @@ pub struct AppLayout {
 }
 
 impl AppLayout {
-    /// Compute layout areas from the terminal size
     pub fn new(area: Rect) -> Self {
-        // Vertical: title_bar | main_area | input_bar | status_bar
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(2), // title bar
-                Constraint::Min(5),    // main area (chat + tasks)
-                Constraint::Length(5), // input bar
-                Constraint::Length(1), // status bar
+                Constraint::Length(2),
+                Constraint::Min(5),
+                Constraint::Length(5),
+                Constraint::Length(1),
             ])
             .split(area);
 
-        // Horizontal split of main area: chat (~70%) | tasks (~30%)
         let horizontal = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -44,10 +35,9 @@ impl AppLayout {
             input_bar: vertical[2],
             status_bar: vertical[3],
         }
-    }
-}
+    } // new
+} // impl AppLayout
 
-/// Layout for the setup wizard
 pub struct SetupLayout {
     pub header: Rect,
     pub content: Rect,
@@ -59,9 +49,9 @@ impl SetupLayout {
         let vertical = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(8), // header with SEEKR art
-                Constraint::Min(10),   // content area
-                Constraint::Length(2), // footer
+                Constraint::Length(8),
+                Constraint::Min(10),
+                Constraint::Length(2),
             ])
             .split(area);
 
@@ -70,5 +60,5 @@ impl SetupLayout {
             content: vertical[1],
             footer: vertical[2],
         }
-    }
-}
+    } // new
+} // impl SetupLayout
