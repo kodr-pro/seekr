@@ -13,7 +13,7 @@ The "brain" of **seekr** is a sophisticated implementation of the ReAct (Reasoni
 **seekr** uses carefully crafted system prompts that define its capabilities, limitations, and "personality". These prompts are designed to minimize hallucinations and ensure the agent stays on task.
 
 ## Memory Management
-As the conversation grows, **seekr** manages its token context by summarizing older parts of the conversation or pruning less relevant information (depending on complexity).
+As the conversation grows, **seekr** manages its token context using a **sliding-window pruning** strategy. It preserves the system prompt and initial task context while rotating out the oldest intermediate messages to stay within the model's context limits (typically keeping the last 100 messages). This ensures long-running sessions remain stable and responsive.
 
 ---
 

@@ -1,7 +1,3 @@
-// session.rs - Session persistence (saving/loading chat history)
-//
-// Manages the serialization of agent state to ~/.config/seekr/sessions/.
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -10,8 +6,9 @@ use chrono::{DateTime, Utc};
 
 use crate::api::types::ChatMessage;
 use crate::tools::task::TaskManager;
+use crate::tools::SkillRegistry;
+use std::sync::Arc;
 
-/// A point-in-time snapshot of the agent's state
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -20,6 +17,9 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
     pub messages: Vec<ChatMessage>,
     pub task_manager: TaskManager,
+    
+    #[serde(skip)]
+    pub tool_registry: Option<Arc<SkillRegistry>>,
 }
 
 impl Session {
@@ -31,22 +31,20 @@ impl Session {
             updated_at: Utc::now(),
             messages: Vec::new(),
             task_manager: TaskManager::new(),
+            tool_registry: None,
         }
-    }
+    } // new
 
-    /// Path to the sessions directory: ~/.config/seekr/sessions/
     pub fn sessions_dir() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .context("Could not determine config directory")?;
         Ok(config_dir.join("seekr").join("sessions"))
-    }
+    } // sessions_dir
 
-    /// Path to this specific session file
     pub fn file_path(&self) -> Result<PathBuf> {
         Ok(Self::sessions_dir()?.join(format!("{}.json", self.id)))
-    }
+    } // file_path
 
-    /// Save the session to disk
     pub fn save(&mut self) -> Result<()> {
         self.updated_at = Utc::now();
         let path = self.file_path()?;
@@ -64,21 +62,19 @@ impl Session {
         })?;
         
         Ok(())
-    }
+    } // save
 
-    /// Load a session from disk
     pub fn load(id: &str) -> Result<Self> {
         let dir = Self::sessions_dir()?;
         let path = dir.join(format!("{}.json", id));
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read session file: {}", path.display()))?;
-        let session: Session = serde_json::from_str(&contents)
+        let mut session: Session = serde_json::from_str(&contents)
             .with_context(|| "Failed to parse session JSON")?;
+        session.tool_registry = None;
         Ok(session)
-    }
+    } // load
 
-    /// List all available sessions, sorted by update time (newest first)
-    #[allow(dead_code)]
     pub fn list_all() -> Result<Vec<SessionMetadata>> {
         let dir = Self::sessions_dir()?;
         if !dir.exists() {
@@ -103,10 +99,9 @@ impl Session {
 
         sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(sessions)
-    }
-}
+    } // list_all
+} // impl Session
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SessionMetadata {
     pub id: String,
@@ -124,5 +119,5 @@ mod tests {
         assert_eq!(session.id, "test-id");
         assert_eq!(session.title, "Test Session");
         assert_eq!(session.messages.len(), 0);
-    }
-}
+    } // test_session_new
+} // tests

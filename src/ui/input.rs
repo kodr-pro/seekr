@@ -1,9 +1,3 @@
-// ui/input.rs - Input bar rendering
-//
-// Renders the text input area at the bottom of the screen.
-// Shows the current input text with a cursor indicator.
-// When InputMode::ShellStdin is active, shows an orange tint and context lines.
-
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -12,9 +6,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-/// Render the input bar.
-/// `prompt` overrides the title when shell input is required.
-/// `shell_context` is the last few lines of process output shown above the input.
 pub fn render_input(
     frame: &mut Frame,
     area: Rect,
@@ -26,7 +17,6 @@ pub fn render_input(
 ) {
     let is_shell = prompt.is_some();
 
-    // If there is shell context, split the area vertically
     let (context_area, input_area) = if is_shell && shell_context.is_some() {
         let context_lines = shell_context.unwrap().lines().count().max(1) as u16;
         let context_height = (context_lines + 2).min(area.height.saturating_sub(4));
@@ -42,7 +32,6 @@ pub fn render_input(
         (None, area)
     };
 
-    // Render context block if present
     if let (Some(ctx_area), Some(ctx_text)) = (context_area, shell_context) {
         let ctx_block = Block::default()
             .title(" Process output ")
@@ -55,7 +44,6 @@ pub fn render_input(
         frame.render_widget(ctx_para, ctx_area);
     }
 
-    // Border color: orange for shell mode, cyan for active chat, gray otherwise
     let border_color = if is_shell {
         Color::Rgb(255, 165, 0)
     } else if active {
@@ -81,7 +69,6 @@ pub fn render_input(
             Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
         ))
     } else {
-        // Show the input with cursor position (character-aware)
         let chars: Vec<char> = input.chars().collect();
         let before: String = chars.iter().take(cursor_pos).collect();
         let cursor_char = chars.get(cursor_pos).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
@@ -103,4 +90,4 @@ pub fn render_input(
         .block(block)
         .wrap(ratatui::widgets::Wrap { trim: true });
     frame.render_widget(paragraph, input_area);
-}
+} // render_input

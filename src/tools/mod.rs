@@ -1,8 +1,3 @@
-// tools/mod.rs - Tool registry and execution
-//
-// Defines the Tool trait and manages a registry of available tools.
-// Each tool is responsible for its own definition and execution logic.
-
 pub mod file_edit;
 pub mod shell;
 pub mod task;
@@ -17,7 +12,6 @@ use std::sync::Arc;
 
 pub use crate::tools::task::{ActivityEntry, ActivityStatus};
 
-/// Metadata for a tool or skill
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub name: String,
@@ -25,39 +19,38 @@ pub struct Metadata {
     pub version: String,
 }
 
-/// The base trait for all agent tools
 #[async_trait]
 pub trait Tool: Send + Sync {
-    /// Returns the tool's name (must be unique)
     fn name(&self) -> &str;
-    
-    /// Returns the JSON definition for the API
     fn definition(&self) -> ToolDefinition;
-    
-    /// Executes the tool with the given arguments
     async fn execute(
         &self, 
         args: &serde_json::Value, 
         task_manager: &TaskManager,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
-    ) -> Result<(String, String)>; // (ResultString, Summary)
-}
+    ) -> Result<(String, String)>;
+} // Tool
 
-/// A collection of related tools
 pub trait Skill: Send + Sync {
-    /// Returns metadata for this skill
     fn metadata(&self) -> Metadata;
-    
-    /// Returns all tools provided by this skill
     fn tools(&self) -> Vec<Arc<dyn Tool>>;
-}
+} // Skill
 
-/// Registry containing all available skills and their tools
+#[derive(Clone)]
 pub struct SkillRegistry {
     skills: Vec<Arc<dyn Skill>>,
     tools: HashMap<String, Arc<dyn Tool>>,
 }
+
+impl std::fmt::Debug for SkillRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillRegistry")
+            .field("skills_count", &self.skills.len())
+            .field("tools_count", &self.tools.len())
+            .finish()
+    }
+} // fmt
 
 impl SkillRegistry {
     pub fn new(working_dir: Option<&str>) -> Self {
@@ -66,10 +59,8 @@ impl SkillRegistry {
             tools: HashMap::new(),
         };
         
-        // Register core skills
         registry.register_skill(Arc::new(CoreSkill));
 
-        // Load global skills
         if let Some(config_dir) = dirs::config_dir() {
             let global_skills_path = config_dir.join("seekr").join("skills");
             if global_skills_path.exists() {
@@ -77,7 +68,6 @@ impl SkillRegistry {
             }
         }
 
-        // Load local skills
         if let Some(wd) = working_dir {
             let expanded_wd = shellexpand::tilde(wd);
             let local_skills_path = std::path::Path::new(expanded_wd.as_ref()).join(".seekr").join("skills");
@@ -87,7 +77,7 @@ impl SkillRegistry {
         }
         
         registry
-    }
+    } // new
 
     fn load_skills_from_dir(&mut self, path: &std::path::Path) {
         if let Ok(entries) = std::fs::read_dir(path) {
@@ -138,25 +128,24 @@ impl SkillRegistry {
                 }
             }
         }
-    }
+    } // load_skills_from_dir
 
     pub fn register_skill(&mut self, skill: Arc<dyn Skill>) {
         for tool in skill.tools() {
             self.tools.insert(tool.name().to_string(), tool);
         }
         self.skills.push(skill);
-    }
+    } // register_skill
 
     pub fn get_tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).cloned()
-    }
+    } // get_tool
 
     pub fn all_definitions(&self) -> Vec<ToolDefinition> {
         self.tools.values().map(|t| t.definition()).collect()
-    }
-}
+    } // all_definitions
+} // impl SkillRegistry
 
-/// A skill loaded dynamically from a skill.json and associated scripts
 pub struct ScriptSkill {
     metadata: Metadata,
     tools: Vec<Arc<dyn Tool>>,
@@ -165,12 +154,12 @@ pub struct ScriptSkill {
 impl Skill for ScriptSkill {
     fn metadata(&self) -> Metadata {
         self.metadata.clone()
-    }
+    } // metadata
     
     fn tools(&self) -> Vec<Arc<dyn Tool>> {
         self.tools.clone()
-    }
-}
+    } // tools
+} // impl Skill for ScriptSkill
 
 pub struct ScriptTool {
     name: String,
@@ -183,11 +172,11 @@ pub struct ScriptTool {
 impl Tool for ScriptTool {
     fn name(&self) -> &str {
         &self.name
-    }
+    } // name
     
     fn definition(&self) -> ToolDefinition {
         self.definition.clone()
-    }
+    } // definition
     
     async fn execute(
         &self, 
@@ -199,7 +188,6 @@ impl Tool for ScriptTool {
         let summary = format!("script_tool {}", self.name);
         task_manager.log_activity(&self.name, &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
 
-        // Replace placeholders in command with args
         let mut final_command = self.command.clone();
         if let Some(obj) = args.as_object() {
             for (k, v) in obj {
@@ -212,25 +200,24 @@ impl Tool for ScriptTool {
             }
         }
 
-        // Execute the command
-        let output = std::process::Command::new("sh")
+        let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(&final_command)
             .current_dir(&self.working_dir)
-            .output()?;
+            .output()
+            .await?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         
         if output.status.success() {
-            Ok((stdout.clone(), format!("Executed tool {}: {}", self.name, stdout.chars().take(50).collect::<String>())))
+            Ok((stdout.clone(), format!("Executed tool {}: {}", self.name, truncate(&stdout.trim(), 50))))
         } else {
             Ok((format!("Error: {}\n{}", stderr, stdout), format!("Failed to execute tool {}", self.name)))
         }
-    }
-}
+    } // execute
+} // impl ScriptTool
 
-/// The bundled core skill providing basic file and system tools
 struct CoreSkill;
 
 impl Skill for CoreSkill {
@@ -240,7 +227,7 @@ impl Skill for CoreSkill {
             description: "Essential file, shell, and task tools".to_string(),
             version: "1.0.0".to_string(),
         }
-    }
+    } // metadata
 
     fn tools(&self) -> Vec<Arc<dyn Tool>> {
         vec![
@@ -254,19 +241,17 @@ impl Skill for CoreSkill {
             Arc::new(task::CreateTaskTool),
             Arc::new(task::UpdateTaskTool),
         ]
-    }
-}
+    } // tools
+} // impl Skill for CoreSkill
 
-/// Legacy wrapper for the agent loop to use the new registry system
 pub async fn execute_tool(
     name: &str,
     args_json: &str,
     task_manager: &TaskManager,
-    working_dir: Option<&str>,
+    registry: &SkillRegistry,
     thread_id: Option<usize>,
     total_threads: Option<usize>,
 ) -> (String, ActivityEntry) {
-    let registry = SkillRegistry::new(working_dir);
     let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
 
     let tool = if let Some(t) = registry.get_tool(name) {
@@ -314,21 +299,18 @@ pub async fn execute_tool(
             })
         }
     }
-}
+} // execute_tool
 
-/// Build all tool definitions for the DeepSeek API request
-pub fn all_tool_definitions(working_dir: Option<&str>) -> Vec<ToolDefinition> {
-    SkillRegistry::new(working_dir).all_definitions()
-}
-
-// Utility functions for tool implementations
+pub fn all_tool_definitions(registry: &SkillRegistry) -> Vec<ToolDefinition> {
+    registry.all_definitions()
+} // all_tool_definitions
 
 pub fn short_path(path: &str) -> String {
     let p = std::path::Path::new(path);
     p.file_name()
         .map(|f| f.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string())
-}
+} // short_path
 
 pub fn truncate(s: &str, max_len: usize) -> String {
     if s.len() > max_len {
@@ -336,7 +318,7 @@ pub fn truncate(s: &str, max_len: usize) -> String {
     } else {
         s.to_string()
     }
-}
+} // truncate
 
 #[cfg(test)]
 mod tests {
@@ -373,9 +355,9 @@ mod tests {
         
         assert!(registry.get_tool("test_tool").is_some());
         let tool = registry.get_tool("test_tool").unwrap();
-        let (res, _) = tool.execute(&serde_json::json!({}), &mut TaskManager::new()).await?;
+        let (res, _) = tool.execute(&serde_json::json!({}), &TaskManager::new(), None, None).await?;
         assert_eq!(res.trim(), "hello");
         
         Ok(())
-    }
-}
+    } // test_skill_loading
+} // tests

@@ -1,8 +1,3 @@
-// tools/web.rs - Web browsing and fetching tools
-//
-// web_fetch: Fetches a URL and extracts text content (stripping HTML).
-// web_search: Performs a DuckDuckGo search and parses results.
-
 use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -11,7 +6,6 @@ use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{Tool, task::TaskManager, truncate};
 use serde_json::json;
 
-/// Fetch a web page and return its text content
 pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
     let client = Client::builder()
         .user_agent("Mozilla/5.0 (compatible; Seekr/0.1)")
@@ -37,7 +31,6 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
     let document = Html::parse_document(&body);
 
     let text = if let Some(sel_str) = selector {
-        // Extract content matching the CSS selector
         match Selector::parse(sel_str) {
             Ok(sel) => {
                 let mut parts = Vec::new();
@@ -55,7 +48,6 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
             }
         }
     } else {
-        // Extract all text content from the body
         match Selector::parse("body") {
             Ok(body_sel) => {
                 document
@@ -68,7 +60,6 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
         }
     };
 
-    // Truncate very long pages
     let mut result = text;
     if result.len() > 16_000 {
         result.truncate(16_000);
@@ -76,9 +67,8 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
     }
 
     Ok(result)
-}
+} // web_fetch
 
-/// Search the web using DuckDuckGo HTML and parse results
 pub async fn web_search(query: &str) -> Result<String> {
     let client = Client::builder()
         .user_agent("Mozilla/5.0 (compatible; Seekr/0.1)")
@@ -104,7 +94,6 @@ pub async fn web_search(query: &str) -> Result<String> {
 
     let document = Html::parse_document(&body);
 
-    // DuckDuckGo HTML results use .result class
     let result_sel = Selector::parse(".result").unwrap_or_else(|_| {
         Selector::parse("div").expect("div selector should always work")
     });
@@ -156,9 +145,8 @@ pub async fn web_search(query: &str) -> Result<String> {
     } else {
         Ok(results.join("\n\n"))
     }
-}
+} // web_search
 
-/// Simple URL encoding for query parameters
 fn urlencoding(input: &str) -> String {
     let mut result = String::new();
     for c in input.chars() {
@@ -177,32 +165,30 @@ fn urlencoding(input: &str) -> String {
         }
     }
     result
-}
-
-// --- Tools ---
+} // urlencoding
 
 pub struct WebFetchTool;
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str { "web_fetch" }
+    fn name(&self) -> &str { "web_fetch" } // name
     fn definition(&self) -> ToolDefinition {
          ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Fetch a web page and return its text content (HTML stripped). Use to gather information from the web.".to_string(),
+                description: "Fetch a web page and return its text content.".to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
                         "url": { "type": "string", "description": "URL to fetch" },
-                        "selector": { "type": "string", "description": "Optional CSS selector to extract specific content" }
+                        "selector": { "type": "string", "description": "Optional CSS selector" }
                     },
                     "required": ["url"]
                 }),
             },
         }
-    }
+    } // definition
     async fn execute(
         &self, 
         args: &serde_json::Value, 
@@ -223,30 +209,28 @@ impl Tool for WebFetchTool {
         
         let result = web_fetch(url, selector).await?;
         Ok((result, summary))
-    }
-}
+    } // execute
+} // impl WebFetchTool
 
 pub struct WebSearchTool;
 
 #[async_trait]
 impl Tool for WebSearchTool {
-    fn name(&self) -> &str { "web_search" }
+    fn name(&self) -> &str { "web_search" } // name
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Search the web using DuckDuckGo and return results with titles, URLs, and snippets.".to_string(),
+                description: "Search the web using DuckDuckGo.".to_string(),
                 parameters: json!({
                     "type": "object",
-                    "properties": {
-                        "query": { "type": "string", "description": "Search query" }
-                    },
+                    "properties": { "query": { "type": "string", "description": "Search query" } },
                     "required": ["query"]
                 }),
             },
         }
-    }
+    } // definition
     async fn execute(
         &self, 
         args: &serde_json::Value, 
@@ -259,5 +243,5 @@ impl Tool for WebSearchTool {
         task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
         let result = web_search(query).await?;
         Ok((result, summary))
-    }
-}
+    } // execute
+} // impl WebSearchTool

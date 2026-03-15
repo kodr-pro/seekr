@@ -1,8 +1,3 @@
-// ui/chat.rs - Chat panel rendering
-//
-// Renders the scrollable chat history with user/assistant messages,
-// tool calls shown inline, and reasoning tokens in dimmed text.
-
 use ratatui::{
     Frame,
     layout::Rect,
@@ -13,7 +8,6 @@ use ratatui::{
 
 use crate::app::ChatEntry;
 
-/// Render the chat panel
 pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_offset: u16, focused: bool) -> u16 {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
@@ -32,7 +26,6 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
         return 0;
     }
 
-    // Build the full text content
     let mut all_text = Text::default();
 
     for (idx, entry) in entries.iter().enumerate() {
@@ -55,7 +48,6 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
                     Span::styled("● Assistant", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
                 ]));
                 
-                // Restore structure-preserving rendering but avoid excessive empty lines
                 let processed = if text.is_empty() && is_streaming { "..." } else { text.as_str() };
                 for line in processed.lines() {
                     all_text.push_line(Line::from(vec![
@@ -151,7 +143,6 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
         }
     }
 
-    // Now wrap and calculate height accurately
     let wrap_width = inner.width;
     let mut total_lines = 0;
     for line in all_text.lines.iter() {
@@ -174,7 +165,6 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
 
     frame.render_widget(paragraph, area);
 
-    // Render scrollbar
     if max_scroll > 0 {
         let scrollbar = Scrollbar::default()
             .orientation(ScrollbarOrientation::VerticalRight)
@@ -194,4 +184,4 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
     }
 
     max_scroll
-}
+} // render_chat

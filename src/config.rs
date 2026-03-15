@@ -1,13 +1,7 @@
-// config.rs - Configuration loading, saving, and defaults
-//
-// Manages the application configuration stored at ~/.config/seekr/config.toml.
-// Provides first-run detection and the data structures for the setup wizard.
-
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// API configuration section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiConfig {
     pub key: String,
@@ -23,9 +17,8 @@ impl Default for ApiConfig {
             base_url: "https://api.deepseek.com".to_string(),
         }
     }
-}
+} // default
 
-/// Agent behavior configuration section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub max_iterations: u32,
@@ -41,9 +34,8 @@ impl Default for AgentConfig {
             working_directory: ".".to_string(),
         }
     }
-}
+} // default
 
-/// UI configuration section
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UiConfig {
     pub theme: String,
@@ -57,9 +49,8 @@ impl Default for UiConfig {
             show_reasoning: true,
         }
     }
-}
+} // default
 
-/// Top-level application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub api: ApiConfig,
@@ -75,22 +66,19 @@ impl Default for AppConfig {
             ui: UiConfig::default(),
         }
     }
-}
+} // default
 
 impl AppConfig {
-    /// Returns the path to the config file: ~/.config/seekr/config.toml
     pub fn config_path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .context("Could not determine config directory")?;
         Ok(config_dir.join("seekr").join("config.toml"))
-    }
+    } // config_path
 
-    /// Check if a config file already exists (first-run detection)
     pub fn exists() -> bool {
         Self::config_path().map(|p| p.exists()).unwrap_or(false)
-    }
+    } // exists
 
-    /// Load configuration from disk
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
         let contents = std::fs::read_to_string(&path).with_context(|| {
@@ -99,9 +87,8 @@ impl AppConfig {
         let config: AppConfig = toml::from_str(&contents)
             .with_context(|| "Failed to parse config.toml")?;
         Ok(config)
-    }
+    } // load
 
-    /// Save configuration to disk, creating directories as needed
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
@@ -118,5 +105,5 @@ impl AppConfig {
             format!("Failed to write config to {}", path.display())
         })?;
         Ok(())
-    }
-}
+    } // save
+} // impl AppConfig

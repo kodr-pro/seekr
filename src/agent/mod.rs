@@ -1,7 +1,3 @@
-// agent/mod.rs - Agent module root
-//
-// Re-exports the agent loop and system prompt components.
-
 #[allow(clippy::module_inception)]
 #[path = "loop.rs"]
 pub mod loop_mod;

@@ -1,9 +1,3 @@
-// agent/system_prompt.rs - System prompt template for the agent
-//
-// Constructs the system prompt with the current working directory
-// injected. This prompt guides the AI's behavior as an autonomous agent.
-
-/// Build the system prompt with the given working directory
 pub fn build_system_prompt(working_directory: &str) -> String {
     format!(
         r#"You are Seekr, an autonomous AI agent running in a terminal. You complete tasks by using tools available to you.
@@ -46,4 +40,4 @@ pub fn build_system_prompt(working_directory: &str) -> String {
 
 Current working directory: {working_directory}"#
     )
-}
+} // build_system_prompt

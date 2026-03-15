@@ -1,8 +1,3 @@
-// ui/title.rs - Title bar rendering
-//
-// Renders the application title bar with version information
-// and current session/connection status.
-
 use ratatui::{
     Frame,
     layout::Rect,
@@ -11,7 +6,6 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-/// Title information for the bar
 pub struct TitleInfo<'a> {
     pub version: &'a str,
     pub session_id: Option<&'a str>,
@@ -20,9 +14,7 @@ pub struct TitleInfo<'a> {
     pub status: &'a str,
 }
 
-/// Render the title bar
 pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
-    // Build the title line
     let title = Span::styled(
         "SEEKR",
         Style::default()
@@ -50,22 +42,13 @@ pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
             Style::default().fg(Color::Magenta),
         )
     } else {
-        Span::styled(
-            "New Session",
-            Style::default().fg(Color::DarkGray),
-        )
+        Span::styled("New Session", Style::default().fg(Color::DarkGray))
     };
 
     let conn_status = if info.connected {
-        Span::styled(
-            "● Connected",
-            Style::default().fg(Color::Green),
-        )
+        Span::styled("● Connected", Style::default().fg(Color::Green))
     } else {
-        Span::styled(
-            "○ Disconnected",
-            Style::default().fg(Color::Red),
-        )
+        Span::styled("○ Disconnected", Style::default().fg(Color::Red))
     };
 
     let status_color = if info.status.to_lowercase() == "ready" {
@@ -104,4 +87,4 @@ pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
         .style(Style::default().bg(Color::Black).fg(Color::White));
 
     frame.render_widget(paragraph, area);
-}
+} // render_title

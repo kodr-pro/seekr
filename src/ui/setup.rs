@@ -1,8 +1,3 @@
-// ui/setup.rs - Setup wizard TUI
-//
-// A multi-step setup wizard rendered in the TUI for first-run configuration.
-// Guides the user through API key, model selection, and preferences.
-
 use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
@@ -13,7 +8,6 @@ use ratatui::{
 
 use crate::app::SetupState;
 
-/// The SEEKR art logo for the welcome screen
 const LOGO: &str = r#"
   ____  _____ _____ _  ______
  / ___|| ____| ____| |/ /  _ \
@@ -22,17 +16,13 @@ const LOGO: &str = r#"
  |____/|_____|_____|_|\_\_| \_\
 "#;
 
-/// Render the setup wizard
 pub fn render_setup(frame: &mut Frame, area: Rect, state: &SetupState) {
-    // Clear the area first
     frame.render_widget(Clear, area);
 
     let layout = crate::ui::layout::SetupLayout::new(area);
 
-    // Logo
     render_logo(frame, layout.header);
 
-    // Step content
     match state.current_step {
         0 => render_welcome(frame, layout.content),
         1 => render_api_key_step(frame, layout.content, state),
@@ -44,9 +34,8 @@ pub fn render_setup(frame: &mut Frame, area: Rect, state: &SetupState) {
         _ => {}
     }
 
-    // Footer with navigation hints
     render_footer(frame, layout.footer, state);
-}
+} // render_setup
 
 fn render_logo(frame: &mut Frame, area: Rect) {
     let logo = Paragraph::new(LOGO)
@@ -57,7 +46,7 @@ fn render_logo(frame: &mut Frame, area: Rect) {
         )
         .alignment(Alignment::Center);
     frame.render_widget(logo, area);
-}
+} // render_logo
 
 fn render_welcome(frame: &mut Frame, area: Rect) {
     let text = vec![
@@ -94,7 +83,7 @@ fn render_welcome(frame: &mut Frame, area: Rect) {
         .block(block)
         .alignment(Alignment::Center);
     frame.render_widget(paragraph, area);
-}
+} // render_welcome
 
 fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let masked = "*".repeat(state.api_key_input.len());
@@ -104,8 +93,7 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         masked
     };
 
-    let text =
-        vec![
+    let text = vec![
         Line::from(""),
         Line::from(Span::styled(
             "Step 1: DeepSeek API Key",
@@ -138,7 +126,7 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     } else {
         render_step_content(frame, area, text);
     }
-}
+} // render_api_key_step
 
 fn render_model_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let models = ["deepseek-chat", "deepseek-reasoner"];
@@ -151,7 +139,7 @@ fn render_model_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         ))))
         .chain(std::iter::once(Line::from("")))
         .chain(std::iter::once(Line::from(Span::styled(
-            "Select the default model (use Up/Down arrows, Enter to confirm):",
+            "Select the default model:",
             Style::default().fg(Color::Gray),
         ))))
         .chain(std::iter::once(Line::from("")))
@@ -170,7 +158,7 @@ fn render_model_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         .collect();
 
     render_step_content(frame, area, text);
-}
+} // render_model_step
 
 fn render_auto_approve_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let options = [
@@ -201,7 +189,7 @@ fn render_auto_approve_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         .collect();
 
     render_step_content(frame, area, text);
-}
+} // render_auto_approve_step
 
 fn render_working_dir_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let display = if state.working_dir_input.is_empty() {
@@ -218,7 +206,7 @@ fn render_working_dir_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Enter the default working directory (or leave as '.' for current):",
+            "Enter the default working directory:",
             Style::default().fg(Color::Gray),
         )),
         Line::from(""),
@@ -229,7 +217,7 @@ fn render_working_dir_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     ];
 
     render_step_content(frame, area, text);
-}
+} // render_working_dir_step
 
 fn render_validating_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let mut text = vec![
@@ -255,13 +243,13 @@ fn render_validating_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         )));
         text.push(Line::from(""));
         text.push(Line::from(Span::styled(
-            "Press Enter to go back and fix the API key...",
+            "Press Enter to go back...",
             Style::default().fg(Color::Yellow),
         )));
     }
 
     render_step_content(frame, area, text);
-}
+} // render_validating_step
 
 fn render_complete_step(frame: &mut Frame, area: Rect, _state: &SetupState) {
     let text = vec![
@@ -285,7 +273,7 @@ fn render_complete_step(frame: &mut Frame, area: Rect, _state: &SetupState) {
     ];
 
     render_step_content(frame, area, text);
-}
+} // render_complete_step
 
 fn render_step_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
     let block = Block::default()
@@ -297,7 +285,7 @@ fn render_step_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
-}
+} // render_step_content
 
 fn render_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
     let nav = match state.current_step {
@@ -332,4 +320,4 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
 
     let paragraph = Paragraph::new(line);
     frame.render_widget(paragraph, area);
-}
+} // render_footer

@@ -1,20 +1,13 @@
-// main.rs - Entry point for the Seekr Agent CLI
-//
-// Detects first-run (no config file) and launches either the setup wizard
-// or the main TUI application.
-
 use seekr::{app, config};
 use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing for debug logging (writes to a file so it doesn't interfere with TUI)
     init_logging();
     setup_panic_hook();
 
     let args: Vec<String> = std::env::args().collect();
     
-    // Handle 'doctor' command
     if args.len() >= 2 && args[1] == "doctor" {
         return seekr::doctor::run_diagnostics().await;
     }
@@ -25,7 +18,6 @@ async fn main() -> Result<()> {
         None
     };
 
-    // First-run detection: check if config exists
     let mut app = if config::AppConfig::exists() {
         match config::AppConfig::load() {
             Ok(cfg) => app::App::new_main(cfg),
@@ -47,13 +39,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Run the TUI event loop
     app::run_app(app).await
-}
+} // main
 
-/// Initialize tracing to a log file (non-blocking, optional)
 fn init_logging() {
-    // Only enable file logging if SEEKR_LOG is set
     if std::env::var("SEEKR_LOG").is_ok() {
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -65,9 +54,8 @@ fn init_logging() {
             .with_writer(std::sync::Mutex::new(file))
             .init();
     }
-}
+} // init_logging
 
-/// Ensure terminal is restored on panic
 fn setup_panic_hook() {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
@@ -75,4 +63,4 @@ fn setup_panic_hook() {
         ratatui::restore();
         original_hook(panic_info);
     }));
-}
+} // setup_panic_hook

@@ -1,53 +1,52 @@
-// manager.rs - System-wide manager for sessions and resources
-//
-// Centralizes logic for session management, configuration, and shared tools.
-
 use anyhow::{Result, Context};
 use crate::config::AppConfig;
 use crate::session::{Session, SessionMetadata};
 use tokio::sync::RwLock;
 
-/// Managed application state
+use std::sync::Arc;
+use crate::tools::SkillRegistry;
+
 pub struct SeekrManager {
     pub config: AppConfig,
     active_sessions: RwLock<Vec<SessionMetadata>>,
+    tool_registry: Arc<SkillRegistry>,
 }
 
 impl SeekrManager {
-    /// Create a new manager with the given config
     pub fn new(config: AppConfig) -> Self {
+        let tool_registry = Arc::new(SkillRegistry::new(Some(&config.agent.working_directory)));
         Self {
             config,
             active_sessions: RwLock::new(Vec::new()),
+            tool_registry,
         }
-    }
+    } // new
 
-    /// Load all sessions from disk
     pub async fn load_sessions(&self) -> Result<()> {
         let sessions = Session::list_all()?;
         let mut active = self.active_sessions.write().await;
         *active = sessions;
         Ok(())
-    }
+    } // load_sessions
 
-    /// List all available sessions
     pub async fn list_sessions(&self) -> Vec<SessionMetadata> {
         self.active_sessions.read().await.clone()
-    }
+    } // list_sessions
 
-    /// Resume a session by ID
     pub fn resume_session(&self, id: &str) -> Result<Session> {
-        Session::load(id)
-            .with_context(|| format!("Failed to resume session {}", id))
-    }
+        let mut session = Session::load(id)
+            .with_context(|| format!("Failed to resume session {}", id))?;
+        session.tool_registry = Some(self.tool_registry.clone());
+        Ok(session)
+    } // resume_session
 
-    /// Create a new session
     pub fn create_session(&self, title: String) -> Session {
         let id = uuid::Uuid::new_v4().to_string();
-        Session::new(id, title)
-    }
+        let mut session = Session::new(id, title);
+        session.tool_registry = Some(self.tool_registry.clone());
+        session
+    } // create_session
 
-    /// Delete a session
     pub async fn delete_session(&self, id: &str) -> Result<()> {
         let dir = Session::sessions_dir()?;
         let path = dir.join(format!("{}.json", id));
@@ -55,15 +54,13 @@ impl SeekrManager {
             std::fs::remove_file(&path)?;
         }
         
-        // Update cached list
         let mut active = self.active_sessions.write().await;
         active.retain(|s| s.id != id);
         
         Ok(())
-    }
+    } // delete_session
     
-    /// Get the system-wide tool registry
-    pub fn tool_registry(&self) -> crate::tools::SkillRegistry {
-        crate::tools::SkillRegistry::new(Some(&self.config.agent.working_directory))
-    }
-}
+    pub fn tool_registry(&self) -> Arc<SkillRegistry> {
+        self.tool_registry.clone()
+    } // tool_registry
+} // impl SeekrManager

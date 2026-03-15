@@ -133,11 +133,12 @@ async fn test_skill_registry() {
 
 #[tokio::test]
 async fn test_execute_tool_mock() {
-    use seekr::tools::execute_tool;
+    use seekr::tools::{execute_tool, SkillRegistry};
+    let registry = SkillRegistry::new(None);
     let tm = TaskManager::new();
     let args = json!({ "command": "echo 'execute_tool test'" }).to_string();
     
-    let (result, activity) = execute_tool("shell_command", &args, &tm, None, Some(1), Some(1)).await;
+    let (result, activity) = execute_tool("shell_command", &args, &tm, &registry, Some(1), Some(1)).await;
     // The shell command might output with newline or exit code, so check for the content
     // It might return "Command completed with exit code: 0" if output is empty
     // or it might contain the actual output
@@ -154,7 +155,8 @@ async fn test_execute_tool_mock() {
 
 #[tokio::test]
 async fn test_parallel_file_reads() {
-    use seekr::tools::execute_tool;
+    use seekr::tools::{execute_tool, SkillRegistry};
+    let registry = SkillRegistry::new(None);
     let tm = TaskManager::new();
     
     // Create two files
@@ -168,12 +170,14 @@ async fn test_parallel_file_reads() {
     
     let tm1 = tm.clone();
     let tm2 = tm.clone();
+    let reg1 = registry.clone();
+    let reg2 = registry.clone();
     
     let h1 = tokio::spawn(async move {
-        execute_tool("read_file", &args1, &tm1, None, Some(1), Some(2)).await
+        execute_tool("read_file", &args1, &tm1, &reg1, Some(1), Some(2)).await
     });
     let h2 = tokio::spawn(async move {
-        execute_tool("read_file", &args2, &tm2, None, Some(2), Some(2)).await
+        execute_tool("read_file", &args2, &tm2, &reg2, Some(2), Some(2)).await
     });
     
     let (res1, _) = h1.await.unwrap();
