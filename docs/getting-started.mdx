@@ -12,6 +12,24 @@ Getting started with **seekr** is straightforward. Ensure you have the necessary
 
 ## Installation
 
+### Binary Installation (Recommended)
+
+For Linux x86_64 systems, you can download the pre-compiled binary directly:
+
+1. Download the latest release from [GitHub](https://github.com/kodr-pro/seekr/releases/latest).
+2. Make it executable:
+   ```bash
+   chmod +x seekr-v0.1.0-linux-x86_64
+   ```
+3. Move it to your path:
+   ```bash
+   sudo mv seekr-v0.1.0-linux-x86_64 /usr/local/bin/seekr
+   ```
+
+### Build from Source
+
+If you prefer to build **seekr** manually, follow these steps:
+
 1. Clone the repository:
    ```bash
    git clone https://github.com/kodr-pro/seekr.git
@@ -21,12 +39,6 @@ Getting started with **seekr** is straightforward. Ensure you have the necessary
 2. Install globally:
    ```bash
    cargo install --path .
-   ```
-
-3. (Alternative) Build the project and move manually:
-   ```bash
-   cargo build --release
-   sudo cp ./target/release/seekr /usr/local/bin/
    ```
 
 ## Running the App

@@ -62,24 +62,27 @@
 
 ### Installation
 
-Clone the repository and build the project:
+#### 📦 Binary Install (Linux x86_64)
+
+The fastest way to get started is to download the pre-compiled binary from our [Latest Release](https://github.com/kodr-pro/seekr/releases/latest).
+
+```bash
+# Download the binary
+curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.1.0/seekr-v0.1.0-linux-x86_64
+
+# Make it executable and move to path
+chmod +x seekr-v0.1.0-linux-x86_64
+sudo mv seekr-v0.1.0-linux-x86_64 /usr/local/bin/seekr
+```
+
+#### 🛠️ Build from Source
+
+If you prefer to build it yourself or are using a different architecture, ensure you have [Rust](https://www.rust-lang.org/tools/install) installed:
 
 ```bash
 git clone https://github.com/kodr-pro/seekr.git
 cd seekr
-cargo build --release
-```
-
-Run the installation:
-
-```bash
 cargo install --path .
-```
-
-Alternatively, you can build and run it manually:
-
-```bash
-cargo run --release
 ```
 
 On your first run, **seekr** will guide you through a setup wizard to configure your DeepSeek API key and preferences.
@@ -168,5 +171,5 @@ Distributed under the Polyform Prosperity License 1.0.0. See `LICENSE` for more 
 ---
 
 <p align="center">
-  Built with care by [kodr](https://kodr.pro)
+  Built with care by <a href="https://kodr.pro">kodr</a>
 </p>
