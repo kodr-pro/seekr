@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crate::config::AppConfig;
-use crate::api::client::DeepSeekClient;
+use crate::api::client::ApiClient;
 use std::path::Path;
 use colored::*;
 
@@ -60,10 +60,10 @@ fn check_config() -> CheckResult {
     
     match AppConfig::load() {
         Ok(cfg) => {
-            if cfg.api.key.is_empty() {
-                CheckResult::Error("API key is empty in config.toml.".to_string())
+            if cfg.providers.is_empty() || cfg.current_provider().key.is_empty() {
+                CheckResult::Error("No providers configured or API key is empty.".to_string())
             } else {
-                CheckResult::Ok("Valid configuration found.".to_string())
+                CheckResult::Ok(format!("Valid configuration found for provider: {}", cfg.current_provider().name))
             }
         }
         Err(e) => CheckResult::Error(format!("Failed to parse config: {}", e)),
@@ -76,14 +76,15 @@ async fn check_api() -> CheckResult {
         Err(_) => return CheckResult::Error("Cannot check API without valid config.".to_string()),
     };
 
-    let client = DeepSeekClient::new(&cfg);
+    let client = ApiClient::new(&cfg);
+    let provider = cfg.current_provider();
     match client.chat_completion_stream(
         vec![crate::api::types::ChatMessage::user("ping")],
-        &cfg.api.model,
+        &provider.model,
         None,
     ).await {
-        Ok(_) => CheckResult::Ok("Connected to DeepSeek API successfully.".to_string()),
-        Err(e) => CheckResult::Error(format!("DeepSeek API error: {}", e)),
+        Ok(_) => CheckResult::Ok(format!("Connected to {} API successfully.", provider.name)),
+        Err(e) => CheckResult::Error(format!("{} API error: {}", provider.name, e)),
     }
 } // check_api
 

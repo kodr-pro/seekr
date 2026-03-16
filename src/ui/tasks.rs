@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap, Gauge},
 };
 
 use crate::tools::task::{Task, TaskStatus};
@@ -14,6 +14,7 @@ pub fn render_tasks(
     area: Rect,
     tasks: &[Task],
     activities: &[ActivityEntry],
+    live_activities: &[ActivityEntry],
     focused: bool,
 ) {
     let border_style = if focused {
@@ -25,14 +26,43 @@ pub fn render_tasks(
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
+            Constraint::Min(5),
+            Constraint::Length(if live_activities.is_empty() { 0 } else { (live_activities.len() as u16 * 2) + 2 }),
+            Constraint::Percentage(40),
         ])
         .split(area);
 
     render_task_list(frame, chunks[0], tasks, activities, border_style);
-    render_activity_log(frame, chunks[1], activities, border_style);
+    if !live_activities.is_empty() {
+        render_active_threads(frame, chunks[1], live_activities, border_style);
+    }
+    render_activity_log(frame, chunks[2], activities, border_style);
 } // render_tasks
+
+fn render_active_threads(frame: &mut Frame, area: Rect, live: &[ActivityEntry], border_style: Style) {
+    let block = Block::default()
+        .title(" Active Tools ")
+        .borders(Borders::ALL)
+        .border_style(border_style);
+    
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(live.iter().map(|_| Constraint::Length(2)).collect::<Vec<_>>())
+        .split(inner_area);
+
+    for (i, activity) in live.iter().enumerate() {
+        let label = format!(" Thread {}: {} ", activity.thread_id.unwrap_or(0), activity.tool_name);
+        let gauge = Gauge::default()
+            .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
+            .label(label)
+            .percent(50); // Indeterminate or just "Started"
+        
+        frame.render_widget(gauge, chunks[i]);
+    }
+} // render_active_threads
 
 fn render_task_list(frame: &mut Frame, area: Rect, tasks: &[Task], activities: &[ActivityEntry], border_style: Style) {
     let active_threads = activities.iter()

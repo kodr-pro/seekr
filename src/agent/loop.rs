@@ -1,5 +1,5 @@
 use tokio::sync::mpsc;
-use crate::api::client::DeepSeekClient;
+use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
@@ -42,7 +42,7 @@ pub enum AgentCommand {
 }
 
 pub struct AgentLoop {
-    client: DeepSeekClient,
+    client: ApiClient,
     config: AppConfig,
     session: Session,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -58,7 +58,7 @@ impl AgentLoop {
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
         registry: Arc<SkillRegistry>,
     ) -> Self {
-        let client = DeepSeekClient::new(&config);
+        let client = ApiClient::new(&config);
         let system_prompt = build_system_prompt(&config.agent.working_directory);
         let auto_approve = config.agent.auto_approve_tools;
 
@@ -86,7 +86,7 @@ impl AgentLoop {
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
         registry: Arc<SkillRegistry>,
     ) -> Result<Self> {
-        let client = DeepSeekClient::new(&config);
+        let client = ApiClient::new(&config);
         let mut session = Session::load(session_id)?;
         session.task_manager = session.task_manager.with_sender(event_tx.clone());
         session.tool_registry = Some(registry);
@@ -187,7 +187,7 @@ impl AgentLoop {
                 .client
                 .chat_completion_stream(
                     self.session.messages.clone(),
-                    &self.config.api.model,
+                    &self.config.current_provider().model,
                     Some(tool_defs),
                 )
                 .await;
@@ -370,7 +370,7 @@ impl AgentLoop {
             .client
             .chat_completion_stream(
                 self.session.messages.clone(),
-                &self.config.api.model,
+                &self.config.current_provider().model,
                 None,
             )
             .await;

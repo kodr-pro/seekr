@@ -3,21 +3,23 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiConfig {
+pub struct ProviderConfig {
+    pub name: String,
     pub key: String,
-    pub model: String,
     pub base_url: String,
+    pub model: String,
 }
 
-impl Default for ApiConfig {
+impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
+            name: "DeepSeek".to_string(),
             key: String::new(),
-            model: "deepseek-chat".to_string(),
             base_url: "https://api.deepseek.com".to_string(),
+            model: "deepseek-chat".to_string(),
         }
     }
-} // default
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -53,7 +55,8 @@ impl Default for UiConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    pub api: ApiConfig,
+    pub providers: Vec<ProviderConfig>,
+    pub active_provider: usize,
     pub agent: AgentConfig,
     pub ui: UiConfig,
 }
@@ -61,7 +64,8 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            api: ApiConfig::default(),
+            providers: vec![ProviderConfig::default()],
+            active_provider: 0,
             agent: AgentConfig::default(),
             ui: UiConfig::default(),
         }
@@ -69,6 +73,14 @@ impl Default for AppConfig {
 } // default
 
 impl AppConfig {
+    pub fn current_provider(&self) -> &ProviderConfig {
+        &self.providers[self.active_provider]
+    }
+
+    pub fn current_provider_mut(&mut self) -> &mut ProviderConfig {
+        &mut self.providers[self.active_provider]
+    }
+
     pub fn config_path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .context("Could not determine config directory")?;
@@ -84,9 +96,44 @@ impl AppConfig {
         let contents = std::fs::read_to_string(&path).with_context(|| {
             format!("Failed to read config from {}", path.display())
         })?;
-        let config: AppConfig = toml::from_str(&contents)
-            .with_context(|| "Failed to parse config.toml")?;
-        Ok(config)
+
+        // Handle migration from old format
+        if let Ok(config) = toml::from_str::<AppConfig>(&contents) {
+            return Ok(config);
+        }
+
+        // Try parsing as old format
+        #[derive(Deserialize)]
+        struct OldApiConfig {
+            key: String,
+            model: String,
+            base_url: String,
+        }
+        #[derive(Deserialize)]
+        struct OldAppConfig {
+            api: OldApiConfig,
+            agent: AgentConfig,
+            ui: UiConfig,
+        }
+
+        if let Ok(old) = toml::from_str::<OldAppConfig>(&contents) {
+            let config = AppConfig {
+                providers: vec![ProviderConfig {
+                    name: "DeepSeek".to_string(),
+                    key: old.api.key,
+                    base_url: old.api.base_url,
+                    model: old.api.model,
+                }],
+                active_provider: 0,
+                agent: old.agent,
+                ui: old.ui,
+            };
+            // Save migrated config
+            let _ = config.save();
+            return Ok(config);
+        }
+
+        anyhow::bail!("Failed to parse config.toml - format may be corrupted");
     } // load
 
     pub fn save(&self) -> Result<()> {

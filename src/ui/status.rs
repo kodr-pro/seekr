@@ -9,6 +9,7 @@ use ratatui::{
 pub struct StatusInfo<'a> {
     pub session_id: &'a str,
     pub connected: bool,
+    pub provider: &'a str,
     pub model: &'a str,
     pub total_tokens: u32,
     pub iteration: u32,
@@ -24,6 +25,11 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
     };
 
     let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));
+
+    let provider = Span::styled(
+        format!("Provider: {}", info.provider),
+        Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+    );
 
     let model = Span::styled(
         format!("Model: {}", info.model),
@@ -56,6 +62,8 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         session,
         separator.clone(),
         conn_indicator,
+        separator.clone(),
+        provider,
         separator.clone(),
         model,
         separator.clone(),

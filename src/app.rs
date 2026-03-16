@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::agent::{AgentCommand, AgentEvent};
-use crate::api::client::DeepSeekClient;
+use crate::api::client::ApiClient;
 use crate::config::AppConfig;
 use crate::tools::task::Task;
 use crate::tools::ActivityEntry;
@@ -23,8 +23,8 @@ pub enum AppMode {
     Main,
     QuitConfirm,
     AwaitingContinue,
-    SessionList,
     Help,
+    UnifiedMenu,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -73,19 +73,31 @@ pub struct SetupState {
     pub validating: bool,
 }
 
-impl Default for SetupState {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MenuTab {
+    Sessions,
+    Models,
+    Providers,
+    Settings,
+    Help,
+}
+
+#[derive(Debug, Clone)]
+pub struct MenuState {
+    pub active_tab: MenuTab,
+    pub selection_idx: usize,
+    pub scroll_offset: usize,
+}
+
+impl Default for MenuState {
     fn default() -> Self {
         Self {
-            current_step: 0,
-            api_key_input: String::new(),
-            model_selection: 0,
-            auto_approve_selection: 0,
-            working_dir_input: String::new(),
-            error_message: None,
-            validating: false,
+            active_tab: MenuTab::Sessions,
+            selection_idx: 0,
+            scroll_offset: 0,
         }
     }
-} // default
+}
 
 pub struct App {
     pub mode: AppMode,
@@ -111,6 +123,9 @@ pub struct App {
 
     pub tasks: Vec<Task>,
     pub activities: Vec<ActivityEntry>,
+    pub live_activities: Vec<ActivityEntry>,
+
+    pub menu_state: MenuState,
 
     pub streaming_content: String,
     pub streaming_reasoning: String,
@@ -121,8 +136,9 @@ pub struct App {
     pub session_id: Option<String>,
 
     pub sessions: Vec<crate::session::SessionMetadata>,
-    pub session_selection: usize,
     pub session_list_error: Option<String>,
+
+    pub available_models: Vec<String>,
 }
 
 impl App {
@@ -148,14 +164,24 @@ impl App {
             input_mode: InputMode::Normal,
             tasks: Vec::new(),
             activities: Vec::new(),
+            live_activities: Vec::new(),
+            menu_state: MenuState::default(),
             streaming_content: String::new(),
             streaming_reasoning: String::new(),
             is_streaming: false,
-            setup_state: SetupState::default(),
+            setup_state: SetupState {
+                current_step: 0,
+                api_key_input: String::new(),
+                model_selection: 0,
+                auto_approve_selection: 0,
+                working_dir_input: String::new(),
+                error_message: None,
+                validating: false,
+            },
             session_id: None,
             sessions: Vec::new(),
-            session_selection: 0,
             session_list_error: None,
+            available_models: Vec::new(),
         }
     } // new_setup
 
@@ -180,6 +206,10 @@ impl App {
             Some(c) => c,
             None => return,
         };
+
+        if let Some(ref tx) = self.agent_cmd_tx {
+            tx.send(AgentCommand::Shutdown).ok();
+        }
 
         let (evt_tx, evt_rx) = mpsc::unbounded_channel();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -315,7 +345,14 @@ impl App {
                     }
                 }
                 AgentEvent::Activity(entry) => {
-                    self.activities.push(entry);
+                    self.activities.push(entry.clone());
+                    if let Some(tid) = entry.thread_id {
+                        if entry.status == crate::tools::ActivityStatus::Starting {
+                            self.live_activities.push(entry);
+                        } else {
+                            self.live_activities.retain(|a| a.thread_id != Some(tid));
+                        }
+                    }
                 }
                 AgentEvent::TokenUsage { total_tokens, .. } => {
                     self.total_tokens = total_tokens;
@@ -457,24 +494,14 @@ impl App {
         }
     } // load_sessions
 
-    pub async fn show_session_list(&mut self) {
+    pub async fn open_unified_menu(&mut self) {
         self.load_sessions().await;
-        self.mode = AppMode::SessionList;
-        self.session_selection = 0;
-    } // show_session_list
+        self.mode = AppMode::UnifiedMenu;
+        self.menu_state = MenuState::default();
+    } // open_unified_menu
 
-    pub fn resume_selected_session(&mut self) {
-        if let Some(session) = self.sessions.get(self.session_selection) {
-            let id = session.id.clone();
-            self.session_id = Some(id.clone());
-            self.mode = AppMode::Main;
-            self.resume_session(id);
-            self.start_agent();
-        }
-    } // resume_selected_session
-
-    pub async fn delete_selected_session(&mut self) {
-        let session = match self.sessions.get(self.session_selection) {
+    pub async fn delete_session_at(&mut self, idx: usize) {
+        let session = match self.sessions.get(idx) {
             Some(s) => s,
             None => return,
         };
@@ -492,11 +519,7 @@ impl App {
             }
             self.sessions.retain(|s| s.id != id);
         }
-
-        if self.session_selection >= self.sessions.len() && !self.sessions.is_empty() {
-            self.session_selection = self.sessions.len() - 1;
-        }
-    } // delete_selected_session
+    } // delete_session_at
 } // impl App
 
 pub async fn run_app(mut app: App) -> Result<()> {
@@ -533,18 +556,17 @@ async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()>
                 AppMode::Setup => if handle_setup_event(app, &ev).await? { return Ok(()); },
                 AppMode::Main | AppMode::AwaitingContinue => if handle_main_event(app, &ev).await { return Ok(()); },
                 AppMode::QuitConfirm => if handle_quit_confirm(app, &ev) { return Ok(()); },
-                AppMode::SessionList | AppMode::Help => {
+                AppMode::Help => {
                     if let Event::Key(key) = &ev {
                         match key.code {
                             KeyCode::Char('q') | KeyCode::Esc => app.mode = AppMode::Main,
-                            _ => {
-                                if app.mode == AppMode::Help {
-                                    app.mode = AppMode::Main;
-                                } else if app.mode == AppMode::SessionList {
-                                    handle_session_list_event(app, key).await;
-                                }
-                            }
+                            _ => app.mode = AppMode::Main,
                         }
+                    }
+                }
+                AppMode::UnifiedMenu => {
+                    if let Event::Key(key) = &ev {
+                        handle_unified_menu_event(app, key).await;
                     }
                 }
             }
@@ -552,26 +574,129 @@ async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()>
     }
 } // event_loop
 
-async fn handle_session_list_event(app: &mut App, key: &KeyEvent) {
+async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
     match key.code {
-        KeyCode::Up => app.session_selection = app.session_selection.saturating_sub(1),
-        KeyCode::Down => app.session_selection = (app.session_selection + 1).min(app.sessions.len().saturating_sub(1)),
-        KeyCode::Enter => app.resume_selected_session(),
-        KeyCode::Char('d') | KeyCode::Delete => app.delete_selected_session().await,
+        KeyCode::Esc | KeyCode::Char('q') => app.mode = AppMode::Main,
+        KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
+            app.menu_state.active_tab = match app.menu_state.active_tab {
+                MenuTab::Sessions => MenuTab::Models,
+                MenuTab::Models => MenuTab::Providers,
+                MenuTab::Providers => MenuTab::Settings,
+                MenuTab::Settings => MenuTab::Help,
+                MenuTab::Help => MenuTab::Sessions,
+            };
+            app.menu_state.selection_idx = 0;
+            app.menu_state.scroll_offset = 0;
+        }
+        KeyCode::Char('h') | KeyCode::Left => {
+            app.menu_state.active_tab = match app.menu_state.active_tab {
+                MenuTab::Sessions => MenuTab::Help,
+                MenuTab::Models => MenuTab::Sessions,
+                MenuTab::Providers => MenuTab::Models,
+                MenuTab::Settings => MenuTab::Providers,
+                MenuTab::Help => MenuTab::Settings,
+            };
+            app.menu_state.selection_idx = 0;
+            app.menu_state.scroll_offset = 0;
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.menu_state.selection_idx = app.menu_state.selection_idx.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            let max = match app.menu_state.active_tab {
+                MenuTab::Sessions => app.sessions.len(),
+                MenuTab::Models => app.available_models.len(),
+                MenuTab::Providers => app.config.as_ref().map(|c| c.providers.len()).unwrap_or(0),
+                MenuTab::Settings => 5, // Hardcoded for now
+                MenuTab::Help => 0,
+            };
+            if app.menu_state.selection_idx + 1 < max {
+                app.menu_state.selection_idx += 1;
+            }
+        }
+        KeyCode::Enter => {
+            match app.menu_state.active_tab {
+                MenuTab::Sessions => {
+                    if let Some(session) = app.sessions.get(app.menu_state.selection_idx) {
+                        let id = session.id.clone();
+                        app.session_id = Some(id.clone());
+                        app.mode = AppMode::Main;
+                        app.resume_session(id);
+                        app.start_agent();
+                    }
+                }
+                MenuTab::Models => {
+                    if let Some(model) = app.available_models.get(app.menu_state.selection_idx) {
+                        let model_clone = model.clone();
+                        if let Some(cfg) = app.config.as_mut() {
+                            cfg.current_provider_mut().model = model_clone.clone();
+                            cfg.save().ok();
+                            app.mode = AppMode::Main;
+                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Switched to model: {}", model_clone)));
+                            app.start_agent();
+                        }
+                    }
+                }
+                MenuTab::Providers => {
+                    if let Some(cfg) = app.config.as_mut() {
+                        cfg.active_provider = app.menu_state.selection_idx;
+                        cfg.save().ok();
+                        app.mode = AppMode::Main;
+                        app.chat_entries.push(ChatEntry::SystemInfo(format!("Switched to provider: {}", cfg.current_provider().name)));
+                        app.start_agent();
+                    }
+                }
+                MenuTab::Settings => {
+                    if let Some(cfg) = app.config.as_mut() {
+                        match app.menu_state.selection_idx {
+                            0 => { /* Working Dir - could be complex to edit here */ }
+                            1 => {
+                                cfg.agent.max_iterations = match cfg.agent.max_iterations {
+                                    15 => 30,
+                                    30 => 50,
+                                    50 => 100,
+                                    100 => 200,
+                                    _ => 15,
+                                };
+                            }
+                            2 => { cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools; }
+                            4 => { 
+                                cfg.ui.show_reasoning = !cfg.ui.show_reasoning; 
+                                app.show_reasoning = cfg.ui.show_reasoning; 
+                            }
+                            _ => {}
+                        }
+                        cfg.save().ok();
+                    }
+                }
+                _ => {}
+            }
+        }
+        KeyCode::Char('d') | KeyCode::Delete => {
+            if app.menu_state.active_tab == MenuTab::Sessions {
+                app.delete_session_at(app.menu_state.selection_idx).await;
+            }
+        }
         _ => {}
     }
-} // handle_session_list_event
+} // handle_unified_menu_event
+
+async fn handle_provider_selection_event(app: &mut App, key: &KeyEvent) {}
+async fn handle_model_selection_event(app: &mut App, key: &KeyEvent) {}
+
+async fn handle_session_list_event(_app: &mut App, _key: &KeyEvent) {}
 
 fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     match app.mode {
         AppMode::Setup => ui::setup::render_setup(frame, area, &app.setup_state),
-        AppMode::Main | AppMode::QuitConfirm | AppMode::AwaitingContinue | AppMode::SessionList | AppMode::Help => {
+        AppMode::Main | AppMode::QuitConfirm | AppMode::AwaitingContinue | AppMode::Help | AppMode::UnifiedMenu => {
             render_main(frame, area, app);
             match app.mode {
                 AppMode::QuitConfirm => render_quit_dialog(frame, area),
                 AppMode::AwaitingContinue => render_continue_dialog(frame, area),
                 AppMode::Help => render_help_dialog(frame, area),
+                AppMode::UnifiedMenu => ui::menu::render_menu(frame, area, app),
                 _ => {}
             }
         }
@@ -596,6 +721,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         layout.task_panel,
         &app.tasks,
         &app.activities,
+        &app.live_activities,
         app.focus == Focus::Tasks,
     );
 
@@ -614,7 +740,8 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         shell_context,
     );
 
-    let model = app.config.as_ref().map(|c| c.api.model.as_str()).unwrap_or("unknown");
+    let model = app.config.as_ref().map(|c| c.current_provider().model.as_str()).unwrap_or("unknown");
+    let provider = app.config.as_ref().map(|c| c.current_provider().name.as_str()).unwrap_or("unknown");
     let max_iter = app.config.as_ref().map(|c| c.agent.max_iterations).unwrap_or(15);
     ui::status::render_status(
         frame,
@@ -622,6 +749,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         &ui::status::StatusInfo {
             session_id: app.session_id.as_deref().unwrap_or("none"),
             connected: app.connected,
+            provider,
             model,
             total_tokens: app.total_tokens,
             iteration: app.iteration,
@@ -632,7 +760,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 } // render_main
 
 fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let model = app.config.as_ref().map(|c| c.api.model.as_str()).unwrap_or("unknown");
+    let model = app.config.as_ref().map(|c| c.current_provider().model.as_str()).unwrap_or("unknown");
     let status = if app.is_streaming { "Working" } else { "Ready" };
 
     ui::title::render_title(frame, area, &ui::title::TitleInfo {
@@ -743,7 +871,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                     app.setup_state.validating = true;
 
                     let key = app.setup_state.api_key_input.clone();
-                    let valid = DeepSeekClient::validate_key(&key, "https://api.deepseek.com").await;
+                    let valid = ApiClient::validate_key(&key, "https://api.deepseek.com", "deepseek-chat").await;
                     app.setup_state.validating = false;
 
                     match valid {
@@ -753,7 +881,13 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                             let working_dir = if app.setup_state.working_dir_input.is_empty() { ".".to_string() } else { app.setup_state.working_dir_input.clone() };
 
                             let config = AppConfig {
-                                api: crate::config::ApiConfig { key: app.setup_state.api_key_input.clone(), model: model.to_string(), base_url: "https://api.deepseek.com".to_string() },
+                                providers: vec![crate::config::ProviderConfig {
+                                    name: "DeepSeek".to_string(),
+                                    key: app.setup_state.api_key_input.clone(),
+                                    base_url: "https://api.deepseek.com".to_string(),
+                                    model: model.to_string(),
+                                }],
+                                active_provider: 0,
                                 agent: crate::config::AgentConfig { max_iterations: 15, auto_approve_tools: auto_approve, working_directory: working_dir },
                                 ui: crate::config::UiConfig { theme: "dark".to_string(), show_reasoning: true },
                             };
@@ -790,7 +924,6 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
     if let Event::Key(KeyEvent { code, modifiers, .. }) = ev {
         if *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) { return true; }
-        if *code == KeyCode::Char('s') && modifiers.contains(KeyModifiers::CONTROL) { app.show_session_list().await; return false; }
 
         if app.mode == AppMode::Help { app.mode = AppMode::Main; return false; }
 
@@ -827,7 +960,16 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             KeyCode::Esc => app.mode = AppMode::QuitConfirm,
             KeyCode::Tab => app.focus = if app.focus == Focus::Chat { Focus::Tasks } else { Focus::Chat },
             KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => app.clear_chat(),
-            KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => app.show_reasoning = !app.show_reasoning,
+            KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
+                if let Some(cfg) = app.config.as_mut() {
+                    cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
+                    app.show_reasoning = cfg.ui.show_reasoning;
+                    cfg.save().ok();
+                }
+            }
+            KeyCode::Char('m') if modifiers.contains(KeyModifiers::CONTROL) => {
+                app.open_unified_menu().await;
+            }
             KeyCode::PageUp if app.focus == Focus::Chat => {
                 if !app.user_scrolled { app.scroll_offset = app.chat_max_scroll; }
                 app.scroll_offset = app.scroll_offset.saturating_sub(10);
@@ -928,7 +1070,7 @@ fn render_help_dialog(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from(vec![Span::styled("  Commands", Style::default().add_modifier(Modifier::BOLD))]),
         Line::from(vec![Span::styled("    Enter     ", Style::default().fg(Color::Yellow)), Span::raw(" Send message")]),
-        Line::from(vec![Span::styled("    Ctrl+S    ", Style::default().fg(Color::Yellow)), Span::raw(" Open Session List")]),
+        Line::from(vec![Span::styled("    Ctrl+M    ", Style::default().fg(Color::Yellow)), Span::raw(" Open Unified Menu (Sessions, Models, Providers, Settings)")]),
         Line::from(vec![Span::styled("    Ctrl+R    ", Style::default().fg(Color::Yellow)), Span::raw(" Toggle Reasoning visibility")]),
         Line::from(vec![Span::styled("    F1        ", Style::default().fg(Color::Yellow)), Span::raw(" Show this help menu")]),
         Line::from(vec![Span::styled("    Esc/Ctrl+C", Style::default().fg(Color::Yellow)), Span::raw(" Quit Seekr")]),

@@ -6,18 +6,19 @@ use crate::config::AppConfig;
 use super::stream::{parse_sse_stream, StreamEvent};
 use super::types::*;
 
-pub struct DeepSeekClient {
+pub struct ApiClient {
     http: Client,
     base_url: String,
     api_key: String,
 }
 
-impl DeepSeekClient {
+impl ApiClient {
     pub fn new(config: &AppConfig) -> Self {
+        let provider = config.current_provider();
         Self {
             http: Client::new(),
-            base_url: config.api.base_url.clone(),
-            api_key: config.api.key.clone(),
+            base_url: provider.base_url.clone(),
+            api_key: provider.key.clone(),
         }
     } // new
 
@@ -51,7 +52,7 @@ impl DeepSeekClient {
             .json(&request)
             .send()
             .await
-            .context("Failed to send request to DeepSeek API")?;
+            .context("Failed to send request to API")?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -74,10 +75,29 @@ impl DeepSeekClient {
     } // chat_completion_stream
 
 
-    pub async fn validate_key(api_key: &str, base_url: &str) -> Result<bool> {
+    pub async fn list_models(&self) -> Result<Vec<String>> {
+        let url = format!("{}/models", self.base_url);
+        let response = self
+            .http
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .context("Failed to fetch models from API")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to fetch models: {}", response.status());
+        }
+
+        let list: ModelList = response.json().await.context("Failed to parse model list")?;
+        Ok(list.data.into_iter().map(|m| m.id).collect())
+    } // list_models
+
+
+    pub async fn validate_key(api_key: &str, base_url: &str, model: &str) -> Result<bool> {
         let client = Client::new();
         let request = ChatCompletionRequest {
-            model: "deepseek-chat".to_string(),
+            model: model.to_string(),
             messages: vec![ChatMessage::user("Hi")],
             temperature: Some(1.0),
             max_tokens: Some(8),
@@ -99,8 +119,8 @@ impl DeepSeekClient {
             .json(&request)
             .send()
             .await
-            .context("Failed to connect to DeepSeek API")?;
+            .context("Failed to connect to API")?;
 
         Ok(response.status().is_success())
     } // validate_key
-} // impl DeepSeekClient
+} // impl ApiClient
