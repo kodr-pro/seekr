@@ -130,6 +130,11 @@ pub struct MenuState {
     pub scroll_offset: usize,
 }
 
+#[derive(Debug)]
+pub enum BgEvent {
+    ModelsFetched(Result<Vec<String>, String>),
+}
+
 impl Default for MenuState {
     fn default() -> Self {
         Self {
@@ -183,10 +188,14 @@ pub struct App {
     pub chat_selection: ChatSelection,
     pub last_chat_width: u16,
     pub clipboard: Option<arboard::Clipboard>,
+
+    pub bg_tx: tokio::sync::mpsc::UnboundedSender<BgEvent>,
+    pub bg_rx: tokio::sync::mpsc::UnboundedReceiver<BgEvent>,
 }
 
 impl App {
     pub fn new_setup() -> Self {
+        let (bg_tx, bg_rx) = tokio::sync::mpsc::unbounded_channel();
         Self {
             mode: AppMode::Setup,
             focus: Focus::Input,
@@ -229,6 +238,8 @@ impl App {
             chat_selection: ChatSelection::default(),
             last_chat_width: 80,
             clipboard: arboard::Clipboard::new().ok(),
+            bg_tx,
+            bg_rx,
         }
     } // new_setup
 
@@ -578,26 +589,37 @@ impl App {
         }
     } // load_sessions
 
-    pub async fn fetch_available_models(&mut self) {
+    pub fn poll_bg_events(&mut self) {
+        while let Ok(event) = self.bg_rx.try_recv() {
+            match event {
+                BgEvent::ModelsFetched(Ok(models)) => {
+                    self.available_models = models;
+                }
+                BgEvent::ModelsFetched(Err(e)) => {
+                    self.chat_entries
+                        .push(ChatEntry::Error(format!("Failed to fetch models: {}", e)));
+                }
+            }
+        }
+    } // poll_bg_events
+
+    pub fn fetch_available_models(&self) {
         if self.config.is_none() {
             return;
         }
-        let client = ApiClient::new(self.config.as_ref().unwrap());
-        match client.list_models().await {
-            Ok(models) => {
-                self.available_models = models;
-            }
-            Err(e) => {
-                self.chat_entries
-                    .push(ChatEntry::Error(format!("Failed to fetch models: {}", e)));
-            }
-        }
+        let config = self.config.clone().unwrap();
+        let tx = self.bg_tx.clone();
+        tokio::spawn(async move {
+            let client = ApiClient::new(&config);
+            let res = client.list_models().await.map_err(|e| e.to_string());
+            let _ = tx.send(BgEvent::ModelsFetched(res));
+        });
     } // fetch_available_models
 
     pub async fn open_unified_menu(&mut self) {
         self.load_sessions().await;
         if self.available_models.is_empty() {
-            self.fetch_available_models().await;
+            self.fetch_available_models();
         }
         self.mode = AppMode::UnifiedMenu;
         self.menu_state = MenuState::default();
@@ -781,6 +803,8 @@ async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()>
     loop {
         terminal.draw(|frame| render(frame, app))?;
 
+        app.poll_bg_events();
+
         if app.mode == AppMode::Main || app.mode == AppMode::AwaitingContinue {
             app.poll_agent_events();
         }
@@ -935,7 +959,7 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
             }
         }
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.fetch_available_models().await;
+            app.fetch_available_models();
         }
         _ => {}
     }
