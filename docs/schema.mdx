@@ -4,17 +4,24 @@
 
 ## Configuration Options
 
-The config file is split into three main sections: `[api]`, `[agent]`, and `[ui]`.
+The config file is split into main sections for providers, agent, and ui settings.
 
-### [api]
+### [[providers]]
 
-Settings related to the DeepSeek API connection.
+Settings related to your configured LLM API connections. Seekr supports multi-model configuration via the `providers` array in combination with `active_provider`.
 
 | Key | Default | Description |
 | :--- | :--- | :--- |
-| `key` | `""` | Your DeepSeek API Key. |
-| `model` | `"deepseek-chat"` | The model ID to use (e.g., `deepseek-reasoner`). |
-| `base_url` | `"https://api.deepseek.com"` | The base URL for the API. |
+| `name` | `"Seekr AI"` | A display name for the provider. |
+| `key` | `""` | Your API Key for the provider. |
+| `model` | `"gpt-4o"` | The model ID to use (e.g., `deepseek-chat`, `gpt-4o`). |
+| `base_url` | `"https://api.openai.com/v1"` | The base URL for the API. |
+
+### active_provider
+
+| Key | Default | Description |
+| :--- | :--- | :--- |
+| `active_provider` | `0` | The integer index of the currently active provider in the `providers` array. |
 
 ### [agent]
 
@@ -38,10 +45,19 @@ Customizes the look and feel of the terminal interface.
 ## Example Config
 
 ```toml
-[api]
+[[providers]]
+name = "DeepSeek"
 key = "sk-..."
 model = "deepseek-reasoner"
 base_url = "https://api.deepseek.com"
+
+[[providers]]
+name = "OpenAI"
+key = "sk-..."
+model = "gpt-4o"
+base_url = "https://api.openai.com/v1"
+
+active_provider = 0
 
 [agent]
 max_iterations = 50
