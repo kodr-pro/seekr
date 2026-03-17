@@ -29,8 +29,38 @@ pub enum AppMode {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Focus {
+    Input,
     Chat,
     Tasks,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum SelectionMode {
+    #[default]
+    Normal,
+    Visual,
+    VisualLine,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChatSelection {
+    pub vline: usize,
+    pub col: usize,
+    pub anchor_vline: Option<usize>,
+    pub anchor_col: Option<usize>,
+    pub mode: SelectionMode,
+}
+
+impl Default for ChatSelection {
+    fn default() -> Self {
+        Self {
+            vline: 0,
+            col: 0,
+            anchor_vline: None,
+            anchor_col: None,
+            mode: SelectionMode::Normal,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -44,7 +74,11 @@ pub enum InputMode {
 
 impl PartialEq for InputMode {
     fn eq(&self, other: &Self) -> bool {
-        matches!((self, other), (InputMode::Normal, InputMode::Normal) | (InputMode::ShellStdin { .. }, InputMode::ShellStdin { .. }))
+        matches!(
+            (self, other),
+            (InputMode::Normal, InputMode::Normal)
+                | (InputMode::ShellStdin { .. }, InputMode::ShellStdin { .. })
+        )
     }
 } // eq
 
@@ -60,6 +94,13 @@ pub enum ChatEntry {
     SystemInfo(String),
     ToolApproval { name: String, arguments: String },
     CliInputPrompt(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct VisualLine {
+    pub entry_idx: usize,
+    pub text: String,
+    pub is_header: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -139,13 +180,16 @@ pub struct App {
     pub session_list_error: Option<String>,
 
     pub available_models: Vec<String>,
+    pub chat_selection: ChatSelection,
+    pub last_chat_width: u16,
+    pub clipboard: Option<arboard::Clipboard>,
 }
 
 impl App {
     pub fn new_setup() -> Self {
         Self {
             mode: AppMode::Setup,
-            focus: Focus::Chat,
+            focus: Focus::Input,
             config: None,
             manager: None,
             chat_entries: Vec::new(),
@@ -182,6 +226,9 @@ impl App {
             sessions: Vec::new(),
             session_list_error: None,
             available_models: Vec::new(),
+            chat_selection: ChatSelection::default(),
+            last_chat_width: 80,
+            clipboard: arboard::Clipboard::new().ok(),
         }
     } // new_setup
 
@@ -219,7 +266,12 @@ impl App {
             crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, registry)
         } else {
             let registry = self.manager.as_ref().unwrap().tool_registry();
-            Ok(crate::agent::loop_mod::AgentLoop::new(config.clone(), evt_tx, cmd_rx, registry))
+            Ok(crate::agent::loop_mod::AgentLoop::new(
+                config.clone(),
+                evt_tx,
+                cmd_rx,
+                registry,
+            ))
         };
 
         match agent_res {
@@ -230,7 +282,8 @@ impl App {
                 self.connected = true;
             }
             Err(e) => {
-                self.chat_entries.push(ChatEntry::Error(format!("Failed to start agent: {}", e)));
+                self.chat_entries
+                    .push(ChatEntry::Error(format!("Failed to start agent: {}", e)));
             }
         }
     } // start_agent
@@ -242,7 +295,9 @@ impl App {
                 self.chat_entries.clear();
                 for msg in session.messages {
                     match (msg.role.as_str(), msg.content) {
-                        ("user", Some(content)) => self.chat_entries.push(ChatEntry::UserMessage(content)),
+                        ("user", Some(content)) => {
+                            self.chat_entries.push(ChatEntry::UserMessage(content))
+                        }
                         ("assistant", content) => {
                             if let Some(c) = content {
                                 self.chat_entries.push(ChatEntry::AssistantContent(c));
@@ -268,7 +323,8 @@ impl App {
                 self.tasks = session.task_manager.tasks();
             }
             Err(e) => {
-                self.chat_entries.push(ChatEntry::Error(format!("Failed to load session: {}", e)));
+                self.chat_entries
+                    .push(ChatEntry::Error(format!("Failed to load session: {}", e)));
             }
         }
     } // resume_session
@@ -333,13 +389,15 @@ impl App {
                 }
                 AgentEvent::ToolCallStart { name, arguments } => {
                     self.finalize_streaming();
-                    self.chat_entries.push(ChatEntry::ToolCall { name, arguments });
+                    self.chat_entries
+                        .push(ChatEntry::ToolCall { name, arguments });
                     if !self.user_scrolled {
                         self.scroll_offset = self.chat_max_scroll;
                     }
                 }
                 AgentEvent::ToolCallResult { name, result } => {
-                    self.chat_entries.push(ChatEntry::ToolResult { name, result });
+                    self.chat_entries
+                        .push(ChatEntry::ToolResult { name, result });
                     if !self.user_scrolled {
                         self.scroll_offset = self.chat_max_scroll;
                     }
@@ -381,9 +439,12 @@ impl App {
                     self.is_streaming = false;
                     self.chat_entries.push(ChatEntry::Error(msg));
                 }
-                AgentEvent::ToolApprovalRequest { name, arguments, .. } => {
+                AgentEvent::ToolApprovalRequest {
+                    name, arguments, ..
+                } => {
                     self.awaiting_approval = true;
-                    self.chat_entries.push(ChatEntry::ToolApproval { name, arguments });
+                    self.chat_entries
+                        .push(ChatEntry::ToolApproval { name, arguments });
                     if !self.user_scrolled {
                         self.scroll_offset = self.chat_max_scroll;
                     }
@@ -410,7 +471,9 @@ impl App {
             *content = self.streaming_content.clone();
             return;
         }
-        self.chat_entries.push(ChatEntry::AssistantStreaming(self.streaming_content.clone()));
+        self.chat_entries.push(ChatEntry::AssistantStreaming(
+            self.streaming_content.clone(),
+        ));
     } // end update_streaming_entry
 
     fn update_reasoning_entry(&mut self) {
@@ -420,25 +483,40 @@ impl App {
                 *text = self.streaming_reasoning.clone();
                 return;
             }
-            if !matches!(&self.chat_entries[i], ChatEntry::AssistantStreaming(_) | ChatEntry::Reasoning(_)) {
+            if !matches!(
+                &self.chat_entries[i],
+                ChatEntry::AssistantStreaming(_) | ChatEntry::Reasoning(_)
+            ) {
                 break;
             }
         }
-        
-        let insert_pos = if matches!(self.chat_entries.last(), Some(ChatEntry::AssistantStreaming(_))) {
+
+        let insert_pos = if matches!(
+            self.chat_entries.last(),
+            Some(ChatEntry::AssistantStreaming(_))
+        ) {
             self.chat_entries.len() - 1
         } else {
             self.chat_entries.len()
         };
-        self.chat_entries.insert(insert_pos, ChatEntry::Reasoning(self.streaming_reasoning.clone()));
+        self.chat_entries.insert(
+            insert_pos,
+            ChatEntry::Reasoning(self.streaming_reasoning.clone()),
+        );
     } // end update_reasoning_entry
 
     fn finalize_streaming(&mut self) {
         if !self.streaming_content.is_empty() {
-            if let Some(pos) = self.chat_entries.iter().rposition(|e| matches!(e, ChatEntry::AssistantStreaming(_))) {
-                self.chat_entries[pos] = ChatEntry::AssistantContent(self.streaming_content.clone());
+            if let Some(pos) = self
+                .chat_entries
+                .iter()
+                .rposition(|e| matches!(e, ChatEntry::AssistantStreaming(_)))
+            {
+                self.chat_entries[pos] =
+                    ChatEntry::AssistantContent(self.streaming_content.clone());
             } else {
-                self.chat_entries.push(ChatEntry::AssistantContent(self.streaming_content.clone()));
+                self.chat_entries
+                    .push(ChatEntry::AssistantContent(self.streaming_content.clone()));
             }
             self.streaming_content.clear();
         }
@@ -447,7 +525,11 @@ impl App {
 
     pub fn handle_approval(&mut self, approved: bool, always: bool) {
         self.awaiting_approval = false;
-        if let Some(pos) = self.chat_entries.iter().rposition(|e| matches!(e, ChatEntry::ToolApproval { .. })) {
+        if let Some(pos) = self
+            .chat_entries
+            .iter()
+            .rposition(|e| matches!(e, ChatEntry::ToolApproval { .. }))
+        {
             self.chat_entries.remove(pos);
         }
 
@@ -464,7 +546,9 @@ impl App {
 
     pub fn clear_chat(&mut self) {
         self.chat_entries.clear();
-        self.chat_entries.push(ChatEntry::SystemInfo("Chat cleared. Type a message to continue.".to_string()));
+        self.chat_entries.push(ChatEntry::SystemInfo(
+            "Chat cleared. Type a message to continue.".to_string(),
+        ));
         self.scroll_offset = 0;
     } // clear_chat
 
@@ -504,7 +588,8 @@ impl App {
                 self.available_models = models;
             }
             Err(e) => {
-                self.chat_entries.push(ChatEntry::Error(format!("Failed to fetch models: {}", e)));
+                self.chat_entries
+                    .push(ChatEntry::Error(format!("Failed to fetch models: {}", e)));
             }
         }
     } // fetch_available_models
@@ -538,6 +623,138 @@ impl App {
             self.sessions.retain(|s| s.id != id);
         }
     } // delete_session_at
+    pub fn calculate_visual_lines(&self, width: u16) -> Vec<VisualLine> {
+        let mut visual_lines = Vec::new();
+        if width == 0 { return visual_lines; }
+
+        for (idx, entry) in self.chat_entries.iter().enumerate() {
+            let (header, content) = match entry {
+                ChatEntry::UserMessage(msg) => (Some("[YOU]"), msg.as_str()),
+                ChatEntry::AssistantContent(text) | ChatEntry::AssistantStreaming(text) => (Some("[SEEKR]"), if text.is_empty() && matches!(entry, ChatEntry::AssistantStreaming(_)) { "..." } else { text.as_str() }),
+                ChatEntry::Reasoning(text) => (Some("[THINKING]"), text.as_str()),
+                ChatEntry::ToolCall { name, arguments } => {
+                    let args_short = if arguments.len() > 64 { format!("{}...", &arguments[..64]) } else { arguments.clone() };
+                    (None, &*format!("➞ Tool Call: {} ({})", name, args_short))
+                }
+                ChatEntry::ToolResult { name, result } => {
+                     let max_len = 2000;
+                     let display_result = if result.len() > max_len { format!("{}... (truncated)", &result[..max_len]) } else { result.clone() };
+                     (None, &*format!("✓ Tool Result: {}\n{}", name, display_result))
+                }
+                ChatEntry::Error(msg) => (Some("[ERROR]"), msg.as_str()),
+                ChatEntry::SystemInfo(msg) => (None, &*format!("[INFO] {}", msg)),
+                ChatEntry::ToolApproval { name, arguments } => (Some("[APPROVAL REQUIRED]"), &*format!("Agent wants to execute: {}({})\n  [Y]es / [N]o / [A]lways", name, arguments)),
+                ChatEntry::CliInputPrompt(prompt) => (Some("[INPUT REQUIRED]"), prompt.as_str()),
+            };
+
+            if idx > 0 {
+                visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false });
+            }
+
+            if let Some(h) = header {
+                visual_lines.push(VisualLine { entry_idx: idx, text: h.to_string(), is_header: true });
+            }
+
+            for line in content.lines() {
+                if line.is_empty() {
+                    visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false });
+                    continue;
+                }
+
+                let words = line.split_inclusive(' ');
+                let mut current_line = String::new();
+                for word in words {
+                    if current_line.chars().count() + word.chars().count() > width as usize {
+                        if !current_line.is_empty() {
+                            visual_lines.push(VisualLine { entry_idx: idx, text: current_line.clone(), is_header: false });
+                            current_line.clear();
+                        }
+                        
+                        // Handle extremely long words
+                        let mut remaining_word = word;
+                        while remaining_word.chars().count() > width as usize {
+                            let (head, tail) = remaining_word.split_at(remaining_word.char_indices().map(|(i, _)| i).nth(width as usize).unwrap_or(remaining_word.len()));
+                            visual_lines.push(VisualLine { entry_idx: idx, text: head.to_string(), is_header: false });
+                            remaining_word = tail;
+                        }
+                        current_line.push_str(remaining_word);
+                    } else {
+                        current_line.push_str(word);
+                    }
+                }
+                if !current_line.is_empty() {
+                    visual_lines.push(VisualLine { entry_idx: idx, text: current_line, is_header: false });
+                }
+            }
+        }
+        visual_lines
+    } // calculate_visual_lines
+
+    pub fn get_max_vline(&self) -> usize {
+        self.calculate_visual_lines(self.last_chat_width).len().saturating_sub(1)
+    }
+
+    pub fn get_vline_char_count(&self, vline_idx: usize) -> usize {
+        let vlines = self.calculate_visual_lines(self.last_chat_width);
+        vlines.get(vline_idx).map(|l| l.text.chars().count()).unwrap_or(0)
+    }
+
+    pub fn ensure_vline_visible(&mut self) {
+        // Simple logic to adjust scroll_offset so vline is visible
+        let visible_height = 20; // Assume some height, or adjust as needed
+        if self.chat_selection.vline < self.scroll_offset as usize {
+            self.scroll_offset = self.chat_selection.vline as u16;
+        } else if self.chat_selection.vline >= (self.scroll_offset + visible_height) as usize {
+            self.scroll_offset = (self.chat_selection.vline.saturating_sub(visible_height as usize - 1)) as u16;
+        }
+    }
+
+    pub fn get_selected_text(&self) -> Option<String> {
+        let vlines = self.calculate_visual_lines(self.last_chat_width);
+        let anchor_v = self.chat_selection.anchor_vline?;
+        let anchor_c = self.chat_selection.anchor_col.unwrap_or(0);
+        let cur_v = self.chat_selection.vline;
+        let cur_c = self.chat_selection.col;
+
+        let (start_v, start_c, end_v, end_c) = if (anchor_v, anchor_c) <= (cur_v, cur_c) {
+            (anchor_v, anchor_c, cur_v, cur_c)
+        } else {
+            (cur_v, cur_c, anchor_v, anchor_c)
+        };
+
+        if self.chat_selection.mode == SelectionMode::VisualLine {
+            let mut result = String::new();
+            for i in start_v..=end_v {
+                if let Some(line) = vlines.get(i) {
+                    if !line.is_header {
+                        result.push_str(&line.text);
+                        result.push('\n');
+                    }
+                }
+            }
+            Some(result)
+        } else {
+            let mut result = String::new();
+            for i in start_v..=end_v {
+                if let Some(line) = vlines.get(i) {
+                    if line.is_header { continue; }
+                    let chars: Vec<char> = line.text.chars().collect();
+                    let line_start = if i == start_v { start_c } else { 0 };
+                    let line_end = if i == end_v { end_c.min(chars.len().saturating_sub(1)) } else { chars.len().saturating_sub(1) };
+                    
+                    if line_start <= line_end && line_start < chars.len() {
+                        for c in &chars[line_start..=line_end] {
+                            result.push(*c);
+                        }
+                    }
+                    if i < end_v {
+                        result.push('\n');
+                    }
+                }
+            }
+            Some(result)
+        }
+    }
 } // impl App
 
 pub async fn run_app(mut app: App) -> Result<()> {
@@ -571,9 +788,21 @@ async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()>
         if event::poll(Duration::from_millis(16))? {
             let ev = event::read()?;
             match app.mode {
-                AppMode::Setup => if handle_setup_event(app, &ev).await? { return Ok(()); },
-                AppMode::Main | AppMode::AwaitingContinue => if handle_main_event(app, &ev).await { return Ok(()); },
-                AppMode::QuitConfirm => if handle_quit_confirm(app, &ev) { return Ok(()); },
+                AppMode::Setup => {
+                    if handle_setup_event(app, &ev).await? {
+                        return Ok(());
+                    }
+                }
+                AppMode::Main | AppMode::AwaitingContinue => {
+                    if handle_main_event(app, &ev).await {
+                        return Ok(());
+                    }
+                }
+                AppMode::QuitConfirm => {
+                    if handle_quit_confirm(app, &ev) {
+                        return Ok(());
+                    }
+                }
                 AppMode::Help => {
                     if let Event::Key(key) = &ev {
                         match key.code {
@@ -650,7 +879,10 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                             cfg.current_provider_mut().model = model_clone.clone();
                             cfg.save().ok();
                             app.mode = AppMode::Main;
-                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Switched to model: {}", model_clone)));
+                            app.chat_entries.push(ChatEntry::SystemInfo(format!(
+                                "Switched to model: {}",
+                                model_clone
+                            )));
                             app.start_agent();
                         }
                     }
@@ -660,7 +892,10 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                         cfg.active_provider = app.menu_state.selection_idx;
                         cfg.save().ok();
                         app.mode = AppMode::Main;
-                        app.chat_entries.push(ChatEntry::SystemInfo(format!("Switched to provider: {}", cfg.current_provider().name)));
+                        app.chat_entries.push(ChatEntry::SystemInfo(format!(
+                            "Switched to provider: {}",
+                            cfg.current_provider().name
+                        )));
                         app.start_agent();
                     }
                 }
@@ -674,13 +909,17 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                                     30 => 50,
                                     50 => 100,
                                     100 => 200,
+                                    200 => 500,
+                                    500 => 1000,
                                     _ => 15,
                                 };
                             }
-                            2 => { cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools; }
-                            4 => { 
-                                cfg.ui.show_reasoning = !cfg.ui.show_reasoning; 
-                                app.show_reasoning = cfg.ui.show_reasoning; 
+                            2 => {
+                                cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools;
+                            }
+                            4 => {
+                                cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
+                                app.show_reasoning = cfg.ui.show_reasoning;
                             }
                             _ => {}
                         }
@@ -702,12 +941,15 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
     }
 } // handle_unified_menu_event
 
-
 fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     match app.mode {
         AppMode::Setup => ui::setup::render_setup(frame, area, &app.setup_state),
-        AppMode::Main | AppMode::QuitConfirm | AppMode::AwaitingContinue | AppMode::Help | AppMode::UnifiedMenu => {
+        AppMode::Main
+        | AppMode::QuitConfirm
+        | AppMode::AwaitingContinue
+        | AppMode::Help
+        | AppMode::UnifiedMenu => {
             render_main(frame, area, app);
             match app.mode {
                 AppMode::QuitConfirm => render_quit_dialog(frame, area),
@@ -725,12 +967,16 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 
     render_title_bar(frame, layout.title_bar, app);
 
+    let inner_chat = layout.chat_panel.inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
+    let visual_lines = app.calculate_visual_lines(inner_chat.width.saturating_sub(2));
+
     app.chat_max_scroll = ui::chat::render_chat(
         frame,
         layout.chat_panel,
-        &app.chat_entries,
+        &visual_lines,
         app.scroll_offset,
         app.focus == Focus::Chat,
+        &app.chat_selection,
     );
 
     ui::tasks::render_tasks(
@@ -743,7 +989,14 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     );
 
     let (shell_context, input_prompt) = match &app.input_mode {
-        InputMode::ShellStdin { context, .. } => (if context.is_empty() { None } else { Some(context.as_str()) }, Some("Shell input required")),
+        InputMode::ShellStdin { context, .. } => (
+            if context.is_empty() {
+                None
+            } else {
+                Some(context.as_str())
+            },
+            Some("Shell input required"),
+        ),
         InputMode::Normal => (None, None),
     };
 
@@ -752,14 +1005,26 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         layout.input_bar,
         &app.input,
         app.cursor_pos,
-        !app.awaiting_approval,
+        app.focus == Focus::Input && !app.awaiting_approval,
         input_prompt,
         shell_context,
     );
 
-    let model = app.config.as_ref().map(|c| c.current_provider().model.as_str()).unwrap_or("unknown");
-    let provider = app.config.as_ref().map(|c| c.current_provider().name.as_str()).unwrap_or("unknown");
-    let max_iter = app.config.as_ref().map(|c| c.agent.max_iterations).unwrap_or(15);
+    let model = app
+        .config
+        .as_ref()
+        .map(|c| c.current_provider().model.as_str())
+        .unwrap_or("unknown");
+    let provider = app
+        .config
+        .as_ref()
+        .map(|c| c.current_provider().name.as_str())
+        .unwrap_or("unknown");
+    let max_iter = app
+        .config
+        .as_ref()
+        .map(|c| c.agent.max_iterations)
+        .unwrap_or(15);
     ui::status::render_status(
         frame,
         layout.status_bar,
@@ -777,22 +1042,30 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
 } // render_main
 
 fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let model = app.config.as_ref().map(|c| c.current_provider().model.as_str()).unwrap_or("unknown");
+    let model = app
+        .config
+        .as_ref()
+        .map(|c| c.current_provider().model.as_str())
+        .unwrap_or("unknown");
     let status = if app.is_streaming { "Working" } else { "Ready" };
 
-    ui::title::render_title(frame, area, &ui::title::TitleInfo {
-        version: "0.1.0",
-        session_id: app.session_id.as_deref(),
-        connected: app.connected,
-        model,
-        status,
-    });
+    ui::title::render_title(
+        frame,
+        area,
+        &ui::title::TitleInfo {
+            version: "0.1.0",
+            session_id: app.session_id.as_deref(),
+            connected: app.connected,
+            model,
+            status,
+        },
+    );
 } // render_title_bar
 
 fn render_quit_dialog(frame: &mut Frame, area: Rect) {
     let dialog_area = centered_rect(44, 7, area);
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
-    
+
     let block = ratatui::widgets::Block::default()
         .title(" Confirmation ")
         .borders(ratatui::widgets::Borders::ALL)
@@ -800,13 +1073,28 @@ fn render_quit_dialog(frame: &mut Frame, area: Rect) {
 
     let text = vec![
         Line::from(""),
-        Line::from(Span::styled("    Are you sure you want to quit?", Style::default().fg(Color::White).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled(
+            "    Are you sure you want to quit?",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::raw("    Press "),
-            Span::styled("[Y]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[Y]",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" to Yes, "),
-            Span::styled("[N]", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[N]",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" to No"),
         ]),
     ];
@@ -825,13 +1113,26 @@ fn render_continue_dialog(frame: &mut Frame, area: Rect) {
 
     let text = vec![
         Line::from(""),
-        Line::from(Span::styled("  The agent has used all available iterations.", Style::default().fg(Color::White))),
+        Line::from(Span::styled(
+            "  The agent has used all available iterations.",
+            Style::default().fg(Color::White),
+        )),
         Line::from(""),
         Line::from(vec![
             Span::raw("  Press "),
-            Span::styled("[C]", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[C]",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" to Continue   "),
-            Span::styled("[A]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "[A]",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" to Answer Now"),
         ]),
     ];
@@ -852,7 +1153,11 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
         }
 
         match app.setup_state.current_step {
-            0 => if key.code == KeyCode::Enter { app.setup_state.current_step = 1; },
+            0 => {
+                if key.code == KeyCode::Enter {
+                    app.setup_state.current_step = 1;
+                }
+            }
             1 => match key.code {
                 KeyCode::Enter => {
                     if !app.setup_state.api_key_input.is_empty() {
@@ -863,20 +1168,36 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                     }
                 }
                 KeyCode::Esc => app.setup_state.current_step = 0,
-                KeyCode::Backspace => { app.setup_state.api_key_input.pop(); },
-                KeyCode::Char(c) => { app.setup_state.api_key_input.push(c); app.setup_state.error_message = None; }
+                KeyCode::Backspace => {
+                    app.setup_state.api_key_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    app.setup_state.api_key_input.push(c);
+                    app.setup_state.error_message = None;
+                }
                 _ => {}
             },
             2 => match key.code {
-                KeyCode::Up => app.setup_state.model_selection = app.setup_state.model_selection.saturating_sub(1),
-                KeyCode::Down => app.setup_state.model_selection = (app.setup_state.model_selection + 1).min(3),
+                KeyCode::Up => {
+                    app.setup_state.model_selection =
+                        app.setup_state.model_selection.saturating_sub(1)
+                }
+                KeyCode::Down => {
+                    app.setup_state.model_selection = (app.setup_state.model_selection + 1).min(3)
+                }
                 KeyCode::Enter => app.setup_state.current_step = 3,
                 KeyCode::Esc => app.setup_state.current_step = 1,
                 _ => {}
             },
             3 => match key.code {
-                KeyCode::Up => app.setup_state.auto_approve_selection = app.setup_state.auto_approve_selection.saturating_sub(1),
-                KeyCode::Down => app.setup_state.auto_approve_selection = (app.setup_state.auto_approve_selection + 1).min(1),
+                KeyCode::Up => {
+                    app.setup_state.auto_approve_selection =
+                        app.setup_state.auto_approve_selection.saturating_sub(1)
+                }
+                KeyCode::Down => {
+                    app.setup_state.auto_approve_selection =
+                        (app.setup_state.auto_approve_selection + 1).min(1)
+                }
                 KeyCode::Enter => app.setup_state.current_step = 4,
                 KeyCode::Esc => app.setup_state.current_step = 2,
                 _ => {}
@@ -889,7 +1210,9 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 
                     let key = app.setup_state.api_key_input.clone();
                     // Try validating against OpenAI by default in setup wizard
-                    let valid = ApiClient::validate_key(&key, "https://api.openai.com/v1", "gpt-4o-mini").await;
+                    let valid =
+                        ApiClient::validate_key(&key, "https://api.openai.com/v1", "gpt-4o-mini")
+                            .await;
                     app.setup_state.validating = false;
 
                     match valid {
@@ -902,7 +1225,11 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                 _ => "gpt-4o",
                             };
                             let auto_approve = app.setup_state.auto_approve_selection == 1;
-                            let working_dir = if app.setup_state.working_dir_input.is_empty() { ".".to_string() } else { app.setup_state.working_dir_input.clone() };
+                            let working_dir = if app.setup_state.working_dir_input.is_empty() {
+                                ".".to_string()
+                            } else {
+                                app.setup_state.working_dir_input.clone()
+                            };
 
                             let config = AppConfig {
                                 providers: vec![crate::config::ProviderConfig {
@@ -912,33 +1239,59 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     model: model.to_string(),
                                 }],
                                 active_provider: 0,
-                                agent: crate::config::AgentConfig { max_iterations: 15, auto_approve_tools: auto_approve, working_directory: working_dir },
-                                ui: crate::config::UiConfig { theme: "dark".to_string(), show_reasoning: true },
+                                agent: crate::config::AgentConfig {
+                                    max_iterations: 15,
+                                    auto_approve_tools: auto_approve,
+                                    working_directory: working_dir,
+                                },
+                                ui: crate::config::UiConfig {
+                                    theme: "dark".to_string(),
+                                    show_reasoning: true,
+                                },
                             };
 
                             if let Err(e) = config.save() {
-                                app.setup_state.error_message = Some(format!("Failed to save config: {e}"));
+                                app.setup_state.error_message =
+                                    Some(format!("Failed to save config: {e}"));
                             } else {
-                                app.manager = Some(std::sync::Arc::new(crate::manager::SeekrManager::new(config.clone())));
+                                app.manager = Some(std::sync::Arc::new(
+                                    crate::manager::SeekrManager::new(config.clone()),
+                                ));
                                 app.config = Some(config);
                                 app.setup_state.current_step = 6;
                             }
                         }
-                        Ok(false) => { app.setup_state.error_message = Some("Invalid API key.".to_string()); }
-                        Err(e) => { app.setup_state.error_message = Some(format!("Connection error: {e}")); }
+                        Ok(false) => {
+                            app.setup_state.error_message = Some("Invalid API key.".to_string());
+                        }
+                        Err(e) => {
+                            app.setup_state.error_message = Some(format!("Connection error: {e}"));
+                        }
                     }
                 }
                 KeyCode::Esc => app.setup_state.current_step = 3,
-                KeyCode::Backspace => { app.setup_state.working_dir_input.pop(); }
-                KeyCode::Char(c) => { app.setup_state.working_dir_input.push(c); }
+                KeyCode::Backspace => {
+                    app.setup_state.working_dir_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    app.setup_state.working_dir_input.push(c);
+                }
                 _ => {}
             },
-            5 => if key.code == KeyCode::Enter { app.setup_state.current_step = 1; app.setup_state.error_message = None; },
-            6 => if key.code == KeyCode::Enter {
-                app.mode = AppMode::Main;
-                app.show_reasoning = true;
-                app.chat_entries.push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
-                app.start_agent();
+            5 => {
+                if key.code == KeyCode::Enter {
+                    app.setup_state.current_step = 1;
+                    app.setup_state.error_message = None;
+                }
+            }
+            6 => {
+                if key.code == KeyCode::Enter {
+                    app.mode = AppMode::Main;
+                    app.show_reasoning = true;
+                    app.chat_entries
+                        .push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
+                    app.start_agent();
+                }
             }
             _ => {}
         }
@@ -947,10 +1300,18 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 } // handle_setup_event
 
 pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
-    if let Event::Key(KeyEvent { code, modifiers, .. }) = ev {
-        if *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) { return true; }
+    if let Event::Key(KeyEvent {
+        code, modifiers, ..
+    }) = ev
+    {
+        if *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+            return true;
+        }
 
-        if app.mode == AppMode::Help { app.mode = AppMode::Main; return false; }
+        if app.mode == AppMode::Help {
+            app.mode = AppMode::Main;
+            return false;
+        }
 
         if app.mode == AppMode::AwaitingContinue {
             match code {
@@ -958,11 +1319,15 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     app.mode = AppMode::Main;
                     app.is_streaming = true;
                     app.user_scrolled = false;
-                    if let Some(ref tx) = app.agent_cmd_tx { tx.send(AgentCommand::Continue).ok(); }
+                    if let Some(ref tx) = app.agent_cmd_tx {
+                        tx.send(AgentCommand::Continue).ok();
+                    }
                 }
                 KeyCode::Char('a') | KeyCode::Char('A') => {
                     app.mode = AppMode::Main;
-                    if let Some(ref tx) = app.agent_cmd_tx { tx.send(AgentCommand::AnswerNow).ok(); }
+                    if let Some(ref tx) = app.agent_cmd_tx {
+                        tx.send(AgentCommand::AnswerNow).ok();
+                    }
                 }
                 _ => {}
             }
@@ -984,10 +1349,32 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             KeyCode::Char('g') if modifiers.contains(KeyModifiers::CONTROL) => {
                 app.open_unified_menu().await;
             }
-            KeyCode::Enter => { app.send_message(); app.user_scrolled = false; app.scroll_offset = app.chat_max_scroll; }
-            KeyCode::Esc => app.mode = AppMode::QuitConfirm,
-            KeyCode::Tab => app.focus = if app.focus == Focus::Chat { Focus::Tasks } else { Focus::Chat },
-            KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => app.clear_chat(),
+            KeyCode::Enter => {
+                app.send_message();
+                app.user_scrolled = false;
+                app.scroll_offset = app.chat_max_scroll;
+            }
+            KeyCode::Esc => {
+                if app.focus == Focus::Chat && app.chat_selection.mode != SelectionMode::Normal {
+                    app.chat_selection.mode = SelectionMode::Normal;
+                    app.chat_selection.anchor_vline = None;
+                    app.chat_selection.anchor_col = None;
+                } else {
+                    app.mode = AppMode::QuitConfirm;
+                }
+            }
+            KeyCode::Tab => {
+                app.focus = match app.focus {
+                    Focus::Input => Focus::Chat,
+                    Focus::Chat => Focus::Tasks,
+                    Focus::Tasks => Focus::Input,
+                };
+                app.chat_selection = ChatSelection::default();
+            }
+            KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
+                app.clear_chat();
+                app.chat_selection = ChatSelection::default();
+            }
             KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                 if let Some(cfg) = app.config.as_mut() {
                     cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
@@ -995,25 +1382,115 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     cfg.save().ok();
                 }
             }
-            KeyCode::PageUp if app.focus == Focus::Chat => {
-                if !app.user_scrolled { app.scroll_offset = app.chat_max_scroll; }
+            KeyCode::PageUp if app.focus != Focus::Tasks => {
+                if !app.user_scrolled {
+                    app.scroll_offset = app.chat_max_scroll;
+                }
                 app.scroll_offset = app.scroll_offset.saturating_sub(10);
                 app.user_scrolled = true;
             }
-            KeyCode::PageDown if app.focus == Focus::Chat => {
+            KeyCode::PageDown if app.focus != Focus::Tasks => {
                 app.scroll_offset = app.scroll_offset.saturating_add(10);
-                if app.scroll_offset >= app.chat_max_scroll { app.user_scrolled = false; }
+                if app.scroll_offset >= app.chat_max_scroll {
+                    app.user_scrolled = false;
+                }
             }
-            KeyCode::Up if app.focus == Focus::Chat => {
-                if !app.user_scrolled { app.scroll_offset = app.chat_max_scroll; }
+            KeyCode::Up if app.focus == Focus::Input => {
+                if !app.user_scrolled {
+                    app.scroll_offset = app.chat_max_scroll;
+                }
                 app.scroll_offset = app.scroll_offset.saturating_sub(1);
                 app.user_scrolled = true;
             }
-            KeyCode::Down if app.focus == Focus::Chat => {
+            KeyCode::Down if app.focus == Focus::Input => {
+                if !app.user_scrolled {
+                    app.scroll_offset = app.chat_max_scroll;
+                }
                 app.scroll_offset = app.scroll_offset.saturating_add(1);
-                if app.scroll_offset >= app.chat_max_scroll { app.user_scrolled = false; }
+                if app.scroll_offset >= app.chat_max_scroll {
+                    app.user_scrolled = false;
+                }
             }
-            KeyCode::Backspace => {
+            // Vim-style selection and navigation when Chat is focused
+            KeyCode::Char('k') | KeyCode::Up if app.focus == Focus::Chat => {
+                if app.chat_selection.vline > 0 {
+                    app.chat_selection.vline -= 1;
+                    app.chat_selection.col = app.chat_selection.col.min(app.get_vline_char_count(app.chat_selection.vline));
+                    app.ensure_vline_visible();
+                }
+            }
+            KeyCode::Char('j') | KeyCode::Down if app.focus == Focus::Chat => {
+                let max_v = app.get_max_vline();
+                if app.chat_selection.vline < max_v {
+                    app.chat_selection.vline += 1;
+                    app.chat_selection.col = app.chat_selection.col.min(app.get_vline_char_count(app.chat_selection.vline));
+                    app.ensure_vline_visible();
+                }
+            }
+            KeyCode::Char('h') | KeyCode::Left if app.focus == Focus::Chat => {
+                app.chat_selection.col = app.chat_selection.col.saturating_sub(1);
+            }
+            KeyCode::Char('l') | KeyCode::Right if app.focus == Focus::Chat => {
+                let max_c = app.get_vline_char_count(app.chat_selection.vline);
+                if app.chat_selection.col < max_c {
+                    app.chat_selection.col += 1;
+                }
+            }
+            KeyCode::Char('v') if app.focus == Focus::Chat => {
+                if app.chat_selection.mode == SelectionMode::Visual {
+                    app.chat_selection.mode = SelectionMode::Normal;
+                    app.chat_selection.anchor_vline = None;
+                    app.chat_selection.anchor_col = None;
+                } else {
+                    app.chat_selection.mode = SelectionMode::Visual;
+                    app.chat_selection.anchor_vline = Some(app.chat_selection.vline);
+                    app.chat_selection.anchor_col = Some(app.chat_selection.col);
+                }
+            }
+            KeyCode::Char('V') if app.focus == Focus::Chat => {
+                if app.chat_selection.mode == SelectionMode::VisualLine {
+                    app.chat_selection.mode = SelectionMode::Normal;
+                    app.chat_selection.anchor_vline = None;
+                    app.chat_selection.anchor_col = None;
+                } else {
+                    app.chat_selection.mode = SelectionMode::VisualLine;
+                    app.chat_selection.anchor_vline = Some(app.chat_selection.vline);
+                    app.chat_selection.anchor_col = None;
+                }
+            }
+            KeyCode::Char('y') if app.focus == Focus::Chat => {
+                if let Some(text) = app.get_selected_text() {
+                    if let Some(clipboard) = &mut app.clipboard {
+                        if let Err(e) = clipboard.set_text(text) {
+                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
+                        } else {
+                            app.chat_entries.push(ChatEntry::SystemInfo("Selected text copied to clipboard!".to_string()));
+                            app.chat_selection.mode = SelectionMode::Normal;
+                            app.chat_selection.anchor_vline = None;
+                            app.chat_selection.anchor_col = None;
+                        }
+                    } else {
+                        // Try to re-initialize if it was initially failed
+                        match arboard::Clipboard::new() {
+                            Ok(mut new_clipboard) => {
+                                if let Err(e) = new_clipboard.set_text(text) {
+                                    app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
+                                } else {
+                                    app.chat_entries.push(ChatEntry::SystemInfo("Selected text copied to clipboard!".to_string()));
+                                    app.chat_selection.mode = SelectionMode::Normal;
+                                    app.chat_selection.anchor_vline = None;
+                                    app.chat_selection.anchor_col = None;
+                                }
+                                app.clipboard = Some(new_clipboard);
+                            }
+                            Err(e) => {
+                                app.chat_entries.push(ChatEntry::SystemInfo(format!("Failed to initialize clipboard: {}", e)));
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Backspace if app.focus == Focus::Input => {
                 if app.cursor_pos > 0 {
                     let mut chars: Vec<char> = app.input.chars().collect();
                     if app.cursor_pos <= chars.len() {
@@ -1023,7 +1500,7 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     }
                 }
             }
-            KeyCode::Delete => {
+            KeyCode::Delete if app.focus == Focus::Input => {
                 let chars: Vec<char> = app.input.chars().collect();
                 if app.cursor_pos < chars.len() {
                     let mut new_chars = chars;
@@ -1031,11 +1508,11 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     app.input = new_chars.into_iter().collect();
                 }
             }
-            KeyCode::Left => app.cursor_pos = app.cursor_pos.saturating_sub(1),
-            KeyCode::Right => app.cursor_pos = (app.cursor_pos + 1).min(app.input.chars().count()),
-            KeyCode::Home => app.cursor_pos = 0,
-            KeyCode::End => app.cursor_pos = app.input.chars().count(),
-            KeyCode::Char(c) => {
+            KeyCode::Left if app.focus == Focus::Input => app.cursor_pos = app.cursor_pos.saturating_sub(1),
+            KeyCode::Right if app.focus == Focus::Input => app.cursor_pos = (app.cursor_pos + 1).min(app.input.chars().count()),
+            KeyCode::Home if app.focus == Focus::Input => app.cursor_pos = 0,
+            KeyCode::End if app.focus == Focus::Input => app.cursor_pos = app.input.chars().count(),
+            KeyCode::Char(c) if app.focus == Focus::Input => {
                 let mut chars: Vec<char> = app.input.chars().collect();
                 if app.cursor_pos <= chars.len() {
                     chars.insert(app.cursor_pos, *c);
@@ -1049,16 +1526,22 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             _ => {}
         }
     } else if let Event::Mouse(MouseEvent { kind, .. }) = ev {
-        if app.focus == Focus::Chat {
+        if app.focus == Focus::Chat || app.focus == Focus::Input {
             match kind {
                 MouseEventKind::ScrollUp => {
-                    if !app.user_scrolled { app.scroll_offset = app.chat_max_scroll; }
+                    if !app.user_scrolled {
+                        app.scroll_offset = app.chat_max_scroll;
+                    }
                     app.scroll_offset = app.scroll_offset.saturating_sub(3);
                     app.user_scrolled = true;
                 }
                 MouseEventKind::ScrollDown => {
                     app.scroll_offset = app.scroll_offset.saturating_add(3);
-                    if app.scroll_offset >= app.chat_max_scroll { app.user_scrolled = false; } else { app.user_scrolled = true; }
+                    if app.scroll_offset >= app.chat_max_scroll {
+                        app.user_scrolled = false;
+                    } else {
+                        app.user_scrolled = true;
+                    }
                 }
                 _ => {}
             }
@@ -1081,7 +1564,7 @@ fn handle_quit_confirm(app: &mut App, ev: &Event) -> bool {
 fn render_help_dialog(frame: &mut Frame, area: Rect) {
     let dialog_area = centered_rect(60, 14, area);
     frame.render_widget(ratatui::widgets::Clear, dialog_area);
-    
+
     let block = ratatui::widgets::Block::default()
         .title(" Seekr Help & Shortcuts ")
         .borders(ratatui::widgets::Borders::ALL)
@@ -1089,17 +1572,55 @@ fn render_help_dialog(frame: &mut Frame, area: Rect) {
 
     let text = vec![
         Line::from(""),
-        Line::from(vec![Span::styled("  Navigation", Style::default().add_modifier(Modifier::BOLD))]),
-        Line::from(vec![Span::styled("    Tab       ", Style::default().fg(Color::Yellow)), Span::raw(" Switch focus between Chat and Tasks")]),
-        Line::from(vec![Span::styled("    Up/Down   ", Style::default().fg(Color::Yellow)), Span::raw(" Scroll chat or task list")]),
+        Line::from(vec![Span::styled(
+            "  Navigation",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("    Tab       ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Cycle focus: Input ➔ Chat ➔ Tasks"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Up/Down   ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Scroll Chat (Input focus) or Select (Chat focus)"),
+        ]),
         Line::from(""),
-        Line::from(vec![Span::styled("    Enter     ", Style::default().fg(Color::Yellow)), Span::raw(" Send message")]),
-        Line::from(vec![Span::styled("    Ctrl+g    ", Style::default().fg(Color::Yellow)), Span::raw(" Open Unified Menu (Sessions, Models, Providers, Settings)")]),
-        Line::from(vec![Span::styled("    Ctrl+r    ", Style::default().fg(Color::Yellow)), Span::raw(" Toggle Reasoning visibility")]),
-        Line::from(vec![Span::styled("    F1        ", Style::default().fg(Color::Yellow)), Span::raw(" Show this help menu")]),
-        Line::from(vec![Span::styled("    Esc/Ctrl+c", Style::default().fg(Color::Yellow)), Span::raw(" Quit Seekr")]),
+        Line::from(vec![Span::styled(
+            "  Chat Selection (Focus on Chat panel)",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("    j/k       ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Move selection up/down"),
+        ]),
+        Line::from(vec![
+            Span::styled("    y/c       ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Yank (Copy) selected message to clipboard"),
+        ]),
         Line::from(""),
-        Line::from(vec![Span::raw("  Press "), Span::styled("any key", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw(" to close")]),
+        Line::from(vec![
+            Span::styled("    Enter     ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Send message"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Ctrl+g    ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Open Unified Menu"),
+        ]),
+        Line::from(vec![
+            Span::styled("    Esc       ", Style::default().fg(Color::Yellow)),
+            Span::raw(" Quit Seekr"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  Press "),
+            Span::styled(
+                "any key",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" to close"),
+        ]),
     ];
 
     frame.render_widget(Paragraph::new(text).block(block), dialog_area);

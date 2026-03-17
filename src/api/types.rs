@@ -6,6 +6,8 @@ pub struct ChatMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
@@ -16,6 +18,7 @@ impl ChatMessage {
         Self {
             role: "system".to_string(),
             content: Some(content.to_string()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -25,6 +28,7 @@ impl ChatMessage {
         Self {
             role: "user".to_string(),
             content: Some(content.to_string()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
@@ -34,15 +38,17 @@ impl ChatMessage {
         Self {
             role: "assistant".to_string(),
             content: Some(content.to_string()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: None,
         }
     } // assistant
 
-    pub fn assistant_with_tool_calls(content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
+    pub fn assistant_with_tool_calls(content: Option<String>, reasoning_content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
         Self {
             role: "assistant".to_string(),
             content,
+            reasoning_content,
             tool_calls: Some(tool_calls),
             tool_call_id: None,
         }
@@ -52,6 +58,7 @@ impl ChatMessage {
         Self {
             role: "tool".to_string(),
             content: Some(content.to_string()),
+            reasoning_content: None,
             tool_calls: None,
             tool_call_id: Some(tool_call_id.to_string()),
         }

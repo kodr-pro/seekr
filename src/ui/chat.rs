@@ -2,13 +2,20 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use crate::app::{ChatSelection, SelectionMode, VisualLine};
+use std::cmp::min;
 
-use crate::app::ChatEntry;
-
-pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_offset: u16, focused: bool) -> u16 {
+pub fn render_chat(
+    frame: &mut Frame,
+    area: Rect,
+    visual_lines: &[VisualLine],
+    scroll_offset: u16,
+    focused: bool,
+    selection: &ChatSelection,
+) -> u16 {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
@@ -26,142 +33,90 @@ pub fn render_chat(frame: &mut Frame, area: Rect, entries: &[ChatEntry], scroll_
         return 0;
     }
 
-    let mut all_text = Text::default();
-
-    for (idx, entry) in entries.iter().enumerate() {
-        if idx > 0 {
-            all_text.push_line(Line::from(""));
-        }
-
-        match entry {
-            ChatEntry::UserMessage(msg) => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled("● You", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                ]));
-                all_text.push_line(Line::from(vec![
-                    Span::styled(msg.as_str(), Style::default().fg(Color::White)),
-                ]));
-            }
-            ChatEntry::AssistantContent(text) | ChatEntry::AssistantStreaming(text) => {
-                let is_streaming = matches!(entry, ChatEntry::AssistantStreaming(_));
-                all_text.push_line(Line::from(vec![
-                    Span::styled("● Assistant", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-                ]));
-                
-                let processed = if text.is_empty() && is_streaming { "..." } else { text.as_str() };
-                for line in processed.lines() {
-                    all_text.push_line(Line::from(vec![
-                        Span::styled(line, Style::default().fg(Color::White)),
-                    ]));
-                }
-
-                if is_streaming && !text.ends_with("...") {
-                     if let Some(last_line) = all_text.lines.last_mut() {
-                        last_line.spans.push(Span::styled(" ▂", Style::default().fg(Color::Cyan).add_modifier(Modifier::SLOW_BLINK)));
-                     }
-                }
-            }
-            ChatEntry::Reasoning(text) => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled("◌ Thinking", Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC | Modifier::DIM)),
-                ]));
-                for line in text.lines() {
-                    if !line.trim().is_empty() {
-                        all_text.push_line(Line::from(vec![
-                            Span::styled(line, Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM)),
-                        ]));
-                    }
-                }
-            }
-            ChatEntry::ToolCall { name, arguments } => {
-                let args_short = if arguments.len() > 64 {
-                    format!("{}...", &arguments[..64])
-                } else {
-                    arguments.clone()
-                };
-                all_text.push_line(Line::from(vec![
-                    Span::styled("➞ Tool Call: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)),
-                    Span::styled(name.as_str(), Style::default().fg(Color::Magenta)),
-                    Span::styled(format!(" ({})", args_short), Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)),
-                ]));
-            }
-            ChatEntry::ToolResult { name, result } => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled("✓ Tool Result: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
-                    Span::styled(name.as_str(), Style::default().fg(Color::Blue)),
-                ]));
-
-                let max_len = 2000;
-                let display_result = if result.len() > max_len {
-                    format!("{}... (truncated)", &result[..max_len])
-                } else {
-                    result.clone()
-                };
-
-                for line in display_result.lines() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        all_text.push_line(Line::from(vec![
-                            Span::styled("  ", Style::default()),
-                            Span::styled(trimmed.to_string(), Style::default().fg(Color::DarkGray)),
-                        ]));
-                    }
-                }
-            }
-            ChatEntry::Error(msg) => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled("✖ Error", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
-                ]));
-                all_text.push_line(Line::from(vec![
-                    Span::styled(msg.as_str(), Style::default().fg(Color::Red)),
-                ]));
-            }
-            ChatEntry::SystemInfo(msg) => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled(format!("ℹ {}", msg), Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM)),
-                ]));
-            }
-            ChatEntry::ToolApproval { name, arguments } => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled("‼ Approval Required", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                ]));
-                all_text.push_line(Line::from(vec![
-                    Span::styled(format!("Agent wants to execute: {}({})", name, arguments), Style::default().fg(Color::White)),
-                ]));
-                all_text.push_line(Line::from(vec![
-                    Span::styled("  [Y]es / [N]o / [A]lways", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                ]));
-            }
-            ChatEntry::CliInputPrompt(prompt) => {
-                all_text.push_line(Line::from(vec![
-                    Span::styled("⌨ Input Required", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                ]));
-                all_text.push_line(Line::from(vec![
-                    Span::styled(prompt.as_str(), Style::default().fg(Color::White)),
-                ]));
-            }
-        }
-    }
-
-    let wrap_width = inner.width;
-    let mut total_lines = 0;
-    for line in all_text.lines.iter() {
-        let line_width = line.width();
-        if line_width == 0 {
-            total_lines += 1;
-        } else {
-            total_lines += (line_width as u16 + wrap_width - 1).saturating_div(wrap_width.max(1));
-        }
-    }
-
+    let total_lines = visual_lines.len();
     let visible_height = inner.height;
-    let max_scroll = total_lines.saturating_sub(visible_height);
-    let effective_scroll = scroll_offset.min(max_scroll);
+    let max_scroll = total_lines.saturating_sub(visible_height as usize) as u16;
+    let effective_scroll = scroll_offset.min(max_scroll) as usize;
 
-    let paragraph = Paragraph::new(all_text)
-        .block(block)
-        .wrap(Wrap { trim: false })
-        .scroll((effective_scroll, 0));
+    let mut lines_to_render = Vec::new();
+    
+    // Determine selection range
+    let (sel_start_v, sel_start_c, sel_end_v, sel_end_c) = if let Some(av) = selection.anchor_vline {
+        let ac = selection.anchor_col.unwrap_or(0);
+        let (s_v, s_c, e_v, e_c) = if (av, ac) <= (selection.vline, selection.col) {
+            (av, ac, selection.vline, selection.col)
+        } else {
+            (selection.vline, selection.col, av, ac)
+        };
+        
+        if selection.mode == SelectionMode::VisualLine {
+            (s_v, 0, e_v, visual_lines.get(e_v).map(|l| l.text.chars().count()).unwrap_or(0))
+        } else {
+            (s_v, s_c, e_v, e_c)
+        }
+    } else {
+        (0, 0, 0, 0)
+    };
+
+    let has_selection = selection.mode != SelectionMode::Normal && selection.anchor_vline.is_some();
+
+    for vidx in effective_scroll..min(effective_scroll + visible_height as usize, total_lines) {
+        let vline = &visual_lines[vidx];
+        let mut spans = Vec::new();
+        
+        let base_style = if vline.is_header {
+             match vline.text.as_str() {
+                "[YOU]" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                "[SEEKR]" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                "[THINKING]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC | Modifier::DIM),
+                "[ERROR]" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                "[INPUT REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            }
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        if vline.text.is_empty() {
+            lines_to_render.push(Line::from(""));
+            continue;
+        }
+
+        let chars: Vec<char> = vline.text.chars().collect();
+        for (cidx, &c) in chars.iter().enumerate() {
+            let mut char_style = base_style;
+            
+            // Apply selection highlight
+            let in_selection = has_selection && (
+                (vidx > sel_start_v && vidx < sel_end_v) ||
+                (vidx == sel_start_v && vidx == sel_end_v && cidx >= sel_start_c && cidx <= sel_end_c) ||
+                (vidx == sel_start_v && vidx < sel_end_v && cidx >= sel_start_c) ||
+                (vidx == sel_end_v && vidx > sel_start_v && cidx <= sel_end_c)
+            );
+
+            if in_selection {
+                char_style = char_style.bg(Color::Rgb(60, 60, 100));
+            }
+
+            // Apply cursor highlight
+            if focused && vidx == selection.vline && cidx == selection.col {
+                char_style = char_style.bg(Color::White).fg(Color::Black).remove_modifier(Modifier::DIM);
+            }
+            
+            spans.push(Span::styled(c.to_string(), char_style));
+        }
+
+        // Handle cursor at end of line
+        if focused && vidx == selection.vline && selection.col >= chars.len() {
+            spans.push(Span::styled(" ", Style::default().bg(Color::White).fg(Color::Black)));
+        }
+
+        lines_to_render.push(Line::from(spans));
+    }
+
+    let paragraph = Paragraph::new(lines_to_render)
+        .block(block);
 
     frame.render_widget(paragraph, area);
 

@@ -201,6 +201,7 @@ impl AgentLoop {
             };
 
             let mut content_buf = String::new();
+            let mut reasoning_buf = String::new();
             let mut tool_calls: Vec<ToolCall> = Vec::new();
 
             loop {
@@ -212,6 +213,7 @@ impl AgentLoop {
                                 self.event_tx.send(AgentEvent::ContentDelta(text)).ok();
                             }
                             StreamEvent::ReasoningDelta(text) => {
+                                reasoning_buf.push_str(&text);
                                 self.event_tx.send(AgentEvent::ReasoningDelta(text)).ok();
                             }
                             StreamEvent::ToolCallComplete(tc) => {
@@ -252,8 +254,16 @@ impl AgentLoop {
 
             if !tool_calls.is_empty() {
                 let content = if content_buf.is_empty() { None } else { Some(content_buf.clone()) };
+                // DeepSeek reasoner requires reasoning_content to be present when tool_calls are used.
+                let reasoning = if self.config.current_provider().model.contains("reasoner") || !reasoning_buf.is_empty() {
+                    Some(reasoning_buf.clone())
+                } else {
+                    None
+                };
+
                 self.session.messages.push(ChatMessage::assistant_with_tool_calls(
                     content,
+                    reasoning,
                     tool_calls.clone(),
                 ));
 
@@ -529,6 +539,7 @@ mod tests {
         let tc_id = "test_id".to_string();
         agent.session.messages.push(ChatMessage::assistant_with_tool_calls(
             None,
+            None,
             vec![ToolCall {
                 id: tc_id.clone(),
                 call_type: "function".to_string(),
@@ -561,6 +572,7 @@ mod tests {
         
         let tc_id = "tc1".to_string();
         agent.session.messages.push(ChatMessage::assistant_with_tool_calls(
+            None,
             None,
             vec![ToolCall {
                 id: tc_id.clone(),
