@@ -39,6 +39,7 @@ pub enum AgentCommand {
     Continue,
     AnswerNow,
     Shutdown,
+    ContextSummarized { id: String, summary: String },
 }
 
 pub struct AgentLoop {
@@ -47,6 +48,7 @@ pub struct AgentLoop {
     session: Session,
     event_tx: mpsc::UnboundedSender<AgentEvent>,
     command_rx: mpsc::UnboundedReceiver<AgentCommand>,
+    command_tx: mpsc::UnboundedSender<AgentCommand>,
     auto_approve: bool,
     iteration: u32,
 }
@@ -56,6 +58,7 @@ impl AgentLoop {
         config: AppConfig,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
+        command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
     ) -> Self {
         let client = ApiClient::new(&config);
@@ -74,6 +77,7 @@ impl AgentLoop {
             session,
             event_tx,
             command_rx,
+            command_tx,
             auto_approve,
             iteration: 0,
         }
@@ -84,6 +88,7 @@ impl AgentLoop {
         session_id: &str,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
+        command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
     ) -> Result<Self> {
         let client = ApiClient::new(&config);
@@ -98,6 +103,7 @@ impl AgentLoop {
             session,
             event_tx,
             command_rx,
+            command_tx,
             auto_approve,
             iteration: 0,
         })
@@ -125,6 +131,13 @@ impl AgentLoop {
                         }
                         AgentCommand::ToolAlwaysApprove => {
                             self.auto_approve = true;
+                        }
+                        AgentCommand::ContextSummarized { id, summary } => {
+                            let search_str = format!("[Summarizing context segment {}...]", id);
+                            if let Some(msg) = self.session.messages.iter_mut().find(|m| m.role == "system" && m.content.as_deref() == Some(search_str.as_str())) {
+                                msg.content = Some(format!("--- PAST CONTEXT SUMMARY ---\n{}\n----------------------------", summary));
+                                self.session.save().ok();
+                            }
                         }
                         AgentCommand::Shutdown => break,
                         _ => {}
@@ -421,7 +434,7 @@ impl AgentLoop {
     } // do_final_answer
 
     fn prune_messages(&mut self) {
-        const MAX_MESSAGES: usize = 100;
+        const MAX_MESSAGES: usize = 40;
 
         if self.session.messages.len() <= MAX_MESSAGES {
             return;
@@ -441,15 +454,9 @@ impl AgentLoop {
             }
         }
 
-        let mut new_messages = Vec::new();
-        if self.session.messages.len() > keep_initial {
-            new_messages.extend(self.session.messages.iter().take(keep_initial).cloned());
-        }
-
         let total = self.session.messages.len();
-        let remaining_slots = MAX_MESSAGES.saturating_sub(new_messages.len());
-        
-        let mut start = total.saturating_sub(remaining_slots);
+        let msg_to_keep = (MAX_MESSAGES / 2).max(10);
+        let mut start = total.saturating_sub(msg_to_keep);
 
         while start < total {
             let role = self.session.messages[start].role.as_str();
@@ -461,11 +468,52 @@ impl AgentLoop {
             break;
         }
 
+        if start <= keep_initial {
+            return;
+        }
+        
+        // Extract the messages we're removing so we can summarize them
+        let messages_to_summarize = self.session.messages[keep_initial..start].to_vec();
+
+        let mut new_messages = Vec::new();
+        if self.session.messages.len() > keep_initial {
+            new_messages.extend(self.session.messages.iter().take(keep_initial).cloned());
+        }
+
+        let summary_id = uuid::Uuid::new_v4().to_string();
+        new_messages.push(ChatMessage::system(&format!("[Summarizing context segment {}...]", summary_id)));
+
         if start < total {
             new_messages.extend(self.session.messages[start..].iter().cloned());
         }
         
         self.session.messages = new_messages;
+
+        // Spawn summarizer task
+        let client = self.client.clone();
+        let cmd_tx = self.command_tx.clone();
+        let model = self.config.current_provider().model.clone();
+
+        tokio::spawn(async move {
+            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, and relevant tool outputs. Be highly concise but technically precise.".to_string();
+            
+            let mut summary_messages = vec![ChatMessage::system(&pt)];
+            let mut conversation_text = String::new();
+            for m in messages_to_summarize {
+                conversation_text.push_str(&format!("{}: {}\n\n", m.role, m.content.as_deref().unwrap_or("[No content]")));
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        conversation_text.push_str(&format!("Tool Call: {}({})\n", tc.function.name, tc.function.arguments));
+                    }
+                }
+            }
+            
+            summary_messages.push(ChatMessage::user(&format!("Please summarize the following conversation history:\n\n{}", conversation_text)));
+            
+            if let Ok(summary) = client.chat_completion(summary_messages, &model).await {
+                cmd_tx.send(AgentCommand::ContextSummarized { id: summary_id, summary }).ok();
+            }
+        });
     } // prune_messages
 
     pub fn task_manager(&self) -> &TaskManager {
@@ -484,6 +532,13 @@ impl AgentLoop {
                 Ok(AgentCommand::Shutdown) => return DrainResult::Shutdown,
                 Ok(AgentCommand::ToolAlwaysApprove) => {
                     self.auto_approve = true;
+                }
+                Ok(AgentCommand::ContextSummarized { id, summary }) => {
+                    let search_str = format!("[Summarizing context segment {}...]", id);
+                    if let Some(msg) = self.session.messages.iter_mut().find(|m| m.role == "system" && m.content.as_deref() == Some(search_str.as_str())) {
+                        msg.content = Some(format!("--- PAST CONTEXT SUMMARY ---\n{}\n----------------------------", summary));
+                        self.session.save().ok();
+                    }
                 }
                 Ok(_) => {}
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
@@ -521,13 +576,13 @@ mod tests {
     fn create_test_loop() -> AgentLoop {
         let config = AppConfig::default();
         let (event_tx, _) = mpsc::unbounded_channel();
-        let (_, command_rx) = mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::unbounded_channel();
         let registry = Arc::new(SkillRegistry::new(None));
-        AgentLoop::new(config, event_tx, command_rx, registry)
+        AgentLoop::new(config, event_tx, command_rx, command_tx, registry)
     } // create_test_loop
 
-    #[test]
-    fn test_prune_messages_no_orphaned_tools() {
+    #[tokio::test]
+    async fn test_prune_messages_no_orphaned_tools() {
         let mut agent = create_test_loop();
         
         agent.session.messages.clear();
@@ -561,8 +616,8 @@ mod tests {
         assert!(prev_msg.tool_calls.is_some());
     } // test_prune_messages_no_orphaned_tools
 
-    #[test]
-    fn test_prune_messages_keep_initial_expansion() {
+    #[tokio::test]
+    async fn test_prune_messages_keep_initial_expansion() {
         let mut agent = create_test_loop();
         
         agent.session.messages.clear();

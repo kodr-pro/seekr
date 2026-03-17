@@ -274,13 +274,14 @@ impl App {
 
         let agent_res = if let Some(sid) = &self.session_id {
             let registry = self.manager.as_ref().unwrap().tool_registry();
-            crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, registry)
+            crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, cmd_tx.clone(), registry)
         } else {
             let registry = self.manager.as_ref().unwrap().tool_registry();
             Ok(crate::agent::loop_mod::AgentLoop::new(
                 config.clone(),
                 evt_tx,
                 cmd_rx,
+                cmd_tx.clone(),
                 registry,
             ))
         };
@@ -1394,6 +1395,10 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     Focus::Tasks => Focus::Input,
                 };
                 app.chat_selection = ChatSelection::default();
+                if app.focus == Focus::Chat {
+                    app.chat_selection.vline = app.get_max_vline();
+                    app.ensure_vline_visible();
+                }
             }
             KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
                 app.clear_chat();

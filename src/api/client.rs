@@ -6,6 +6,7 @@ use crate::config::AppConfig;
 use super::stream::{parse_sse_stream, StreamEvent};
 use super::types::*;
 
+#[derive(Clone)]
 pub struct ApiClient {
     http: Client,
     base_url: String,
@@ -74,6 +75,54 @@ impl ApiClient {
         Ok(rx)
     } // chat_completion_stream
 
+    pub async fn chat_completion(
+        &self,
+        messages: Vec<ChatMessage>,
+        model: &str,
+    ) -> Result<String> {
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages,
+            temperature: Some(0.7),
+            max_tokens: Some(4096),
+            top_p: None,
+            stream: false,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let url = format!("{}/chat/completions", self.base_url);
+        let response = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send request to API")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "Failed to read error body".to_string());
+            anyhow::bail!("API request failed ({}): {}", status, body);
+        }
+
+        let result: serde_json::Value = response.json().await.context("Failed to parse JSON response")?;
+        
+        if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
+            Ok(content.to_string())
+        } else {
+            anyhow::bail!("No content in API response")
+        }
+    } // chat_completion
 
     pub async fn list_models(&self) -> Result<Vec<String>> {
         let url = format!("{}/models", self.base_url);
