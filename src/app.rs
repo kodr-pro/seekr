@@ -494,8 +494,26 @@ impl App {
         }
     } // load_sessions
 
+    pub async fn fetch_available_models(&mut self) {
+        if self.config.is_none() {
+            return;
+        }
+        let client = ApiClient::new(self.config.as_ref().unwrap());
+        match client.list_models().await {
+            Ok(models) => {
+                self.available_models = models;
+            }
+            Err(e) => {
+                self.chat_entries.push(ChatEntry::Error(format!("Failed to fetch models: {}", e)));
+            }
+        }
+    } // fetch_available_models
+
     pub async fn open_unified_menu(&mut self) {
         self.load_sessions().await;
+        if self.available_models.is_empty() {
+            self.fetch_available_models().await;
+        }
         self.mode = AppMode::UnifiedMenu;
         self.menu_state = MenuState::default();
     } // open_unified_menu
@@ -681,10 +699,6 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
     }
 } // handle_unified_menu_event
 
-async fn handle_provider_selection_event(app: &mut App, key: &KeyEvent) {}
-async fn handle_model_selection_event(app: &mut App, key: &KeyEvent) {}
-
-async fn handle_session_list_event(_app: &mut App, _key: &KeyEvent) {}
 
 fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();

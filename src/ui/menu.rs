@@ -102,51 +102,43 @@ fn render_sessions(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = if app.sessions.is_empty() {
         vec![ListItem::new(" No sessions found.")]
     } else {
-        app.sessions.iter().enumerate().map(|(i, s)| {
-            let is_selected = i == app.menu_state.selection_idx;
-            let style = if is_selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            
-            let time_str = s.last_updated.format("%Y-%m-%d %H:%M").to_string();
+        app.sessions.iter().map(|s| {
+            let time_str = s.updated_at.format("%Y-%m-%d %H:%M").to_string();
             let content = format!(" {} ({})", s.title, time_str);
-            ListItem::new(content).style(style)
+            ListItem::new(content)
         }).collect()
     };
 
     let list = List::new(items)
-        .block(Block::default().title(" Sessions ").borders(Borders::NONE));
+        .block(Block::default().title(" Sessions ").borders(Borders::NONE))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol(">> ");
     
-    frame.render_widget(list, area);
+    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
+    frame.render_stateful_widget(list, area, &mut state);
 } // render_sessions
 
 fn render_models(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = if app.available_models.is_empty() {
         vec![ListItem::new(" Fetching models... (Press Ctrl+M again to refresh)")]
     } else {
-        app.available_models.iter().enumerate().map(|(i, m)| {
-            let is_selected = i == app.menu_state.selection_idx;
-            let current_model = app.config.as_ref().map(|c| &c.current_provider().model).unwrap_or(&"".to_string());
+        app.available_models.iter().map(|m| {
+            let current_model = app.config.as_ref().map(|c| c.current_provider().model.as_str()).unwrap_or("");
             let is_active = m == current_model;
             
-            let mut style = if is_selected {
-                Style::default().fg(Color::Black).bg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
             let prefix = if is_active { "★ " } else { "  " };
             let content = format!("{}{}", prefix, m);
-            ListItem::new(content).style(style)
+            ListItem::new(content)
         }).collect()
     };
 
     let list = List::new(items)
-        .block(Block::default().title(" Available Models ").borders(Borders::NONE));
+        .block(Block::default().title(" Available Models ").borders(Borders::NONE))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol(">> ");
     
-    frame.render_widget(list, area);
+    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
+    frame.render_stateful_widget(list, area, &mut state);
 } // render_models
 
 fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
@@ -154,24 +146,19 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
     let active_idx = app.config.as_ref().map(|c| c.active_provider).unwrap_or(0);
 
     let items: Vec<ListItem> = providers.iter().enumerate().map(|(i, p)| {
-        let is_selected = i == app.menu_state.selection_idx;
         let is_active = i == active_idx;
-        
-        let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
         let prefix = if is_active { "✔ " } else { "  " };
         let content = format!("{}{} ({})", prefix, p.name, p.base_url);
-        ListItem::new(content).style(style)
+        ListItem::new(content)
     }).collect();
 
     let list = List::new(items)
-        .block(Block::default().title(" API Providers ").borders(Borders::NONE));
+        .block(Block::default().title(" API Providers ").borders(Borders::NONE))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol(">> ");
     
-    frame.render_widget(list, area);
+    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
+    frame.render_stateful_widget(list, area, &mut state);
 } // render_providers
 
 fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
@@ -188,20 +175,17 @@ fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
         format!("Show Reasoning: {}", config.ui.show_reasoning),
     ];
 
-    let items: Vec<ListItem> = settings.iter().enumerate().map(|(i, s)| {
-        let is_selected = i == app.menu_state.selection_idx;
-        let style = if is_selected {
-            Style::default().fg(Color::Black).bg(Color::Cyan)
-        } else {
-            Style::default().fg(Color::White)
-        };
-        ListItem::new(format!(" {}", s)).style(style)
+    let items: Vec<ListItem> = settings.iter().map(|s| {
+        ListItem::new(format!(" {}", s))
     }).collect();
 
     let list = List::new(items)
-        .block(Block::default().title(" Application Settings ").borders(Borders::NONE));
+        .block(Block::default().title(" Application Settings ").borders(Borders::NONE))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol(">> ");
     
-    frame.render_widget(list, area);
+    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
+    frame.render_stateful_widget(list, area, &mut state);
 } // render_settings
 
 fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
