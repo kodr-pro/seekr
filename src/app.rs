@@ -695,6 +695,9 @@ async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                 app.delete_session_at(app.menu_state.selection_idx).await;
             }
         }
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.fetch_available_models().await;
+        }
         _ => {}
     }
 } // handle_unified_menu_event
@@ -866,7 +869,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
             },
             2 => match key.code {
                 KeyCode::Up => app.setup_state.model_selection = app.setup_state.model_selection.saturating_sub(1),
-                KeyCode::Down => app.setup_state.model_selection = (app.setup_state.model_selection + 1).min(1),
+                KeyCode::Down => app.setup_state.model_selection = (app.setup_state.model_selection + 1).min(3),
                 KeyCode::Enter => app.setup_state.current_step = 3,
                 KeyCode::Esc => app.setup_state.current_step = 1,
                 _ => {}
@@ -885,20 +888,27 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                     app.setup_state.validating = true;
 
                     let key = app.setup_state.api_key_input.clone();
-                    let valid = ApiClient::validate_key(&key, "https://api.deepseek.com", "deepseek-chat").await;
+                    // Try validating against OpenAI by default in setup wizard
+                    let valid = ApiClient::validate_key(&key, "https://api.openai.com/v1", "gpt-4o-mini").await;
                     app.setup_state.validating = false;
 
                     match valid {
                         Ok(true) => {
-                            let model = if app.setup_state.model_selection == 0 { "deepseek-chat" } else { "deepseek-reasoner" };
+                            let model = match app.setup_state.model_selection {
+                                0 => "gpt-4o",
+                                1 => "gpt-4o-mini",
+                                2 => "claude-3-5-sonnet-latest",
+                                3 => "deepseek-chat",
+                                _ => "gpt-4o",
+                            };
                             let auto_approve = app.setup_state.auto_approve_selection == 1;
                             let working_dir = if app.setup_state.working_dir_input.is_empty() { ".".to_string() } else { app.setup_state.working_dir_input.clone() };
 
                             let config = AppConfig {
                                 providers: vec![crate::config::ProviderConfig {
-                                    name: "DeepSeek".to_string(),
+                                    name: "AI Provider".to_string(),
                                     key: app.setup_state.api_key_input.clone(),
-                                    base_url: "https://api.deepseek.com".to_string(),
+                                    base_url: "https://api.openai.com/v1".to_string(),
                                     model: model.to_string(),
                                 }],
                                 active_provider: 0,
@@ -909,6 +919,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                             if let Err(e) = config.save() {
                                 app.setup_state.error_message = Some(format!("Failed to save config: {e}"));
                             } else {
+                                app.manager = Some(std::sync::Arc::new(crate::manager::SeekrManager::new(config.clone())));
                                 app.config = Some(config);
                                 app.setup_state.current_step = 6;
                             }
@@ -970,6 +981,9 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
 
         match code {
             KeyCode::F(1) => app.mode = AppMode::Help,
+            KeyCode::Char('g') if modifiers.contains(KeyModifiers::CONTROL) => {
+                app.open_unified_menu().await;
+            }
             KeyCode::Enter => { app.send_message(); app.user_scrolled = false; app.scroll_offset = app.chat_max_scroll; }
             KeyCode::Esc => app.mode = AppMode::QuitConfirm,
             KeyCode::Tab => app.focus = if app.focus == Focus::Chat { Focus::Tasks } else { Focus::Chat },
@@ -980,9 +994,6 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     app.show_reasoning = cfg.ui.show_reasoning;
                     cfg.save().ok();
                 }
-            }
-            KeyCode::Char('m') if modifiers.contains(KeyModifiers::CONTROL) => {
-                app.open_unified_menu().await;
             }
             KeyCode::PageUp if app.focus == Focus::Chat => {
                 if !app.user_scrolled { app.scroll_offset = app.chat_max_scroll; }
@@ -1082,12 +1093,11 @@ fn render_help_dialog(frame: &mut Frame, area: Rect) {
         Line::from(vec![Span::styled("    Tab       ", Style::default().fg(Color::Yellow)), Span::raw(" Switch focus between Chat and Tasks")]),
         Line::from(vec![Span::styled("    Up/Down   ", Style::default().fg(Color::Yellow)), Span::raw(" Scroll chat or task list")]),
         Line::from(""),
-        Line::from(vec![Span::styled("  Commands", Style::default().add_modifier(Modifier::BOLD))]),
         Line::from(vec![Span::styled("    Enter     ", Style::default().fg(Color::Yellow)), Span::raw(" Send message")]),
-        Line::from(vec![Span::styled("    Ctrl+M    ", Style::default().fg(Color::Yellow)), Span::raw(" Open Unified Menu (Sessions, Models, Providers, Settings)")]),
-        Line::from(vec![Span::styled("    Ctrl+R    ", Style::default().fg(Color::Yellow)), Span::raw(" Toggle Reasoning visibility")]),
+        Line::from(vec![Span::styled("    Ctrl+g    ", Style::default().fg(Color::Yellow)), Span::raw(" Open Unified Menu (Sessions, Models, Providers, Settings)")]),
+        Line::from(vec![Span::styled("    Ctrl+r    ", Style::default().fg(Color::Yellow)), Span::raw(" Toggle Reasoning visibility")]),
         Line::from(vec![Span::styled("    F1        ", Style::default().fg(Color::Yellow)), Span::raw(" Show this help menu")]),
-        Line::from(vec![Span::styled("    Esc/Ctrl+C", Style::default().fg(Color::Yellow)), Span::raw(" Quit Seekr")]),
+        Line::from(vec![Span::styled("    Esc/Ctrl+c", Style::default().fg(Color::Yellow)), Span::raw(" Quit Seekr")]),
         Line::from(""),
         Line::from(vec![Span::raw("  Press "), Span::styled("any key", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)), Span::raw(" to close")]),
     ];

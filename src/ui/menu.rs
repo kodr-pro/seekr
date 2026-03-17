@@ -17,14 +17,14 @@ pub fn render_help_tab(frame: &mut Frame, area: Rect) {
     let text = vec![
         Line::from(""),
         Line::from(vec![Span::styled("  Navigation", Style::default().add_modifier(Modifier::BOLD))]),
-        Line::from(vec![Span::styled("    Tab / L / →  ", Style::default().fg(Color::Yellow)), Span::raw(" Next Tab")]),
-        Line::from(vec![Span::styled("    H / ←        ", Style::default().fg(Color::Yellow)), Span::raw(" Previous Tab")]),
-        Line::from(vec![Span::styled("    J / K / ↑/↓  ", Style::default().fg(Color::Yellow)), Span::raw(" Select Item")]),
+        Line::from(vec![Span::styled("    Tab / l / →  ", Style::default().fg(Color::Yellow)), Span::raw(" Next Tab")]),
+        Line::from(vec![Span::styled("    h / ←        ", Style::default().fg(Color::Yellow)), Span::raw(" Previous Tab")]),
+        Line::from(vec![Span::styled("    j / k / ↑/↓  ", Style::default().fg(Color::Yellow)), Span::raw(" Select Item")]),
         Line::from(""),
         Line::from(vec![Span::styled("  Actions", Style::default().add_modifier(Modifier::BOLD))]),
         Line::from(vec![Span::styled("    Enter        ", Style::default().fg(Color::Yellow)), Span::raw(" Activate / Switch / Toggle")]),
-        Line::from(vec![Span::styled("    D / Delete   ", Style::default().fg(Color::Yellow)), Span::raw(" Delete Session (in Sessions tab)")]),
-        Line::from(vec![Span::styled("    Esc / Q      ", Style::default().fg(Color::Yellow)), Span::raw(" Close Menu")]),
+        Line::from(vec![Span::styled("    d / Delete   ", Style::default().fg(Color::Yellow)), Span::raw(" Delete Session (in Sessions tab)")]),
+        Line::from(vec![Span::styled("    Esc / q      ", Style::default().fg(Color::Yellow)), Span::raw(" Close Menu")]),
         Line::from(""),
         Line::from(vec![Span::styled("  Tabs Overview", Style::default().add_modifier(Modifier::BOLD))]),
         Line::from("    • Sessions  : Browse and resume previous chats"),
@@ -120,7 +120,7 @@ fn render_sessions(frame: &mut Frame, area: Rect, app: &App) {
 
 fn render_models(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = if app.available_models.is_empty() {
-        vec![ListItem::new(" Fetching models... (Press Ctrl+M again to refresh)")]
+        vec![ListItem::new(" Fetching models... (Press Ctrl+g again to refresh)")]
     } else {
         app.available_models.iter().map(|m| {
             let current_model = app.config.as_ref().map(|c| c.current_provider().model.as_str()).unwrap_or("");
@@ -235,7 +235,7 @@ fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
 
 fn render_footer(frame: &mut Frame, area: Rect, _app: &App) {
     let text = Line::from(vec![
-        Span::styled(" [Esc]", Style::default().fg(Color::Yellow)),
+        Span::styled(" [esc]", Style::default().fg(Color::Yellow)),
         Span::raw(" Close  "),
         Span::styled(" [Tab/h/l]", Style::default().fg(Color::Yellow)),
         Span::raw(" Tabs  "),

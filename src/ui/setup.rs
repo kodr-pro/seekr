@@ -59,7 +59,7 @@ fn render_welcome(frame: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "An AI agent manager for your terminal, powered by DeepSeek.",
+            "An AI agent manager for your terminal, compatible with OpenAI-style APIs.",
             Style::default().fg(Color::Gray),
         )),
         Line::from(""),
@@ -96,12 +96,12 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Step 1: DeepSeek API Key",
+            "Step 1: API Key",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Enter your DeepSeek API key (get one at platform.deepseek.com):",
+            "Enter your provider API key (e.g. OpenAI, DeepSeek, etc.):",
             Style::default().fg(Color::Gray),
         )),
         Line::from(""),
@@ -129,7 +129,7 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
 } // render_api_key_step
 
 fn render_model_step(frame: &mut Frame, area: Rect, state: &SetupState) {
-    let models = ["deepseek-chat", "deepseek-reasoner"];
+    let models = ["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-latest", "deepseek-chat"];
     let text: Vec<Line> = std::iter::once(Line::from(""))
         .chain(std::iter::once(Line::from(Span::styled(
             "Step 2: Default Model",

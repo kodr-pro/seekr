@@ -165,13 +165,13 @@ pub struct StreamFunctionCall {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Model {
     pub id: String,
-    pub object: String,
-    pub created: u64,
-    pub owned_by: String,
+    pub object: Option<String>,
+    pub created: Option<u64>,
+    pub owned_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelList {
-    pub object: String,
+    pub object: Option<String>,
     pub data: Vec<Model>,
 }

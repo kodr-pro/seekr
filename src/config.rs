@@ -13,10 +13,10 @@ pub struct ProviderConfig {
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
-            name: "DeepSeek".to_string(),
+            name: "Seekr AI".to_string(),
             key: String::new(),
-            base_url: "https://api.deepseek.com".to_string(),
-            model: "deepseek-chat".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o".to_string(),
         }
     }
 }
@@ -119,7 +119,7 @@ impl AppConfig {
         if let Ok(old) = toml::from_str::<OldAppConfig>(&contents) {
             let config = AppConfig {
                 providers: vec![ProviderConfig {
-                    name: "DeepSeek".to_string(),
+                    name: "Default".to_string(),
                     key: old.api.key,
                     base_url: old.api.base_url,
                     model: old.api.model,
