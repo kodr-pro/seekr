@@ -57,6 +57,7 @@ chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
 colored = "3"
 shellexpand = "3"
+arboard = "3.4.1"
 
 [dev-dependencies]
 tempfile = "3"

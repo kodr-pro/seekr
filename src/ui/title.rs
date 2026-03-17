@@ -24,9 +24,7 @@ pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
 
     let version = Span::styled(
         format!(" v{}", info.version),
-        Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM),
+        Style::default().fg(Color::Rgb(100, 100, 100)),
     );
 
     let separator = Span::styled(" │ ", Style::default().fg(Color::DarkGray));

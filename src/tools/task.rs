@@ -75,6 +75,7 @@ pub struct ActivityEntry {
 struct TaskManagerState {
     pub tasks: Vec<Task>,
     pub activities: Vec<ActivityEntry>,
+    pub live_activities: std::collections::HashMap<usize, ActivityEntry>,
     pub next_id: usize,
 }
 
@@ -119,11 +120,19 @@ impl TaskManager {
             state: Arc::new(Mutex::new(TaskManagerState {
                 tasks: Vec::new(),
                 activities: Vec::new(),
+                live_activities: std::collections::HashMap::new(),
                 next_id: 1,
             })),
             event_tx: None,
         }
     } // new
+
+    pub fn live_activities(&self) -> Vec<ActivityEntry> {
+        let state = self.state.lock().unwrap();
+        let mut live: Vec<_> = state.live_activities.values().cloned().collect();
+        live.sort_by_key(|a| a.thread_id.unwrap_or(0));
+        live
+    } // live_activities
 
     pub fn activities(&self) -> Vec<ActivityEntry> {
         self.state.lock().unwrap().activities.clone()
@@ -144,13 +153,20 @@ impl TaskManager {
         let activity = ActivityEntry {
             tool_name: tool_name.to_string(),
             summary: summary.to_string(),
-            status,
+            status: status.clone(),
             timestamp: chrono::Utc::now(),
             thread_id,
             total_threads,
         };
         if let Ok(mut state) = self.state.lock() {
             state.activities.push(activity.clone());
+            if let Some(tid) = thread_id {
+                if status == ActivityStatus::Starting {
+                    state.live_activities.insert(tid, activity.clone());
+                } else {
+                    state.live_activities.remove(&tid);
+                }
+            }
         }
         if let Some(ref tx) = self.event_tx {
             tx.send(crate::agent::AgentEvent::Activity(activity)).ok();

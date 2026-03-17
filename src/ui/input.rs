@@ -55,7 +55,7 @@ pub fn render_input(
     let title = if let Some(p) = prompt {
         format!(" ⌨ {} ", p)
     } else {
-        " > Type your message (Enter=Send, Esc=Quit, Tab=Focus) ".to_string()
+        " > Type your message (Enter=Send, Tab=Focus, Ctrl+g=Menu, Esc=Quit) ".to_string()
     };
 
     let block = Block::default()

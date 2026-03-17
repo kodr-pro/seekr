@@ -4,11 +4,12 @@
   <img src="docs/logo.png" alt="seekr Logo">
 </p>
 
-**seekr** is a high-performance AI Agent Manager featuring a sleek Terminal UI, powered by the DeepSeek native API. It brings the power of autonomous agents directly to your terminal with a robust toolset for shell execution, file management, and web exploration.
+**seekr** is a high-performance AI Agent Manager featuring a sleek Terminal UI. While originally built as a DeepSeek-native client (and highly optimized for its reasoning models), seekr now features full OpenAI API integration, allowing you to use multiple models and providers. It brings the power of autonomous agents directly to your terminal with a robust toolset for shell execution, file management, and web exploration.
 
 ![License](https://img.shields.io/badge/license-Polyform_Prosperity-blue.svg)
 ![Rust](https://img.shields.io/badge/rust-2021-orange.svg)
 ![DeepSeek](https://img.shields.io/badge/AI-DeepSeek-green.svg)
+![OpenAI-Compatible](https://img.shields.io/badge/AI-Multi--Model-purple.svg)
 
 ---
 
@@ -22,7 +23,7 @@
 ## Features
 
 - **Terminal UI (TUI):** Built with `ratatui` for a responsive, multi-tabbed interactive experience.
-- **Native DeepSeek Integration:** Low-latency access to DeepSeek's powerful reasoning and chat models.
+- **Multi-Model & OpenAI API Support:** Full support for configuring multiple LLM providers (OpenAI, DeepSeek, Local, etc.) via the standard OpenAPI format, while maintaining native optimizations for DeepSeek's reasoning models.
 - **Extensible Skills System:** Refactored tool architecture allowing for global and repository-specific custom skills.
 - **Autonomous Tools:**
   - **Shell:** Execute terminal commands with built-in sandboxing, timeouts, and **background execution**.
@@ -58,7 +59,7 @@
 ### Prerequisites
 
 - [Rust](https://www.rust-lang.org/tools/install) (latest stable version)
-- A [DeepSeek API Key](https://platform.deepseek.com/)
+- An API Key for DeepSeek or any compatible OpenAPI-format provider (e.g., OpenAI, local LLMs).
 
 ### Installation
 
@@ -85,7 +86,7 @@ cd seekr
 cargo install --path .
 ```
 
-On your first run, **seekr** will guide you through a setup wizard to configure your DeepSeek API key and preferences.
+On your first run, **seekr** will guide you through a setup wizard to configure your first API provider and preferences.
 
 ---
 
@@ -129,10 +130,13 @@ Each skill is a directory containing a `skill.json` definition and any necessary
 **seekr** stores its configuration in `~/.config/seekr/config.toml`. You can manually edit this file or use the built-in setup wizard.
 
 ```toml
-[api]
+[[providers]]
+name = "DeepSeek"
 key = "your-api-key-here"
 model = "deepseek-chat"
 base_url = "https://api.deepseek.com"
+
+active_provider = 0
 
 [agent]
 max_iterations = 25
