@@ -1077,7 +1077,7 @@ fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
         frame,
         area,
         &ui::title::TitleInfo {
-            version: "0.1.0",
+            version: "0.1.1",
             session_id: app.session_id.as_deref(),
             connected: app.connected,
             model,
