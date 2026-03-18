@@ -94,6 +94,7 @@ pub enum ChatEntry {
     SystemInfo(String),
     ToolApproval { name: String, arguments: String },
     CliInputPrompt(String),
+    ContextSummary { id: String, summary: String, is_pending: bool },
 }
 
 #[derive(Debug, Clone)]
@@ -276,13 +277,14 @@ impl App {
 
         let agent_res = if let Some(sid) = &self.session_id {
             let registry = self.manager.as_ref().unwrap().tool_registry();
-            crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, registry)
+            crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, cmd_tx.clone(), registry)
         } else {
             let registry = self.manager.as_ref().unwrap().tool_registry();
             Ok(crate::agent::loop_mod::AgentLoop::new(
                 config.clone(),
                 evt_tx,
                 cmd_rx,
+                cmd_tx.clone(),
                 registry,
             ))
         };
@@ -329,6 +331,22 @@ impl App {
                                 name: "resumed".to_string(),
                                 result: content,
                             });
+                        }
+                        ("system", Some(content)) => {
+                            if content.contains("--- PAST CONTEXT SUMMARY ---") {
+                                self.chat_entries.push(ChatEntry::ContextSummary {
+                                    id: String::new(),
+                                    summary: content.replace("--- PAST CONTEXT SUMMARY ---\n", "").replace("\n----------------------------", ""),
+                                    is_pending: false,
+                                });
+                            } else if content.contains("[Summarizing context segment") {
+                                let id = content.split_whitespace().last().unwrap_or("").trim_end_matches("...]").to_string();
+                                self.chat_entries.push(ChatEntry::ContextSummary {
+                                    id,
+                                    summary: "Summarizing past context...".to_string(),
+                                    is_pending: true,
+                                });
+                            }
                         }
                         _ => {}
                     }
@@ -473,6 +491,40 @@ impl App {
                         self.tasks[pos] = task;
                     } else {
                         self.tasks.push(task);
+                    }
+                }
+                AgentEvent::ContextPruned { count } => {
+                    // Try to find where to remove messages. 
+                    // Usually we keep the first few SystemInfo/Welcome messages.
+                    let start_idx = self.chat_entries.iter().position(|e| !matches!(e, ChatEntry::SystemInfo(_))).unwrap_or(0);
+                    let mut removed = 0;
+                    let mut i = start_idx;
+                    while removed < count && i < self.chat_entries.len() {
+                        if matches!(self.chat_entries[i], ChatEntry::UserMessage(_) | ChatEntry::AssistantContent(_) | ChatEntry::ToolCall { .. } | ChatEntry::ToolResult { .. } | ChatEntry::Reasoning(_)) {
+                            self.chat_entries.remove(i);
+                            removed += 1;
+                        } else {
+                            i += 1;
+                        }
+                    }
+                    // The placeholder will be handled by the next message or we can add it here if we had the ID.
+                    // But AgentLoop emits ContextPruned, and it already added the placeholder to its session.
+                    // Let's rely on the fact that we'll get a ContextSummaryReady event soon with the same ID.
+                }
+                AgentEvent::ContextSummaryReady { id, summary } => {
+                    if let Some(pos) = self.chat_entries.iter().rposition(|e| match e { 
+                        ChatEntry::ContextSummary { id: s_id, .. } => s_id == &id,
+                        _ => false 
+                    }) {
+                         if let ChatEntry::ContextSummary { summary: ref mut s, is_pending: ref mut p, .. } = self.chat_entries[pos] {
+                             *s = summary;
+                             *p = false;
+                         }
+                    } else {
+                        self.chat_entries.push(ChatEntry::ContextSummary { id, summary, is_pending: false });
+                    }
+                    if !self.user_scrolled {
+                        self.scroll_offset = self.chat_max_scroll;
                     }
                 }
             }
@@ -669,6 +721,13 @@ impl App {
                 ChatEntry::SystemInfo(msg) => (None, &*format!("[INFO] {}", msg)),
                 ChatEntry::ToolApproval { name, arguments } => (Some("[APPROVAL REQUIRED]"), &*format!("Agent wants to execute: {}({})\n  [Y]es / [N]o / [A]lways", name, arguments)),
                 ChatEntry::CliInputPrompt(prompt) => (Some("[INPUT REQUIRED]"), prompt.as_str()),
+                ChatEntry::ContextSummary { summary, is_pending, .. } => {
+                    if *is_pending {
+                        (Some("[CONTEXT WINDOW]"), "Summarizing past conversation to free up context space...")
+                    } else {
+                        (Some("[CONTEXT SUMMARY]"), summary.as_str())
+                    }
+                }
             };
 
             if idx > 0 {
@@ -1301,11 +1360,13 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     model: model_id.to_string(),
                                 }],
                                 active_provider: 0,
-                                agent: crate::config::AgentConfig {
-                                    max_iterations: 15,
-                                    auto_approve_tools: auto_approve,
-                                    working_directory: working_dir,
-                                },
+                                    agent: crate::config::AgentConfig {
+                                        max_iterations: 15,
+                                        auto_approve_tools: auto_approve,
+                                        working_directory: working_dir,
+                                        context_window_threshold: 40,
+                                        context_window_keep: 10,
+                                    },
                                 ui: crate::config::UiConfig {
                                     theme: "dark".to_string(),
                                     show_reasoning: true,
@@ -1432,6 +1493,10 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     Focus::Tasks => Focus::Input,
                 };
                 app.chat_selection = ChatSelection::default();
+                if app.focus == Focus::Chat {
+                    app.chat_selection.vline = app.get_max_vline();
+                    app.ensure_vline_visible();
+                }
             }
             KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
                 app.clear_chat();
