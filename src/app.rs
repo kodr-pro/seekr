@@ -106,6 +106,7 @@ pub struct VisualLine {
 #[derive(Debug, Clone)]
 pub struct SetupState {
     pub current_step: usize,
+    pub provider_selection: usize,
     pub api_key_input: String,
     pub model_selection: usize,
     pub auto_approve_selection: usize,
@@ -224,6 +225,7 @@ impl App {
             is_streaming: false,
             setup_state: SetupState {
                 current_step: 0,
+                provider_selection: 0,
                 api_key_input: String::new(),
                 model_selection: 0,
                 auto_approve_selection: 0,
@@ -1183,15 +1185,29 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                 }
             }
             1 => match key.code {
+                KeyCode::Up => {
+                    app.setup_state.provider_selection =
+                        app.setup_state.provider_selection.saturating_sub(1)
+                }
+                KeyCode::Down => {
+                    app.setup_state.provider_selection = (app.setup_state.provider_selection + 1).min(3)
+                }
+                KeyCode::Enter => {
+                    app.setup_state.current_step = 2;
+                }
+                KeyCode::Esc => app.setup_state.current_step = 0,
+                _ => {}
+            },
+            2 => match key.code {
                 KeyCode::Enter => {
                     if !app.setup_state.api_key_input.is_empty() {
                         app.setup_state.error_message = None;
-                        app.setup_state.current_step = 2;
+                        app.setup_state.current_step = 3;
                     } else {
                         app.setup_state.error_message = Some("API key cannot be empty".to_string());
                     }
                 }
-                KeyCode::Esc => app.setup_state.current_step = 0,
+                KeyCode::Esc => app.setup_state.current_step = 1,
                 KeyCode::Backspace => {
                     app.setup_state.api_key_input.pop();
                 }
@@ -1201,19 +1217,26 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                 }
                 _ => {}
             },
-            2 => match key.code {
+            3 => match key.code {
                 KeyCode::Up => {
                     app.setup_state.model_selection =
                         app.setup_state.model_selection.saturating_sub(1)
                 }
                 KeyCode::Down => {
-                    app.setup_state.model_selection = (app.setup_state.model_selection + 1).min(3)
+                    let models_count: usize = match app.setup_state.provider_selection {
+                        0 => 2, // OpenAI
+                        1 => 2, // DeepSeek
+                        2 => 1, // Anthropic
+                        _ => 5, // Custom
+                    };
+                    app.setup_state.model_selection =
+                        (app.setup_state.model_selection + 1).min(models_count.saturating_sub(1))
                 }
-                KeyCode::Enter => app.setup_state.current_step = 3,
-                KeyCode::Esc => app.setup_state.current_step = 1,
+                KeyCode::Enter => app.setup_state.current_step = 4,
+                KeyCode::Esc => app.setup_state.current_step = 2,
                 _ => {}
             },
-            3 => match key.code {
+            4 => match key.code {
                 KeyCode::Up => {
                     app.setup_state.auto_approve_selection =
                         app.setup_state.auto_approve_selection.saturating_sub(1)
@@ -1222,32 +1245,41 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                     app.setup_state.auto_approve_selection =
                         (app.setup_state.auto_approve_selection + 1).min(1)
                 }
-                KeyCode::Enter => app.setup_state.current_step = 4,
-                KeyCode::Esc => app.setup_state.current_step = 2,
+                KeyCode::Enter => app.setup_state.current_step = 5,
+                KeyCode::Esc => app.setup_state.current_step = 3,
                 _ => {}
             },
-            4 => match key.code {
+            5 => match key.code {
                 KeyCode::Enter => {
-                    app.setup_state.current_step = 5;
+                    app.setup_state.current_step = 6;
                     app.setup_state.error_message = None;
                     app.setup_state.validating = true;
 
                     let key = app.setup_state.api_key_input.clone();
-                    // Try validating against OpenAI by default in setup wizard
-                    let valid =
-                        ApiClient::validate_key(&key, "https://api.openai.com/v1", "gpt-4o-mini")
-                            .await;
+                    let model_id = match app.setup_state.provider_selection {
+                        0 => match app.setup_state.model_selection {
+                            0 => "gpt-4o",
+                            _ => "gpt-4o-mini",
+                        },
+                        1 => match app.setup_state.model_selection {
+                            0 => "deepseek-chat",
+                            _ => "deepseek-reasoner",
+                        },
+                        2 => "claude-3-5-sonnet-latest",
+                        _ => match app.setup_state.model_selection {
+                            0 => "gpt-4o",
+                            1 => "gpt-4o-mini",
+                            2 => "claude-3-5-sonnet-latest",
+                            3 => "deepseek-chat",
+                            _ => "deepseek-reasoner",
+                        },
+                    };
+                    let base_url = AppConfig::get_default_base_url(model_id);
+                    let valid = ApiClient::validate_key(&key, &base_url, model_id).await;
                     app.setup_state.validating = false;
 
                     match valid {
                         Ok(true) => {
-                            let model = match app.setup_state.model_selection {
-                                0 => "gpt-4o",
-                                1 => "gpt-4o-mini",
-                                2 => "claude-3-5-sonnet-latest",
-                                3 => "deepseek-chat",
-                                _ => "gpt-4o",
-                            };
                             let auto_approve = app.setup_state.auto_approve_selection == 1;
                             let working_dir = if app.setup_state.working_dir_input.is_empty() {
                                 ".".to_string()
@@ -1257,10 +1289,16 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 
                             let config = AppConfig {
                                 providers: vec![crate::config::ProviderConfig {
-                                    name: "AI Provider".to_string(),
+                                    name: match app.setup_state.provider_selection {
+                                        0 => "OpenAI",
+                                        1 => "DeepSeek",
+                                        2 => "Anthropic",
+                                        _ => "AI Provider",
+                                    }
+                                    .to_string(),
                                     key: app.setup_state.api_key_input.clone(),
-                                    base_url: "https://api.openai.com/v1".to_string(),
-                                    model: model.to_string(),
+                                    base_url: base_url.clone(),
+                                    model: model_id.to_string(),
                                 }],
                                 active_provider: 0,
                                 agent: crate::config::AgentConfig {
@@ -1282,7 +1320,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     crate::manager::SeekrManager::new(config.clone()),
                                 ));
                                 app.config = Some(config);
-                                app.setup_state.current_step = 6;
+                                app.setup_state.current_step = 7;
                             }
                         }
                         Ok(false) => {
@@ -1293,7 +1331,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                         }
                     }
                 }
-                KeyCode::Esc => app.setup_state.current_step = 3,
+                KeyCode::Esc => app.setup_state.current_step = 4,
                 KeyCode::Backspace => {
                     app.setup_state.working_dir_input.pop();
                 }
@@ -1302,13 +1340,13 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                 }
                 _ => {}
             },
-            5 => {
+            6 => {
                 if key.code == KeyCode::Enter {
-                    app.setup_state.current_step = 1;
+                    app.setup_state.current_step = 2;
                     app.setup_state.error_message = None;
                 }
             }
-            6 => {
+            7 => {
                 if key.code == KeyCode::Enter {
                     app.mode = AppMode::Main;
                     app.show_reasoning = true;

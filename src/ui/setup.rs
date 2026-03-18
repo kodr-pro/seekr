@@ -25,12 +25,13 @@ pub fn render_setup(frame: &mut Frame, area: Rect, state: &SetupState) {
 
     match state.current_step {
         0 => render_welcome(frame, layout.content),
-        1 => render_api_key_step(frame, layout.content, state),
-        2 => render_model_step(frame, layout.content, state),
-        3 => render_auto_approve_step(frame, layout.content, state),
-        4 => render_working_dir_step(frame, layout.content, state),
-        5 => render_validating_step(frame, layout.content, state),
-        6 => render_complete_step(frame, layout.content, state),
+        1 => render_provider_step(frame, layout.content, state),
+        2 => render_api_key_step(frame, layout.content, state),
+        3 => render_model_step(frame, layout.content, state),
+        4 => render_auto_approve_step(frame, layout.content, state),
+        5 => render_working_dir_step(frame, layout.content, state),
+        6 => render_validating_step(frame, layout.content, state),
+        7 => render_complete_step(frame, layout.content, state),
         _ => {}
     }
 
@@ -85,6 +86,34 @@ fn render_welcome(frame: &mut Frame, area: Rect) {
     frame.render_widget(paragraph, area);
 } // render_welcome
 
+fn render_provider_step(frame: &mut Frame, area: Rect, state: &SetupState) {
+    let providers = ["OpenAI", "DeepSeek", "Anthropic", "Custom / Other"];
+    let text: Vec<Line> = std::iter::once(Line::from(""))
+        .chain(std::iter::once(Line::from(Span::styled(
+            "Step 1: AI Provider",
+            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        ))))
+        .chain(std::iter::once(Line::from("")))
+        .chain(std::iter::once(Line::from(Span::styled(
+            "Select your AI provider:",
+            Style::default().fg(Color::Gray),
+        ))))
+        .chain(std::iter::once(Line::from("")))
+        .chain(providers.iter().enumerate().map(|(i, provider)| {
+            let selected = i == state.provider_selection;
+            let prefix = if selected { " > " } else { "   " };
+            let style = if selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            Line::from(Span::styled(format!("{}{}", prefix, provider), style))
+        }))
+        .collect();
+
+    render_step_content(frame, area, text);
+} // render_provider_step
+
 fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let masked = "*".repeat(state.api_key_input.len());
     let display = if state.api_key_input.is_empty() {
@@ -96,7 +125,7 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Step 1: API Key",
+            "Step 2: API Key",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -129,10 +158,16 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
 } // render_api_key_step
 
 fn render_model_step(frame: &mut Frame, area: Rect, state: &SetupState) {
-    let models = ["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-latest", "deepseek-chat"];
+    let models = match state.provider_selection {
+        0 => vec!["gpt-4o", "gpt-4o-mini"],
+        1 => vec!["deepseek-chat", "deepseek-reasoner"],
+        2 => vec!["claude-3-5-sonnet-latest"],
+        _ => vec!["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-latest", "deepseek-chat", "deepseek-reasoner"],
+    };
+
     let text: Vec<Line> = std::iter::once(Line::from(""))
         .chain(std::iter::once(Line::from(Span::styled(
-            "Step 2: Default Model",
+            "Step 3: Default Model",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -166,8 +201,8 @@ fn render_auto_approve_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         "Yes (auto-approve all tool executions)",
     ];
     let text: Vec<Line> = std::iter::once(Line::from(""))
-        .chain(std::iter::once(Line::from(Span::styled(
-            "Step 3: Auto-approve Tools",
+        .chain(std::iter::once(        Line::from(Span::styled(
+            "Step 4: Auto-approve Tools",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         ))))
         .chain(std::iter::once(Line::from("")))
@@ -201,7 +236,7 @@ fn render_working_dir_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let text = vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Step 4: Working Directory",
+            "Step 5: Working Directory",
             Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -290,21 +325,22 @@ fn render_step_content(frame: &mut Frame, area: Rect, lines: Vec<Line>) {
 fn render_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
     let nav = match state.current_step {
         0 => "Enter: Continue",
-        1 | 4 => "Enter: Next | Esc: Back",
-        2 | 3 => "Up/Down: Select | Enter: Next | Esc: Back",
-        5 => {
+        1 | 4 | 5 => "Up/Down: Select | Enter: Next | Esc: Back",
+        2 => "Enter: Next | Esc: Back",
+        3 => "Up/Down: Select | Enter: Next | Esc: Back",
+        6 => {
             if state.error_message.is_some() {
                 "Enter: Go back"
             } else {
                 "Validating..."
             }
         }
-        6 => "Enter: Start",
+        7 => "Enter: Start",
         _ => "",
     };
 
-    let step_text = if state.current_step > 0 && state.current_step < 5 {
-        format!("Step {}/4", state.current_step)
+    let step_text = if state.current_step > 0 && state.current_step < 6 {
+        format!("Step {}/5", state.current_step)
     } else {
         String::new()
     };
