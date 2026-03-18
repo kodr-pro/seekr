@@ -27,6 +27,8 @@ pub enum AgentEvent {
     ShellInputNeeded { context: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
     TaskCreated(crate::tools::task::Task),
     TaskUpdated(crate::tools::task::Task),
+    ContextPruned { count: usize },
+    ContextSummaryReady { id: String, summary: String },
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +139,7 @@ impl AgentLoop {
                             if let Some(msg) = self.session.messages.iter_mut().find(|m| m.role == "system" && m.content.as_deref() == Some(search_str.as_str())) {
                                 msg.content = Some(format!("--- PAST CONTEXT SUMMARY ---\n{}\n----------------------------", summary));
                                 self.session.save().ok();
+                                self.event_tx.send(AgentEvent::ContextSummaryReady { id, summary }).ok();
                             }
                         }
                         AgentCommand::Shutdown => break,
@@ -434,9 +437,9 @@ impl AgentLoop {
     } // do_final_answer
 
     fn prune_messages(&mut self) {
-        const MAX_MESSAGES: usize = 40;
+        let max_messages = self.config.agent.context_window_threshold;
 
-        if self.session.messages.len() <= MAX_MESSAGES {
+        if self.session.messages.len() <= max_messages {
             return;
         }
 
@@ -455,7 +458,7 @@ impl AgentLoop {
         }
 
         let total = self.session.messages.len();
-        let msg_to_keep = (MAX_MESSAGES / 2).max(10);
+        let msg_to_keep = self.config.agent.context_window_keep.max(10);
         let mut start = total.saturating_sub(msg_to_keep);
 
         while start < total {
@@ -488,6 +491,7 @@ impl AgentLoop {
         }
         
         self.session.messages = new_messages;
+        self.event_tx.send(AgentEvent::ContextPruned { count: start - keep_initial }).ok();
 
         // Spawn summarizer task
         let client = self.client.clone();
@@ -538,6 +542,7 @@ impl AgentLoop {
                     if let Some(msg) = self.session.messages.iter_mut().find(|m| m.role == "system" && m.content.as_deref() == Some(search_str.as_str())) {
                         msg.content = Some(format!("--- PAST CONTEXT SUMMARY ---\n{}\n----------------------------", summary));
                         self.session.save().ok();
+                        self.event_tx.send(AgentEvent::ContextSummaryReady { id, summary }).ok();
                     }
                 }
                 Ok(_) => {}

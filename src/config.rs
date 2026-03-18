@@ -26,6 +26,8 @@ pub struct AgentConfig {
     pub max_iterations: u32,
     pub auto_approve_tools: bool,
     pub working_directory: String,
+    pub context_window_threshold: usize,
+    pub context_window_keep: usize,
 }
 
 impl Default for AgentConfig {
@@ -34,6 +36,8 @@ impl Default for AgentConfig {
             max_iterations: 100,
             auto_approve_tools: false,
             working_directory: ".".to_string(),
+            context_window_threshold: 40,
+            context_window_keep: 10,
         }
     }
 } // default
