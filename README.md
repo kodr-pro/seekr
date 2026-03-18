@@ -15,6 +15,7 @@
 
 ## 🌟 Highlights
 
+- **Unlimited Context Window:** Never run out of memory. Seekr automatically summarizes past conversation segments and injects them into the current context as a "sliding window."
 - **Interruptible Agent Loop:** Real-time user steering. Interrupt the agent mid-thought to provide new context or directions.
 - **True Multi-Tool Parallelism:** Execute multiple independent tool calls (reading files, searching web, etc.) concurrently for 5-10x performance gains.
 - **Premium TUI Experience:** Beautiful, icon-based headers and a custom-built, wrapping-aware scrolling engine for a smooth conversation flow.
@@ -32,7 +33,8 @@
   - **Task Management:** Goal planning and progress tracking.
 - **Parallel Execution Engine:** Optimized batch processing of independent actions in a single turn.
 - **Rich Activity Stream:** Real-time visibility into agent thoughts and tool executions with diff previews and parallel task numbering.
-- **Session Persistence:** Automatic saving and loading of chat history and agent state.
+- **Unlimited Context Window:** Automatically summarizes and prunes long-running conversations to maintain "human-like" working memory without hitting model context limits.
+- **Session Persistence:** Automatic saving and loading of chat history, agent state, and context summaries.
 - **Seekr Doctor:** Built-in diagnostics command to verify system health and API connectivity.
 
 ---
@@ -69,11 +71,11 @@ The fastest way to get started is to download the pre-compiled binary from our [
 
 ```bash
 # Download the binary
-curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.1.1/seekr-v0.1.1-linux-x86_64
+curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.1.2/seekr-v0.1.2-linux-x86_64
 
 # Make it executable and move to path
-chmod +x seekr-v0.1.1-linux-x86_64
-sudo mv seekr-v0.1.1-linux-x86_64 /usr/local/bin/seekr
+chmod +x seekr-v0.1.2-linux-x86_64
+sudo mv seekr-v0.1.2-linux-x86_64 /usr/local/bin/seekr
 ```
 
 #### 🛠️ Build from Source
@@ -142,6 +144,8 @@ active_provider = 0
 max_iterations = 25
 auto_approve_tools = false
 working_directory = "."
+context_window_threshold = 40
+context_window_keep = 10
 
 [ui]
 theme = "dark"
