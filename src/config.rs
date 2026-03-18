@@ -153,4 +153,17 @@ impl AppConfig {
         })?;
         Ok(())
     } // save
+
+    pub fn get_default_base_url(model: &str) -> String {
+        if model.contains("gpt-") {
+            "https://api.openai.com/v1".to_string()
+        } else if model.contains("deepseek") {
+            "https://api.deepseek.com/v1".to_string()
+        } else if model.contains("claude") {
+            // Claude via OpenAI-compatible proxy (like OpenRouter or similar)
+            "https://api.openai.com/v1".to_string()
+        } else {
+            "https://api.openai.com/v1".to_string()
+        }
+    }
 } // impl AppConfig
