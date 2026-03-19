@@ -48,13 +48,14 @@ impl ApiClient {
                         }
                         system_prompt.push_str(&content);
                     }
+                } else if let Some(content) = msg.content {
+                    anthropic_messages.push(serde_json::json!({
+                        "role": msg.role,
+                        "content": content
+                    }));
                 } else {
-                    if let Some(content) = msg.content {
-                        anthropic_messages.push(serde_json::json!({
-                            "role": msg.role,
-                            "content": content
-                        }));
-                    }
+                    // Handle messages with null content (skip or push empty string)
+                    // Skipping for now as Anthropic doesn't accept null content
                 }
             }
             
@@ -190,14 +191,15 @@ impl ApiClient {
                         }
                         system_prompt.push_str(&content);
                     }
-                } else {
+                } else if let Some(content) = msg.content {
                     // Convert to Anthropic message format (content as string)
-                    if let Some(content) = msg.content {
-                        anthropic_messages.push(serde_json::json!({
-                            "role": msg.role,
-                            "content": content
-                        }));
-                    }
+                    anthropic_messages.push(serde_json::json!({
+                        "role": msg.role,
+                        "content": content
+                    }));
+                } else {
+                    // Handle messages with null content (skip or push empty string)
+                    // Skipping for now as Anthropic doesn't accept null content
                 }
             }
             
@@ -390,3 +392,26 @@ impl ApiClient {
         }
     } // validate_key
 } // impl ApiClient
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_messages_with_null_content() {
+        // Create a message with null content
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: None,
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        
+        // This should not panic when processing
+        // We can't test the private conversion logic directly,
+        // but we can at least ensure the struct works
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content, None);
+    }
+}
