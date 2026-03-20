@@ -5,8 +5,61 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use crate::app::{ChatSelection, SelectionMode, VisualLine};
+use crate::app::{VisualLine, LineType};
+use crate::ui::syntax;
 use std::cmp::min;
+
+/// Get per‑character styles for a visual line, taking syntax highlighting into account.
+fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
+    let mut styles = Vec::new();
+    
+    // For code blocks, apply syntax highlighting
+    if matches!(vline.line_type, LineType::CodeBlock) && !vline.text.is_empty() {
+        let highlighted_spans = syntax::highlight_line(&vline.text, vline.language.as_deref());
+        // Combine spans into per‑character styles
+        for (style, chunk) in highlighted_spans {
+            for _ in chunk.chars() {
+                styles.push(style);
+            }
+        }
+    } else {
+        // Default style (will be overlaid by selection/cursor later)
+        let default_style = if vline.is_header {
+            match vline.text.as_str() {
+                "[YOU]" => Style::default().fg(Color::Rgb(0, 255, 128)).add_modifier(Modifier::BOLD),
+                "[SEEKR]" => Style::default().fg(Color::Rgb(0, 191, 255)).add_modifier(Modifier::BOLD),
+                "[THINKING]" => Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::ITALIC | Modifier::DIM),
+                "[ERROR]" => Style::default().fg(Color::Rgb(255, 69, 0)).add_modifier(Modifier::BOLD),
+                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Rgb(255, 165, 0)).add_modifier(Modifier::BOLD),
+                "[INPUT REQUIRED]" => Style::default().fg(Color::Rgb(255, 255, 0)).add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::Rgb(200, 200, 200)).add_modifier(Modifier::BOLD),
+            }
+        } else {
+            Style::default().fg(Color::Rgb(220, 220, 220))
+        };
+        // Style copy icon differently for code block start lines
+        let copy_icon = '⎘';
+        for ch in vline.text.chars() {
+            if vline.line_type == LineType::CodeBlockStart && ch == copy_icon {
+                styles.push(Style::default().fg(Color::Rgb(0, 255, 255)).add_modifier(Modifier::BOLD));
+            } else {
+                styles.push(default_style);
+            }
+        }
+    }
+    
+    // Ensure we have exactly as many styles as characters
+    // (highlight_line may produce fewer if there are zero‑width characters; we pad)
+    let char_count = vline.text.chars().count();
+    if styles.len() < char_count {
+        let last_style = styles.last().cloned().unwrap_or(Style::default().fg(Color::White));
+        styles.resize(char_count, last_style);
+    } else if styles.len() > char_count {
+        styles.truncate(char_count);
+    }
+    
+    styles
+}
 
 pub fn render_chat(
     frame: &mut Frame,
@@ -14,7 +67,6 @@ pub fn render_chat(
     visual_lines: &[VisualLine],
     scroll_offset: u16,
     focused: bool,
-    selection: &ChatSelection,
 ) -> u16 {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
@@ -39,77 +91,21 @@ pub fn render_chat(
     let effective_scroll = scroll_offset.min(max_scroll) as usize;
 
     let mut lines_to_render = Vec::new();
-    
-    // Determine selection range
-    let (sel_start_v, sel_start_c, sel_end_v, sel_end_c) = if let Some(av) = selection.anchor_vline {
-        let ac = selection.anchor_col.unwrap_or(0);
-        let (s_v, s_c, e_v, e_c) = if (av, ac) <= (selection.vline, selection.col) {
-            (av, ac, selection.vline, selection.col)
-        } else {
-            (selection.vline, selection.col, av, ac)
-        };
-        
-        if selection.mode == SelectionMode::VisualLine {
-            (s_v, 0, e_v, visual_lines.get(e_v).map(|l| l.text.chars().count()).unwrap_or(0))
-        } else {
-            (s_v, s_c, e_v, e_c)
-        }
-    } else {
-        (0, 0, 0, 0)
-    };
-
-    let has_selection = selection.mode != SelectionMode::Normal && selection.anchor_vline.is_some();
 
     for vidx in effective_scroll..min(effective_scroll + visible_height as usize, total_lines) {
         let vline = &visual_lines[vidx];
-        let mut spans = Vec::new();
         
-        let base_style = if vline.is_header {
-             match vline.text.as_str() {
-                "[YOU]" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                "[SEEKR]" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                "[THINKING]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC | Modifier::DIM),
-                "[ERROR]" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                "[INPUT REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            }
-        } else {
-            Style::default().fg(Color::White)
-        };
-
         if vline.text.is_empty() {
             lines_to_render.push(Line::from(""));
             continue;
         }
 
+        let char_styles = get_char_styles(vline);
         let chars: Vec<char> = vline.text.chars().collect();
-        for (cidx, &c) in chars.iter().enumerate() {
-            let mut char_style = base_style;
-            
-            // Apply selection highlight
-            let in_selection = has_selection && (
-                (vidx > sel_start_v && vidx < sel_end_v) ||
-                (vidx == sel_start_v && vidx == sel_end_v && cidx >= sel_start_c && cidx <= sel_end_c) ||
-                (vidx == sel_start_v && vidx < sel_end_v && cidx >= sel_start_c) ||
-                (vidx == sel_end_v && vidx > sel_start_v && cidx <= sel_end_c)
-            );
-
-            if in_selection {
-                char_style = char_style.bg(Color::Rgb(60, 60, 100));
-            }
-
-            // Apply cursor highlight
-            if focused && vidx == selection.vline && cidx == selection.col {
-                char_style = char_style.bg(Color::White).fg(Color::Black).remove_modifier(Modifier::DIM);
-            }
-            
-            spans.push(Span::styled(c.to_string(), char_style));
-        }
-
-        // Handle cursor at end of line
-        if focused && vidx == selection.vline && selection.col >= chars.len() {
-            spans.push(Span::styled(" ", Style::default().bg(Color::White).fg(Color::Black)));
+        let mut spans = Vec::new();
+        
+        for (&c, &style) in chars.iter().zip(char_styles.iter()) {
+            spans.push(Span::styled(c.to_string(), style));
         }
 
         lines_to_render.push(Line::from(spans));

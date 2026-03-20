@@ -1,5 +1,6 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
+#[derive(Clone)]
 pub struct AppLayout {
     pub title_bar: Rect,
     pub chat_panel: Rect,

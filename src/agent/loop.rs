@@ -196,8 +196,13 @@ impl AgentLoop {
 
             self.prune_messages();
 
-            let registry = self.session.tool_registry.as_ref()
-                .expect("Tool registry must be initialized");
+            let registry = match self.session.tool_registry.as_ref() {
+                Some(reg) => reg,
+                None => {
+                    self.event_tx.send(AgentEvent::Error("Tool registry not initialized".to_string())).ok();
+                    break;
+                }
+            };
             let tool_defs = tools::all_tool_definitions(registry);
             let stream_result = self
                 .client
@@ -315,7 +320,14 @@ impl AgentLoop {
                     let arguments = tc.function.arguments.clone();
                     let id = tc.id.clone();
                     let tm_clone = self.session.task_manager.clone();
-                    let registry_clone = self.session.tool_registry.as_ref().unwrap().clone();
+                    let registry_clone = match self.session.tool_registry.as_ref() {
+                        Some(reg) => reg.clone(),
+                        None => {
+                            // This should not happen since we checked earlier, but handle gracefully
+                            self.event_tx.send(AgentEvent::Error("Tool registry not available".to_string())).ok();
+                            continue;
+                        }
+                    };
                     
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
@@ -499,7 +511,7 @@ impl AgentLoop {
         let model = self.config.current_provider().model.clone();
 
         tokio::spawn(async move {
-            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, and relevant tool outputs. Be highly concise but technically precise.".to_string();
+            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, specific file paths mentioned, and critical tool outputs. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
             
             let mut summary_messages = vec![ChatMessage::system(&pt)];
             let mut conversation_text = String::new();
@@ -613,7 +625,9 @@ mod tests {
 
         agent.prune_messages();
 
-        let last_msg = agent.session.messages.last().unwrap();
+        let last_msg = agent.session.messages.last().unwrap_or_else(|| {
+            panic!("messages should not be empty");
+        });
         assert_eq!(last_msg.role, "tool");
         
         let prev_msg = &agent.session.messages[agent.session.messages.len() - 2];

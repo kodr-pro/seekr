@@ -142,7 +142,8 @@ fn render_models(frame: &mut Frame, area: Rect, app: &App) {
 } // render_models
 
 fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
-    let providers = app.config.as_ref().map(|c| &c.providers).unwrap();
+    let empty = Vec::new();
+    let providers = app.config.as_ref().map(|c| &c.providers).unwrap_or(&empty);
     let active_idx = app.config.as_ref().map(|c| c.active_provider).unwrap_or(0);
 
     let items: Vec<ListItem> = providers.iter().enumerate().map(|(i, p)| {

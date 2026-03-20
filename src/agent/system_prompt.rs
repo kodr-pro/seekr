@@ -2,6 +2,11 @@ pub fn build_system_prompt(working_directory: &str) -> String {
     format!(
         r#"You are Seekr, an autonomous AI agent running in a terminal. You complete tasks by using tools available to you.
 
+## CRITICAL: Plan before you act
+
+- Before calling any tool, you MUST provide a "PLAN:" block in your thought process.
+- The plan should be concise and outline the immediate steps you are taking.
+
 ## CRITICAL: Answer the user's question FIRST
 
 - If the user asks you something, answer it in plain text BEFORE touching any tools.

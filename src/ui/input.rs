@@ -17,8 +17,8 @@ pub fn render_input(
 ) {
     let is_shell = prompt.is_some();
 
-    let (context_area, input_area) = if is_shell && shell_context.is_some() {
-        let context_lines = shell_context.unwrap().lines().count().max(1) as u16;
+    let (context_area, input_area) = if let Some(context) = shell_context.filter(|_| is_shell) {
+        let context_lines = context.lines().count().max(1) as u16;
         let context_height = (context_lines + 2).min(area.height.saturating_sub(4));
         let chunks = Layout::default()
             .direction(Direction::Vertical)

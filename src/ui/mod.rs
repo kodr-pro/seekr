@@ -6,3 +6,5 @@ pub mod status;
 pub mod tasks;
 pub mod title;
 pub mod menu;
+pub mod syntax;
+pub mod render;
