@@ -354,7 +354,7 @@ mod tests {
         registry.load_skills_from_dir(dir.path());
         
         assert!(registry.get_tool("test_tool").is_some());
-        let tool = registry.get_tool("test_tool").unwrap();
+        let tool = registry.get_tool("test_tool").expect("test_tool should exist");
         let (res, _) = tool.execute(&serde_json::json!({}), &TaskManager::new(), None, None).await?;
         assert_eq!(res.trim(), "hello");
         

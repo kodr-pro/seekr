@@ -44,15 +44,20 @@ async fn main() -> Result<()> {
 
 fn init_logging() {
     if std::env::var("SEEKR_LOG").is_ok() {
-        let file = std::fs::OpenOptions::new()
+        match std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open("/tmp/seekr.log")
-            .expect("Failed to open log file");
-        tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(std::sync::Mutex::new(file))
-            .init();
+            .open("/tmp/seekr.log") {
+                Ok(file) => {
+                    tracing_subscriber::fmt()
+                        .with_max_level(tracing::Level::DEBUG)
+                        .with_writer(std::sync::Mutex::new(file))
+                        .init();
+                },
+                Err(e) => {
+                    eprintln!("Failed to open log file /tmp/seekr.log: {}", e);
+                }
+            }
     }
 } // init_logging
 

@@ -196,8 +196,13 @@ impl AgentLoop {
 
             self.prune_messages();
 
-            let registry = self.session.tool_registry.as_ref()
-                .expect("Tool registry must be initialized");
+            let registry = match self.session.tool_registry.as_ref() {
+                Some(reg) => reg,
+                None => {
+                    self.event_tx.send(AgentEvent::Error("Tool registry not initialized".to_string())).ok();
+                    break;
+                }
+            };
             let tool_defs = tools::all_tool_definitions(registry);
             let stream_result = self
                 .client
@@ -315,7 +320,14 @@ impl AgentLoop {
                     let arguments = tc.function.arguments.clone();
                     let id = tc.id.clone();
                     let tm_clone = self.session.task_manager.clone();
-                    let registry_clone = self.session.tool_registry.as_ref().unwrap().clone();
+                    let registry_clone = match self.session.tool_registry.as_ref() {
+                        Some(reg) => reg.clone(),
+                        None => {
+                            // This should not happen since we checked earlier, but handle gracefully
+                            self.event_tx.send(AgentEvent::Error("Tool registry not available".to_string())).ok();
+                            continue;
+                        }
+                    };
                     
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
@@ -613,7 +625,9 @@ mod tests {
 
         agent.prune_messages();
 
-        let last_msg = agent.session.messages.last().unwrap();
+        let last_msg = agent.session.messages.last().unwrap_or_else(|| {
+            panic!("messages should not be empty");
+        });
         assert_eq!(last_msg.role, "tool");
         
         let prev_msg = &agent.session.messages[agent.session.messages.len() - 2];

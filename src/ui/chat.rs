@@ -5,8 +5,61 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use crate::app::{ChatSelection, SelectionMode, VisualLine};
+use crate::app::{ChatSelection, SelectionMode, VisualLine, LineType};
+use crate::ui::syntax;
 use std::cmp::min;
+
+/// Get per‑character styles for a visual line, taking syntax highlighting into account.
+fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
+    let mut styles = Vec::new();
+    
+    // For code blocks, apply syntax highlighting
+    if matches!(vline.line_type, LineType::CodeBlock) && !vline.text.is_empty() {
+        let highlighted_spans = syntax::highlight_line(&vline.text, vline.language.as_deref());
+        // Combine spans into per‑character styles
+        for (style, chunk) in highlighted_spans {
+            for _ in chunk.chars() {
+                styles.push(style);
+            }
+        }
+    } else {
+        // Default style (will be overlaid by selection/cursor later)
+        let default_style = if vline.is_header {
+            match vline.text.as_str() {
+                "[YOU]" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                "[SEEKR]" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                "[THINKING]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC | Modifier::DIM),
+                "[ERROR]" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                "[INPUT REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            }
+        } else {
+            Style::default().fg(Color::White)
+        };
+        // Style copy icon differently for code block start lines
+        let copy_icon = '⎘';
+        for ch in vline.text.chars() {
+            if vline.line_type == LineType::CodeBlockStart && ch == copy_icon {
+                styles.push(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            } else {
+                styles.push(default_style);
+            }
+        }
+    }
+    
+    // Ensure we have exactly as many styles as characters
+    // (highlight_line may produce fewer if there are zero‑width characters; we pad)
+    let char_count = vline.text.chars().count();
+    if styles.len() < char_count {
+        let last_style = styles.last().cloned().unwrap_or(Style::default().fg(Color::White));
+        styles.resize(char_count, last_style);
+    } else if styles.len() > char_count {
+        styles.truncate(char_count);
+    }
+    
+    styles
+}
 
 pub fn render_chat(
     frame: &mut Frame,
@@ -62,30 +115,18 @@ pub fn render_chat(
 
     for vidx in effective_scroll..min(effective_scroll + visible_height as usize, total_lines) {
         let vline = &visual_lines[vidx];
-        let mut spans = Vec::new();
         
-        let base_style = if vline.is_header {
-             match vline.text.as_str() {
-                "[YOU]" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                "[SEEKR]" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                "[THINKING]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC | Modifier::DIM),
-                "[ERROR]" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                "[INPUT REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            }
-        } else {
-            Style::default().fg(Color::White)
-        };
-
         if vline.text.is_empty() {
             lines_to_render.push(Line::from(""));
             continue;
         }
 
+        let char_styles = get_char_styles(vline);
         let chars: Vec<char> = vline.text.chars().collect();
-        for (cidx, &c) in chars.iter().enumerate() {
-            let mut char_style = base_style;
+        let mut spans = Vec::new();
+        
+        for (cidx, (&c, &style)) in chars.iter().zip(char_styles.iter()).enumerate() {
+            let mut char_style = style;
             
             // Apply selection highlight
             let in_selection = has_selection && (

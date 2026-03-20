@@ -11,7 +11,7 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
         .user_agent("Mozilla/5.0 (compatible; Seekr/0.1)")
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .context("Failed to create HTTP client")?;
+        .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
 
     let response = client
         .get(url)
@@ -74,7 +74,7 @@ pub async fn web_search(query: &str) -> Result<String> {
         .user_agent("Mozilla/5.0 (compatible; Seekr/0.1)")
         .timeout(std::time::Duration::from_secs(15))
         .build()
-        .context("Failed to create HTTP client")?;
+        .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
 
     let url = format!(
         "https://html.duckduckgo.com/html/?q={}",
@@ -94,15 +94,15 @@ pub async fn web_search(query: &str) -> Result<String> {
 
     let document = Html::parse_document(&body);
 
-    let result_sel = Selector::parse(".result").unwrap_or_else(|_| {
-        Selector::parse("div").expect("div selector should always work")
-    });
-    let title_sel = Selector::parse(".result__a").unwrap_or_else(|_| {
-        Selector::parse("a").expect("a selector should always work")
-    });
-    let snippet_sel = Selector::parse(".result__snippet").unwrap_or_else(|_| {
-        Selector::parse("span").expect("span selector should always work")
-    });
+    let result_sel = Selector::parse(".result")
+        .or_else(|_| Selector::parse("div"))
+        .map_err(|e| anyhow!("Failed to parse CSS selector: {}", e))?;
+    let title_sel = Selector::parse(".result__a")
+        .or_else(|_| Selector::parse("a"))
+        .map_err(|e| anyhow!("Failed to parse CSS selector: {}", e))?;
+    let snippet_sel = Selector::parse(".result__snippet")
+        .or_else(|_| Selector::parse("span"))
+        .map_err(|e| anyhow!("Failed to parse CSS selector: {}", e))?;
 
     let mut results = Vec::new();
     for (i, result) in document.select(&result_sel).enumerate() {

@@ -8,6 +8,8 @@ pub struct ProviderConfig {
     pub key: String,
     pub base_url: String,
     pub model: String,
+    #[serde(default)]
+    pub timeout: Option<u64>,
 }
 
 impl Default for ProviderConfig {
@@ -17,6 +19,7 @@ impl Default for ProviderConfig {
             key: String::new(),
             base_url: "https://api.openai.com/v1".to_string(),
             model: "gpt-4o".to_string(),
+            timeout: None,
         }
     }
 }
@@ -127,6 +130,7 @@ impl AppConfig {
                     key: old.api.key,
                     base_url: old.api.base_url,
                     model: old.api.model,
+                    timeout: None,
                 }],
                 active_provider: 0,
                 agent: old.agent,

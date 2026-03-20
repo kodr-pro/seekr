@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
@@ -97,11 +97,22 @@ pub enum ChatEntry {
     ContextSummary { id: String, summary: String, is_pending: bool },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineType {
+    Normal,
+    Header,
+    CodeBlock,
+    CodeBlockStart,
+    CodeBlockEnd,
+}
+
 #[derive(Debug, Clone)]
 pub struct VisualLine {
     pub entry_idx: usize,
     pub text: String,
     pub is_header: bool,
+    pub line_type: LineType,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,6 +201,9 @@ pub struct App {
     pub chat_selection: ChatSelection,
     pub last_chat_width: u16,
     pub clipboard: Option<arboard::Clipboard>,
+    pub layout: Option<crate::ui::layout::AppLayout>,
+    pub terminal_width: u16,
+    pub terminal_height: u16,
 
     pub bg_tx: tokio::sync::mpsc::UnboundedSender<BgEvent>,
     pub bg_rx: tokio::sync::mpsc::UnboundedReceiver<BgEvent>,
@@ -240,6 +254,9 @@ impl App {
             available_models: Vec::new(),
             chat_selection: ChatSelection::default(),
             last_chat_width: 80,
+            layout: None,
+            terminal_width: 0,
+            terminal_height: 0,
             clipboard: arboard::Clipboard::new().ok(),
             bg_tx,
             bg_rx,
@@ -276,10 +293,22 @@ impl App {
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
         let agent_res = if let Some(sid) = &self.session_id {
-            let registry = self.manager.as_ref().unwrap().tool_registry();
+            let registry = match self.manager.as_ref() {
+                Some(m) => m.tool_registry(),
+                None => {
+                    self.chat_entries.push(ChatEntry::Error("Manager not initialized".to_string()));
+                    return;
+                }
+            };
             crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, cmd_tx.clone(), registry)
         } else {
-            let registry = self.manager.as_ref().unwrap().tool_registry();
+            let registry = match self.manager.as_ref() {
+                Some(m) => m.tool_registry(),
+                None => {
+                    self.chat_entries.push(ChatEntry::Error("Manager not initialized".to_string()));
+                    return;
+                }
+            };
             Ok(crate::agent::loop_mod::AgentLoop::new(
                 config.clone(),
                 evt_tx,
@@ -661,7 +690,10 @@ impl App {
         if self.config.is_none() {
             return;
         }
-        let config = self.config.clone().unwrap();
+        let config = match self.config.clone() {
+            Some(c) => c,
+            None => return,
+        };
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
             let client = ApiClient::new(&config);
@@ -731,25 +763,71 @@ impl App {
             };
 
             if idx > 0 {
-                visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false });
+                visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false, line_type: LineType::Normal, language: None });
             }
 
             if let Some(h) = header {
-                visual_lines.push(VisualLine { entry_idx: idx, text: h.to_string(), is_header: true });
+                visual_lines.push(VisualLine { entry_idx: idx, text: h.to_string(), is_header: true, line_type: LineType::Normal, language: None });
             }
 
+            let mut in_code_block = false;
+            let mut current_language: Option<String> = None;
             for line in content.lines() {
+                let trimmed = line.trim();
+                let is_fence_start = trimmed.starts_with("```");
+                let mut line_type = LineType::Normal;
+                let mut language: Option<String> = None;
+                
+                if is_fence_start {
+                    if !in_code_block {
+                        line_type = LineType::CodeBlockStart;
+                        // Extract language from fence start
+                        let after_backticks = &trimmed[3..].trim();
+                        if !after_backticks.is_empty() {
+                            // Take the first word as language
+                            let lang = after_backticks.split_whitespace().next().unwrap_or("");
+                            if !lang.is_empty() {
+                                current_language = Some(lang.to_string());
+                            } else {
+                                current_language = None;
+                            }
+                        } else {
+                            current_language = None;
+                        }
+                        language = current_language.clone();
+                        // Add copy hint to the fence line
+                        // We'll modify the line variable to include the hint
+                        // But we need to be careful: line variable is the original line
+                        // We'll handle this later in the line wrapping logic
+                    } else {
+                        line_type = LineType::CodeBlockEnd;
+                        // Reset language for fence end line
+                        current_language = None;
+                    }
+                    in_code_block = !in_code_block;
+                } else if in_code_block {
+                    line_type = LineType::CodeBlock;
+                    language = current_language.clone();
+                }
+                
+                // Add copy icon to code block start line
+                let line_to_wrap = if line_type == LineType::CodeBlockStart {
+                    format!("{} ⎘", line)
+                } else {
+                    line.to_string()
+                };
+
                 if line.is_empty() {
-                    visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false });
+                    visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false, line_type, language });
                     continue;
                 }
 
-                let words = line.split_inclusive(' ');
+                let words = line_to_wrap.split_inclusive(' ');
                 let mut current_line = String::new();
                 for word in words {
                     if current_line.chars().count() + word.chars().count() > width as usize {
                         if !current_line.is_empty() {
-                            visual_lines.push(VisualLine { entry_idx: idx, text: current_line.clone(), is_header: false });
+                            visual_lines.push(VisualLine { entry_idx: idx, text: current_line.clone(), is_header: false, line_type, language: language.clone() });
                             current_line.clear();
                         }
                         
@@ -757,7 +835,7 @@ impl App {
                         let mut remaining_word = word;
                         while remaining_word.chars().count() > width as usize {
                             let (head, tail) = remaining_word.split_at(remaining_word.char_indices().map(|(i, _)| i).nth(width as usize).unwrap_or(remaining_word.len()));
-                            visual_lines.push(VisualLine { entry_idx: idx, text: head.to_string(), is_header: false });
+                            visual_lines.push(VisualLine { entry_idx: idx, text: head.to_string(), is_header: false, line_type, language: language.clone() });
                             remaining_word = tail;
                         }
                         current_line.push_str(remaining_word);
@@ -766,7 +844,7 @@ impl App {
                     }
                 }
                 if !current_line.is_empty() {
-                    visual_lines.push(VisualLine { entry_idx: idx, text: current_line, is_header: false });
+                    visual_lines.push(VisualLine { entry_idx: idx, text: current_line, is_header: false, line_type, language });
                 }
             }
         }
@@ -837,6 +915,39 @@ impl App {
             }
             Some(result)
         }
+    }
+    pub fn copy_code_block_at_vline(&mut self, vline_idx: usize) -> Option<String> {
+        let vlines = self.calculate_visual_lines(self.last_chat_width);
+        let vline = vlines.get(vline_idx)?;
+        // If not part of a code block, return None
+        if !matches!(vline.line_type, LineType::CodeBlock | LineType::CodeBlockStart | LineType::CodeBlockEnd) {
+            return None;
+        }
+        // Find start and end indices of the code block
+        // First, find the start (CodeBlockStart) before this line
+        let mut start = vline_idx;
+        while start > 0 && !matches!(vlines[start].line_type, LineType::CodeBlockStart) {
+            start -= 1;
+        }
+        // Ensure we found a start
+        if !matches!(vlines[start].line_type, LineType::CodeBlockStart) {
+            return None;
+        }
+        // Find the end (CodeBlockEnd) after start
+        let mut end = start;
+        while end < vlines.len() && !matches!(vlines[end].line_type, LineType::CodeBlockEnd) {
+            end += 1;
+        }
+        if end >= vlines.len() || !matches!(vlines[end].line_type, LineType::CodeBlockEnd) {
+            return None;
+        }
+        // Collect lines between start+1 and end-1
+        let mut code_lines = Vec::new();
+        for i in start+1..end {
+            code_lines.push(vlines[i].text.clone());
+        }
+        let code_text = code_lines.join("\n");
+        Some(code_text)
     }
 } // impl App
 
@@ -1049,6 +1160,7 @@ fn render(frame: &mut Frame, app: &mut App) {
 
 fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     let layout = ui::layout::AppLayout::new(area);
+    app.layout = Some(layout.clone());
 
     render_title_bar(frame, layout.title_bar, app);
 
@@ -1358,6 +1470,7 @@ async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     key: app.setup_state.api_key_input.clone(),
                                     base_url: base_url.clone(),
                                     model: model_id.to_string(),
+                                    timeout: None,
                                 }],
                                 active_provider: 0,
                                     agent: crate::config::AgentConfig {
@@ -1617,6 +1730,33 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     }
                 }
             }
+            KeyCode::Char('c') if app.focus == Focus::Chat => {
+                if let Some(code_text) = app.copy_code_block_at_vline(app.chat_selection.vline) {
+                    if let Some(clipboard) = &mut app.clipboard {
+                        if let Err(e) = clipboard.set_text(code_text) {
+                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
+                        } else {
+                            app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
+                        }
+                    } else {
+                        match arboard::Clipboard::new() {
+                            Ok(mut new_clipboard) => {
+                                if let Err(e) = new_clipboard.set_text(code_text) {
+                                    app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
+                                } else {
+                                    app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
+                                }
+                                app.clipboard = Some(new_clipboard);
+                            }
+                            Err(e) => {
+                                app.chat_entries.push(ChatEntry::SystemInfo(format!("Failed to initialize clipboard: {}", e)));
+                            }
+                        }
+                    }
+                } else {
+                    app.chat_entries.push(ChatEntry::SystemInfo("Cursor is not inside a code block.".to_string()));
+                }
+            }
             KeyCode::Backspace if app.focus == Focus::Input => {
                 if app.cursor_pos > 0 {
                     let mut chars: Vec<char> = app.input.chars().collect();
@@ -1652,9 +1792,9 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             }
             _ => {}
         }
-    } else if let Event::Mouse(MouseEvent { kind, .. }) = ev {
+    } else if let Event::Mouse(ref mouse_event) = ev {
         if app.focus == Focus::Chat || app.focus == Focus::Input {
-            match kind {
+            match mouse_event.kind {
                 MouseEventKind::ScrollUp => {
                     if !app.user_scrolled {
                         app.scroll_offset = app.chat_max_scroll;
@@ -1668,6 +1808,52 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                         app.user_scrolled = false;
                     } else {
                         app.user_scrolled = true;
+                    }
+                }
+                MouseEventKind::Down(_) => {
+                    // Check if click is inside chat panel
+                    if let Some(layout) = &app.layout {
+                        let chat_panel = layout.chat_panel;
+                        if mouse_event.column >= chat_panel.x && mouse_event.column < chat_panel.x + chat_panel.width &&
+                           mouse_event.row >= chat_panel.y && mouse_event.row < chat_panel.y + chat_panel.height {
+                            // Inside chat panel, compute inner chat rect
+                            let inner_chat = chat_panel.inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
+                            if mouse_event.column >= inner_chat.x && mouse_event.column < inner_chat.x + inner_chat.width &&
+                               mouse_event.row >= inner_chat.y && mouse_event.row < inner_chat.y + inner_chat.height {
+                                // Convert to visual line index
+                                let visual_line_index = (mouse_event.row - inner_chat.y) as usize + app.scroll_offset as usize;
+                                let vlines = app.calculate_visual_lines(inner_chat.width.saturating_sub(2));
+                                if let Some(vline) = vlines.get(visual_line_index) {
+                                    if vline.line_type == LineType::CodeBlockStart {
+                                        // Copy the code block
+                                        if let Some(code_text) = app.copy_code_block_at_vline(visual_line_index) {
+                                            if let Some(clipboard) = &mut app.clipboard {
+                                                if let Err(e) = clipboard.set_text(code_text) {
+                                                    app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
+                                                } else {
+                                                    app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
+                                                }
+                                            } else {
+                                                // Try to re-initialize clipboard
+                                                match arboard::Clipboard::new() {
+                                                    Ok(mut new_clipboard) => {
+                                                        if let Err(e) = new_clipboard.set_text(code_text) {
+                                                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
+                                                        } else {
+                                                            app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
+                                                        }
+                                                        app.clipboard = Some(new_clipboard);
+                                                    }
+                                                    Err(e) => {
+                                                        app.chat_entries.push(ChatEntry::SystemInfo(format!("Failed to initialize clipboard: {}", e)));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 _ => {}

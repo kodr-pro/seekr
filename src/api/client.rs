@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
+use std::time::Duration;
 use tokio::sync::mpsc;
+use tokio::time::sleep;
 
 use crate::config::AppConfig;
 use super::stream::{parse_sse_stream, StreamEvent};
@@ -16,12 +18,53 @@ pub struct ApiClient {
 impl ApiClient {
     pub fn new(config: &AppConfig) -> Self {
         let provider = config.current_provider();
+        let mut client_builder = Client::builder();
+        if let Some(timeout_secs) = provider.timeout {
+            client_builder = client_builder.timeout(Duration::from_secs(timeout_secs));
+        }
+        let http = client_builder.build().unwrap_or_else(|_| Client::new());
         Self {
-            http: Client::new(),
+            http,
             base_url: provider.base_url.clone(),
             api_key: provider.key.clone(),
         }
     } // new
+
+    /// Helper function to retry a request with exponential backoff
+    async fn send_request_with_retry<F>(&self, mut request_builder: F) -> Result<reqwest::Response>
+    where
+        F: FnMut() -> reqwest::RequestBuilder,
+    {
+        const MAX_RETRIES: u32 = 3;
+        const BASE_DELAY_MS: u64 = 500;
+        let mut last_error = None;
+
+        for attempt in 0..=MAX_RETRIES {
+            match request_builder().send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        return Ok(response);
+                    }
+                    let status = response.status();
+                    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
+                        let error_body = response.text().await.unwrap_or_default();
+                        last_error = Some(anyhow::anyhow!("HTTP {}: {}", status, error_body));
+                    } else {
+                        let body = response.text().await.unwrap_or_else(|_| "Failed to read error body".to_string());
+                        anyhow::bail!("API request failed ({}): {}", status, body);
+                    }
+                }
+                Err(e) => {
+                    last_error = Some(e.into());
+                }
+            }
+            if attempt < MAX_RETRIES {
+                let delay = BASE_DELAY_MS * 2u64.pow(attempt);
+                sleep(Duration::from_millis(delay)).await;
+            }
+        }
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error after retries")))
+    }
 
     pub async fn chat_completion_stream(
         &self,
@@ -54,8 +97,11 @@ impl ApiClient {
                         "content": content
                     }));
                 } else {
-                    // Handle messages with null content (skip or push empty string)
-                    // Skipping for now as Anthropic doesn't accept null content
+                    // Handle messages with null content (push empty string)
+                    anthropic_messages.push(serde_json::json!({
+                        "role": msg.role,
+                        "content": ""
+                    }));
                 }
             }
             
@@ -137,24 +183,13 @@ impl ApiClient {
             };
 
             let url = format!("{}/chat/completions", self.base_url);
-            let response = self
-                .http
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to send request to API")?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Failed to read error body".to_string());
-                anyhow::bail!("API request failed ({}): {}", status, body);
-            }
+            let response = self.send_request_with_retry(|| {
+                self.http
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {}", self.api_key))
+                    .header("Content-Type", "application/json")
+                    .json(&request)
+            }).await?;
 
             let (tx, rx) = mpsc::unbounded_channel();
 
@@ -198,8 +233,11 @@ impl ApiClient {
                         "content": content
                     }));
                 } else {
-                    // Handle messages with null content (skip or push empty string)
-                    // Skipping for now as Anthropic doesn't accept null content
+                    // Handle messages with null content (push empty string)
+                    anthropic_messages.push(serde_json::json!({
+                        "role": msg.role,
+                        "content": ""
+                    }));
                 }
             }
             
