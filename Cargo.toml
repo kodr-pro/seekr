@@ -1,6 +1,6 @@
 [package]
 name = "seekr"
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 description = "AI Agent Manager - Terminal UI powered by DeepSeek"
 license = "Polyform-Prosperity-1.0.0"
@@ -22,7 +22,11 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 tokio = { version = "1", features = ["full"] }
 
 # HTTP client
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
