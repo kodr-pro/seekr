@@ -43,7 +43,7 @@ Beyond built-in tools, you can extend **seekr** with custom skills.
 2. Add a `skill.json` to define your tools and their parameters.
 3. Write scripts that the tools will execute.
 
-Seekr handles the argument passing and captures the output back into the agent's context.
+**seekr** handles safe argument passing using a POSIX-compliant **Shell Escape Engine**. This ensures that even if an agent generates a malicious or malformed argument, it is safely escaped before being passed to the underlying shell (Python, Bash, etc.), preventing command injection vulnerabilities.
 
 ---
 

@@ -511,7 +511,7 @@ impl AgentLoop {
         let model = self.config.current_provider().model.clone();
 
         tokio::spawn(async move {
-            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, and relevant tool outputs. Be highly concise but technically precise.".to_string();
+            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, specific file paths mentioned, and critical tool outputs. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
             
             let mut summary_messages = vec![ChatMessage::system(&pt)];
             let mut conversation_text = String::new();

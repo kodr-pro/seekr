@@ -3,6 +3,7 @@ pub mod api;
 pub mod app;
 pub mod config;
 pub mod doctor;
+pub mod event_handler;
 pub mod manager;
 pub mod session;
 pub mod tools;

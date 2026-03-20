@@ -26,22 +26,22 @@ fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
         // Default style (will be overlaid by selection/cursor later)
         let default_style = if vline.is_header {
             match vline.text.as_str() {
-                "[YOU]" => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                "[SEEKR]" => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                "[THINKING]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC | Modifier::DIM),
-                "[ERROR]" => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                "[INPUT REQUIRED]" => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                _ => Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                "[YOU]" => Style::default().fg(Color::Rgb(0, 255, 128)).add_modifier(Modifier::BOLD),
+                "[SEEKR]" => Style::default().fg(Color::Rgb(0, 191, 255)).add_modifier(Modifier::BOLD),
+                "[THINKING]" => Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::ITALIC | Modifier::DIM),
+                "[ERROR]" => Style::default().fg(Color::Rgb(255, 69, 0)).add_modifier(Modifier::BOLD),
+                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Rgb(255, 165, 0)).add_modifier(Modifier::BOLD),
+                "[INPUT REQUIRED]" => Style::default().fg(Color::Rgb(255, 255, 0)).add_modifier(Modifier::BOLD),
+                _ => Style::default().fg(Color::Rgb(200, 200, 200)).add_modifier(Modifier::BOLD),
             }
         } else {
-            Style::default().fg(Color::White)
+            Style::default().fg(Color::Rgb(220, 220, 220))
         };
         // Style copy icon differently for code block start lines
         let copy_icon = '⎘';
         for ch in vline.text.chars() {
             if vline.line_type == LineType::CodeBlockStart && ch == copy_icon {
-                styles.push(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+                styles.push(Style::default().fg(Color::Rgb(0, 255, 255)).add_modifier(Modifier::BOLD));
             } else {
                 styles.push(default_style);
             }

@@ -1,21 +1,16 @@
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
-use ratatui::{
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::Paragraph,
-    DefaultTerminal, Frame,
-};
+use crossterm::event::EventStream;
+use ratatui::DefaultTerminal;
 use std::time::Duration;
 use tokio::sync::mpsc;
-
+use tokio_stream::StreamExt;
 use crate::agent::{AgentCommand, AgentEvent};
 use crate::api::client::ApiClient;
 use crate::config::AppConfig;
 use crate::tools::task::Task;
 use crate::tools::ActivityEntry;
-use crate::ui;
+use crate::ui::render::render;
+use crate::event_handler::handle_event;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -164,6 +159,8 @@ pub struct App {
     pub config: Option<AppConfig>,
 
     pub chat_entries: Vec<ChatEntry>,
+    pub visual_lines: Vec<VisualLine>,
+    pub needs_recompute_vlines: bool,
     pub input: String,
     pub cursor_pos: usize,
     pub scroll_offset: u16,
@@ -218,6 +215,8 @@ impl App {
             config: None,
             manager: None,
             chat_entries: Vec::new(),
+            visual_lines: Vec::new(),
+            needs_recompute_vlines: true,
             input: String::new(),
             cursor_pos: 0,
             scroll_offset: 0,
@@ -276,6 +275,7 @@ impl App {
         app.chat_entries.push(ChatEntry::SystemInfo(
             "Welcome to Seekr! Type a message to start.".to_string(),
         ));
+        app.needs_recompute_vlines = true;
         app
     } // new_main
 
@@ -337,6 +337,7 @@ impl App {
         match crate::session::Session::load(&session_id) {
             Ok(session) => {
                 self.chat_entries.clear();
+                self.needs_recompute_vlines = true;
                 for msg in session.messages {
                     match (msg.role.as_str(), msg.content) {
                         ("user", Some(content)) => {
@@ -400,10 +401,12 @@ impl App {
         if let InputMode::ShellStdin { ref input_tx, .. } = self.input_mode.clone() {
             let _ = input_tx.send(msg);
             self.input_mode = InputMode::Normal;
+            self.needs_recompute_vlines = true;
             return;
         }
 
         self.chat_entries.push(ChatEntry::UserMessage(msg.clone()));
+        self.needs_recompute_vlines = true;
         self.is_streaming = true;
         self.streaming_content.clear();
         self.streaming_reasoning.clear();
@@ -552,6 +555,7 @@ impl App {
                     } else {
                         self.chat_entries.push(ChatEntry::ContextSummary { id, summary, is_pending: false });
                     }
+                    self.needs_recompute_vlines = true;
                     if !self.user_scrolled {
                         self.scroll_offset = self.chat_max_scroll;
                     }
@@ -597,6 +601,7 @@ impl App {
             insert_pos,
             ChatEntry::Reasoning(self.streaming_reasoning.clone()),
         );
+        self.needs_recompute_vlines = true;
     } // end update_reasoning_entry
 
     fn finalize_streaming(&mut self) {
@@ -644,6 +649,7 @@ impl App {
             "Chat cleared. Type a message to continue.".to_string(),
         ));
         self.scroll_offset = 0;
+        self.needs_recompute_vlines = true;
     } // clear_chat
 
     pub async fn load_sessions(&mut self) {
@@ -812,7 +818,7 @@ impl App {
                 
                 // Add copy icon to code block start line
                 let line_to_wrap = if line_type == LineType::CodeBlockStart {
-                    format!("{} ⎘", line)
+                    format!("{} [COPY]", line)
                 } else {
                     line.to_string()
                 };
@@ -951,6 +957,7 @@ impl App {
     }
 } // impl App
 
+
 pub async fn run_app(mut app: App) -> Result<()> {
     let mut terminal = ratatui::init();
     let _ = ratatui::crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
@@ -972,969 +979,33 @@ pub async fn run_app(mut app: App) -> Result<()> {
 } // run_app
 
 async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
+    let mut reader = EventStream::new();
+    let mut heartbeat = tokio::time::interval(Duration::from_millis(50));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     loop {
         terminal.draw(|frame| render(frame, app))?;
 
-        app.poll_bg_events();
-
-        if app.mode == AppMode::Main || app.mode == AppMode::AwaitingContinue {
-            app.poll_agent_events();
-        }
-
-        if event::poll(Duration::from_millis(16))? {
-            let ev = event::read()?;
-            match app.mode {
-                AppMode::Setup => {
-                    if handle_setup_event(app, &ev).await? {
+        tokio::select! {
+            _ = heartbeat.tick() => {
+                // Heartbeat: process background events
+                app.poll_bg_events();
+                if app.mode == AppMode::Main || app.mode == AppMode::AwaitingContinue {
+                    app.poll_agent_events();
+                }
+            }
+            maybe_ev = reader.next() => {
+                if let Some(Ok(ev)) = maybe_ev {
+                    if handle_event(app, &ev).await? {
                         return Ok(());
                     }
                 }
-                AppMode::Main | AppMode::AwaitingContinue => {
-                    if handle_main_event(app, &ev).await {
-                        return Ok(());
-                    }
-                }
-                AppMode::QuitConfirm => {
-                    if handle_quit_confirm(app, &ev) {
-                        return Ok(());
-                    }
-                }
-                AppMode::Help => {
-                    if let Event::Key(key) = &ev {
-                        match key.code {
-                            KeyCode::Char('q') | KeyCode::Esc => app.mode = AppMode::Main,
-                            _ => app.mode = AppMode::Main,
-                        }
-                    }
-                }
-                AppMode::UnifiedMenu => {
-                    if let Event::Key(key) = &ev {
-                        handle_unified_menu_event(app, key).await;
-                    }
+                // Also poll agent events on any user interaction for maximum responsiveness
+                app.poll_bg_events();
+                if app.mode == AppMode::Main || app.mode == AppMode::AwaitingContinue {
+                    app.poll_agent_events();
                 }
             }
         }
     }
 } // event_loop
-
-async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') => app.mode = AppMode::Main,
-        KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
-            app.menu_state.active_tab = match app.menu_state.active_tab {
-                MenuTab::Sessions => MenuTab::Models,
-                MenuTab::Models => MenuTab::Providers,
-                MenuTab::Providers => MenuTab::Settings,
-                MenuTab::Settings => MenuTab::Help,
-                MenuTab::Help => MenuTab::Sessions,
-            };
-            app.menu_state.selection_idx = 0;
-            app.menu_state.scroll_offset = 0;
-        }
-        KeyCode::Char('h') | KeyCode::Left => {
-            app.menu_state.active_tab = match app.menu_state.active_tab {
-                MenuTab::Sessions => MenuTab::Help,
-                MenuTab::Models => MenuTab::Sessions,
-                MenuTab::Providers => MenuTab::Models,
-                MenuTab::Settings => MenuTab::Providers,
-                MenuTab::Help => MenuTab::Settings,
-            };
-            app.menu_state.selection_idx = 0;
-            app.menu_state.scroll_offset = 0;
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            app.menu_state.selection_idx = app.menu_state.selection_idx.saturating_sub(1);
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            let max = match app.menu_state.active_tab {
-                MenuTab::Sessions => app.sessions.len(),
-                MenuTab::Models => app.available_models.len(),
-                MenuTab::Providers => app.config.as_ref().map(|c| c.providers.len()).unwrap_or(0),
-                MenuTab::Settings => 5, // Hardcoded for now
-                MenuTab::Help => 0,
-            };
-            if app.menu_state.selection_idx + 1 < max {
-                app.menu_state.selection_idx += 1;
-            }
-        }
-        KeyCode::Enter => {
-            match app.menu_state.active_tab {
-                MenuTab::Sessions => {
-                    if let Some(session) = app.sessions.get(app.menu_state.selection_idx) {
-                        let id = session.id.clone();
-                        app.session_id = Some(id.clone());
-                        app.mode = AppMode::Main;
-                        app.resume_session(id);
-                        app.start_agent();
-                    }
-                }
-                MenuTab::Models => {
-                    if let Some(model) = app.available_models.get(app.menu_state.selection_idx) {
-                        let model_clone = model.clone();
-                        if let Some(cfg) = app.config.as_mut() {
-                            cfg.current_provider_mut().model = model_clone.clone();
-                            cfg.save().ok();
-                            app.mode = AppMode::Main;
-                            app.chat_entries.push(ChatEntry::SystemInfo(format!(
-                                "Switched to model: {}",
-                                model_clone
-                            )));
-                            app.start_agent();
-                        }
-                    }
-                }
-                MenuTab::Providers => {
-                    if let Some(cfg) = app.config.as_mut() {
-                        cfg.active_provider = app.menu_state.selection_idx;
-                        cfg.save().ok();
-                        app.mode = AppMode::Main;
-                        app.chat_entries.push(ChatEntry::SystemInfo(format!(
-                            "Switched to provider: {}",
-                            cfg.current_provider().name
-                        )));
-                        app.start_agent();
-                    }
-                }
-                MenuTab::Settings => {
-                    if let Some(cfg) = app.config.as_mut() {
-                        match app.menu_state.selection_idx {
-                            0 => { /* Working Dir - could be complex to edit here */ }
-                            1 => {
-                                cfg.agent.max_iterations = match cfg.agent.max_iterations {
-                                    15 => 30,
-                                    30 => 50,
-                                    50 => 100,
-                                    100 => 200,
-                                    200 => 500,
-                                    500 => 1000,
-                                    _ => 15,
-                                };
-                            }
-                            2 => {
-                                cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools;
-                            }
-                            4 => {
-                                cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
-                                app.show_reasoning = cfg.ui.show_reasoning;
-                            }
-                            _ => {}
-                        }
-                        cfg.save().ok();
-                    }
-                }
-                _ => {}
-            }
-        }
-        KeyCode::Char('d') | KeyCode::Delete => {
-            if app.menu_state.active_tab == MenuTab::Sessions {
-                app.delete_session_at(app.menu_state.selection_idx).await;
-            }
-        }
-        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.fetch_available_models();
-        }
-        _ => {}
-    }
-} // handle_unified_menu_event
-
-fn render(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
-    match app.mode {
-        AppMode::Setup => ui::setup::render_setup(frame, area, &app.setup_state),
-        AppMode::Main
-        | AppMode::QuitConfirm
-        | AppMode::AwaitingContinue
-        | AppMode::Help
-        | AppMode::UnifiedMenu => {
-            render_main(frame, area, app);
-            match app.mode {
-                AppMode::QuitConfirm => render_quit_dialog(frame, area),
-                AppMode::AwaitingContinue => render_continue_dialog(frame, area),
-                AppMode::Help => render_help_dialog(frame, area),
-                AppMode::UnifiedMenu => ui::menu::render_menu(frame, area, app),
-                _ => {}
-            }
-        }
-    }
-} // render
-
-fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
-    let layout = ui::layout::AppLayout::new(area);
-    app.layout = Some(layout.clone());
-
-    render_title_bar(frame, layout.title_bar, app);
-
-    let inner_chat = layout.chat_panel.inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
-    let visual_lines = app.calculate_visual_lines(inner_chat.width.saturating_sub(2));
-
-    app.chat_max_scroll = ui::chat::render_chat(
-        frame,
-        layout.chat_panel,
-        &visual_lines,
-        app.scroll_offset,
-        app.focus == Focus::Chat,
-        &app.chat_selection,
-    );
-
-    ui::tasks::render_tasks(
-        frame,
-        layout.task_panel,
-        &app.tasks,
-        &app.activities,
-        &app.live_activities,
-        app.focus == Focus::Tasks,
-    );
-
-    let (shell_context, input_prompt) = match &app.input_mode {
-        InputMode::ShellStdin { context, .. } => (
-            if context.is_empty() {
-                None
-            } else {
-                Some(context.as_str())
-            },
-            Some("Shell input required"),
-        ),
-        InputMode::Normal => (None, None),
-    };
-
-    ui::input::render_input(
-        frame,
-        layout.input_bar,
-        &app.input,
-        app.cursor_pos,
-        app.focus == Focus::Input && !app.awaiting_approval,
-        input_prompt,
-        shell_context,
-    );
-
-    let model = app
-        .config
-        .as_ref()
-        .map(|c| c.current_provider().model.as_str())
-        .unwrap_or("unknown");
-    let provider = app
-        .config
-        .as_ref()
-        .map(|c| c.current_provider().name.as_str())
-        .unwrap_or("unknown");
-    let max_iter = app
-        .config
-        .as_ref()
-        .map(|c| c.agent.max_iterations)
-        .unwrap_or(15);
-    ui::status::render_status(
-        frame,
-        layout.status_bar,
-        &ui::status::StatusInfo {
-            session_id: app.session_id.as_deref().unwrap_or("none"),
-            connected: app.connected,
-            provider,
-            model,
-            total_tokens: app.total_tokens,
-            iteration: app.iteration,
-            max_iterations: max_iter,
-            is_thinking: app.is_streaming,
-        },
-    );
-} // render_main
-
-fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let model = app
-        .config
-        .as_ref()
-        .map(|c| c.current_provider().model.as_str())
-        .unwrap_or("unknown");
-    let status = if app.is_streaming { "Working" } else { "Ready" };
-
-    ui::title::render_title(
-        frame,
-        area,
-        &ui::title::TitleInfo {
-            version: "0.1.1",
-            session_id: app.session_id.as_deref(),
-            connected: app.connected,
-            model,
-            status,
-        },
-    );
-} // render_title_bar
-
-fn render_quit_dialog(frame: &mut Frame, area: Rect) {
-    let dialog_area = centered_rect(44, 7, area);
-    frame.render_widget(ratatui::widgets::Clear, dialog_area);
-
-    let block = ratatui::widgets::Block::default()
-        .title(" Confirmation ")
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
-
-    let text = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "    Are you sure you want to quit?",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("    Press "),
-            Span::styled(
-                "[Y]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" to Yes, "),
-            Span::styled(
-                "[N]",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" to No"),
-        ]),
-    ];
-
-    frame.render_widget(Paragraph::new(text).block(block), dialog_area);
-} // render_quit_dialog
-
-fn render_continue_dialog(frame: &mut Frame, area: Rect) {
-    let dialog_area = centered_rect(58, 8, area);
-    frame.render_widget(ratatui::widgets::Clear, dialog_area);
-
-    let block = ratatui::widgets::Block::default()
-        .title(" Max Iterations Reached ")
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let text = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "  The agent has used all available iterations.",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  Press "),
-            Span::styled(
-                "[C]",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" to Continue   "),
-            Span::styled(
-                "[A]",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" to Answer Now"),
-        ]),
-    ];
-
-    frame.render_widget(Paragraph::new(text).block(block), dialog_area);
-} // render_continue_dialog
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let x = (area.width.saturating_sub(width)) / 2;
-    let y = (area.height.saturating_sub(height)) / 2;
-    Rect::new(x, y, width.min(area.width), height.min(area.height))
-} // centered_rect
-
-async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
-    if let Event::Key(key) = ev {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-            return Ok(true);
-        }
-
-        match app.setup_state.current_step {
-            0 => {
-                if key.code == KeyCode::Enter {
-                    app.setup_state.current_step = 1;
-                }
-            }
-            1 => match key.code {
-                KeyCode::Up => {
-                    app.setup_state.provider_selection =
-                        app.setup_state.provider_selection.saturating_sub(1)
-                }
-                KeyCode::Down => {
-                    app.setup_state.provider_selection = (app.setup_state.provider_selection + 1).min(3)
-                }
-                KeyCode::Enter => {
-                    app.setup_state.current_step = 2;
-                }
-                KeyCode::Esc => app.setup_state.current_step = 0,
-                _ => {}
-            },
-            2 => match key.code {
-                KeyCode::Enter => {
-                    if !app.setup_state.api_key_input.is_empty() {
-                        app.setup_state.error_message = None;
-                        app.setup_state.current_step = 3;
-                    } else {
-                        app.setup_state.error_message = Some("API key cannot be empty".to_string());
-                    }
-                }
-                KeyCode::Esc => app.setup_state.current_step = 1,
-                KeyCode::Backspace => {
-                    app.setup_state.api_key_input.pop();
-                }
-                KeyCode::Char(c) => {
-                    app.setup_state.api_key_input.push(c);
-                    app.setup_state.error_message = None;
-                }
-                _ => {}
-            },
-            3 => match key.code {
-                KeyCode::Up => {
-                    app.setup_state.model_selection =
-                        app.setup_state.model_selection.saturating_sub(1)
-                }
-                KeyCode::Down => {
-                    let models_count: usize = match app.setup_state.provider_selection {
-                        0 => 2, // OpenAI
-                        1 => 2, // DeepSeek
-                        2 => 1, // Anthropic
-                        _ => 5, // Custom
-                    };
-                    app.setup_state.model_selection =
-                        (app.setup_state.model_selection + 1).min(models_count.saturating_sub(1))
-                }
-                KeyCode::Enter => app.setup_state.current_step = 4,
-                KeyCode::Esc => app.setup_state.current_step = 2,
-                _ => {}
-            },
-            4 => match key.code {
-                KeyCode::Up => {
-                    app.setup_state.auto_approve_selection =
-                        app.setup_state.auto_approve_selection.saturating_sub(1)
-                }
-                KeyCode::Down => {
-                    app.setup_state.auto_approve_selection =
-                        (app.setup_state.auto_approve_selection + 1).min(1)
-                }
-                KeyCode::Enter => app.setup_state.current_step = 5,
-                KeyCode::Esc => app.setup_state.current_step = 3,
-                _ => {}
-            },
-            5 => match key.code {
-                KeyCode::Enter => {
-                    app.setup_state.current_step = 6;
-                    app.setup_state.error_message = None;
-                    app.setup_state.validating = true;
-
-                    let key = app.setup_state.api_key_input.clone();
-                    let model_id = match app.setup_state.provider_selection {
-                        0 => match app.setup_state.model_selection {
-                            0 => "gpt-4o",
-                            _ => "gpt-4o-mini",
-                        },
-                        1 => match app.setup_state.model_selection {
-                            0 => "deepseek-chat",
-                            _ => "deepseek-reasoner",
-                        },
-                        2 => "claude-3-5-sonnet-latest",
-                        _ => match app.setup_state.model_selection {
-                            0 => "gpt-4o",
-                            1 => "gpt-4o-mini",
-                            2 => "claude-3-5-sonnet-latest",
-                            3 => "deepseek-chat",
-                            _ => "deepseek-reasoner",
-                        },
-                    };
-                    let base_url = AppConfig::get_default_base_url(model_id);
-                    let valid = ApiClient::validate_key(&key, &base_url, model_id).await;
-                    app.setup_state.validating = false;
-
-                    match valid {
-                        Ok(true) => {
-                            let auto_approve = app.setup_state.auto_approve_selection == 1;
-                            let working_dir = if app.setup_state.working_dir_input.is_empty() {
-                                ".".to_string()
-                            } else {
-                                app.setup_state.working_dir_input.clone()
-                            };
-
-                            let config = AppConfig {
-                                providers: vec![crate::config::ProviderConfig {
-                                    name: match app.setup_state.provider_selection {
-                                        0 => "OpenAI",
-                                        1 => "DeepSeek",
-                                        2 => "Anthropic",
-                                        _ => "AI Provider",
-                                    }
-                                    .to_string(),
-                                    key: app.setup_state.api_key_input.clone(),
-                                    base_url: base_url.clone(),
-                                    model: model_id.to_string(),
-                                    timeout: None,
-                                }],
-                                active_provider: 0,
-                                    agent: crate::config::AgentConfig {
-                                        max_iterations: 15,
-                                        auto_approve_tools: auto_approve,
-                                        working_directory: working_dir,
-                                        context_window_threshold: 40,
-                                        context_window_keep: 10,
-                                    },
-                                ui: crate::config::UiConfig {
-                                    theme: "dark".to_string(),
-                                    show_reasoning: true,
-                                },
-                            };
-
-                            if let Err(e) = config.save() {
-                                app.setup_state.error_message =
-                                    Some(format!("Failed to save config: {e}"));
-                            } else {
-                                app.manager = Some(std::sync::Arc::new(
-                                    crate::manager::SeekrManager::new(config.clone()),
-                                ));
-                                app.config = Some(config);
-                                app.setup_state.current_step = 7;
-                            }
-                        }
-                        Ok(false) => {
-                            app.setup_state.error_message = Some("Invalid API key.".to_string());
-                        }
-                        Err(e) => {
-                            app.setup_state.error_message = Some(format!("Connection error: {e}"));
-                        }
-                    }
-                }
-                KeyCode::Esc => app.setup_state.current_step = 4,
-                KeyCode::Backspace => {
-                    app.setup_state.working_dir_input.pop();
-                }
-                KeyCode::Char(c) => {
-                    app.setup_state.working_dir_input.push(c);
-                }
-                _ => {}
-            },
-            6 => {
-                if key.code == KeyCode::Enter {
-                    app.setup_state.current_step = 2;
-                    app.setup_state.error_message = None;
-                }
-            }
-            7 => {
-                if key.code == KeyCode::Enter {
-                    app.mode = AppMode::Main;
-                    app.show_reasoning = true;
-                    app.chat_entries
-                        .push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
-                    app.start_agent();
-                }
-            }
-            _ => {}
-        }
-    }
-    Ok(false)
-} // handle_setup_event
-
-pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
-    if let Event::Key(KeyEvent {
-        code, modifiers, ..
-    }) = ev
-    {
-        if *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
-            return true;
-        }
-
-        if app.mode == AppMode::Help {
-            app.mode = AppMode::Main;
-            return false;
-        }
-
-        if app.mode == AppMode::AwaitingContinue {
-            match code {
-                KeyCode::Char('c') | KeyCode::Char('C') => {
-                    app.mode = AppMode::Main;
-                    app.is_streaming = true;
-                    app.user_scrolled = false;
-                    if let Some(ref tx) = app.agent_cmd_tx {
-                        tx.send(AgentCommand::Continue).ok();
-                    }
-                }
-                KeyCode::Char('a') | KeyCode::Char('A') => {
-                    app.mode = AppMode::Main;
-                    if let Some(ref tx) = app.agent_cmd_tx {
-                        tx.send(AgentCommand::AnswerNow).ok();
-                    }
-                }
-                _ => {}
-            }
-            return false;
-        }
-
-        if app.awaiting_approval {
-            match code {
-                KeyCode::Char('y') | KeyCode::Char('Y') => app.handle_approval(true, false),
-                KeyCode::Char('n') | KeyCode::Char('N') => app.handle_approval(false, false),
-                KeyCode::Char('a') | KeyCode::Char('A') => app.handle_approval(true, true),
-                _ => {}
-            }
-            return false;
-        }
-
-        match code {
-            KeyCode::F(1) => app.mode = AppMode::Help,
-            KeyCode::Char('g') if modifiers.contains(KeyModifiers::CONTROL) => {
-                app.open_unified_menu().await;
-            }
-            KeyCode::Enter => {
-                app.send_message();
-                app.user_scrolled = false;
-                app.scroll_offset = app.chat_max_scroll;
-            }
-            KeyCode::Esc => {
-                if app.focus == Focus::Chat && app.chat_selection.mode != SelectionMode::Normal {
-                    app.chat_selection.mode = SelectionMode::Normal;
-                    app.chat_selection.anchor_vline = None;
-                    app.chat_selection.anchor_col = None;
-                } else {
-                    app.mode = AppMode::QuitConfirm;
-                }
-            }
-            KeyCode::Tab => {
-                app.focus = match app.focus {
-                    Focus::Input => Focus::Chat,
-                    Focus::Chat => Focus::Tasks,
-                    Focus::Tasks => Focus::Input,
-                };
-                app.chat_selection = ChatSelection::default();
-                if app.focus == Focus::Chat {
-                    app.chat_selection.vline = app.get_max_vline();
-                    app.ensure_vline_visible();
-                }
-            }
-            KeyCode::Char('l') if modifiers.contains(KeyModifiers::CONTROL) => {
-                app.clear_chat();
-                app.chat_selection = ChatSelection::default();
-            }
-            KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
-                if let Some(cfg) = app.config.as_mut() {
-                    cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
-                    app.show_reasoning = cfg.ui.show_reasoning;
-                    cfg.save().ok();
-                }
-            }
-            KeyCode::PageUp if app.focus != Focus::Tasks => {
-                if !app.user_scrolled {
-                    app.scroll_offset = app.chat_max_scroll;
-                }
-                app.scroll_offset = app.scroll_offset.saturating_sub(10);
-                app.user_scrolled = true;
-            }
-            KeyCode::PageDown if app.focus != Focus::Tasks => {
-                app.scroll_offset = app.scroll_offset.saturating_add(10);
-                if app.scroll_offset >= app.chat_max_scroll {
-                    app.user_scrolled = false;
-                }
-            }
-            KeyCode::Up if app.focus == Focus::Input => {
-                if !app.user_scrolled {
-                    app.scroll_offset = app.chat_max_scroll;
-                }
-                app.scroll_offset = app.scroll_offset.saturating_sub(1);
-                app.user_scrolled = true;
-            }
-            KeyCode::Down if app.focus == Focus::Input => {
-                if !app.user_scrolled {
-                    app.scroll_offset = app.chat_max_scroll;
-                }
-                app.scroll_offset = app.scroll_offset.saturating_add(1);
-                if app.scroll_offset >= app.chat_max_scroll {
-                    app.user_scrolled = false;
-                }
-            }
-            // Vim-style selection and navigation when Chat is focused
-            KeyCode::Char('k') | KeyCode::Up if app.focus == Focus::Chat => {
-                if app.chat_selection.vline > 0 {
-                    app.chat_selection.vline -= 1;
-                    app.chat_selection.col = app.chat_selection.col.min(app.get_vline_char_count(app.chat_selection.vline));
-                    app.ensure_vline_visible();
-                }
-            }
-            KeyCode::Char('j') | KeyCode::Down if app.focus == Focus::Chat => {
-                let max_v = app.get_max_vline();
-                if app.chat_selection.vline < max_v {
-                    app.chat_selection.vline += 1;
-                    app.chat_selection.col = app.chat_selection.col.min(app.get_vline_char_count(app.chat_selection.vline));
-                    app.ensure_vline_visible();
-                }
-            }
-            KeyCode::Char('h') | KeyCode::Left if app.focus == Focus::Chat => {
-                app.chat_selection.col = app.chat_selection.col.saturating_sub(1);
-            }
-            KeyCode::Char('l') | KeyCode::Right if app.focus == Focus::Chat => {
-                let max_c = app.get_vline_char_count(app.chat_selection.vline);
-                if app.chat_selection.col < max_c {
-                    app.chat_selection.col += 1;
-                }
-            }
-            KeyCode::Char('v') if app.focus == Focus::Chat => {
-                if app.chat_selection.mode == SelectionMode::Visual {
-                    app.chat_selection.mode = SelectionMode::Normal;
-                    app.chat_selection.anchor_vline = None;
-                    app.chat_selection.anchor_col = None;
-                } else {
-                    app.chat_selection.mode = SelectionMode::Visual;
-                    app.chat_selection.anchor_vline = Some(app.chat_selection.vline);
-                    app.chat_selection.anchor_col = Some(app.chat_selection.col);
-                }
-            }
-            KeyCode::Char('V') if app.focus == Focus::Chat => {
-                if app.chat_selection.mode == SelectionMode::VisualLine {
-                    app.chat_selection.mode = SelectionMode::Normal;
-                    app.chat_selection.anchor_vline = None;
-                    app.chat_selection.anchor_col = None;
-                } else {
-                    app.chat_selection.mode = SelectionMode::VisualLine;
-                    app.chat_selection.anchor_vline = Some(app.chat_selection.vline);
-                    app.chat_selection.anchor_col = None;
-                }
-            }
-            KeyCode::Char('y') if app.focus == Focus::Chat => {
-                if let Some(text) = app.get_selected_text() {
-                    if let Some(clipboard) = &mut app.clipboard {
-                        if let Err(e) = clipboard.set_text(text) {
-                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
-                        } else {
-                            app.chat_entries.push(ChatEntry::SystemInfo("Selected text copied to clipboard!".to_string()));
-                            app.chat_selection.mode = SelectionMode::Normal;
-                            app.chat_selection.anchor_vline = None;
-                            app.chat_selection.anchor_col = None;
-                        }
-                    } else {
-                        // Try to re-initialize if it was initially failed
-                        match arboard::Clipboard::new() {
-                            Ok(mut new_clipboard) => {
-                                if let Err(e) = new_clipboard.set_text(text) {
-                                    app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
-                                } else {
-                                    app.chat_entries.push(ChatEntry::SystemInfo("Selected text copied to clipboard!".to_string()));
-                                    app.chat_selection.mode = SelectionMode::Normal;
-                                    app.chat_selection.anchor_vline = None;
-                                    app.chat_selection.anchor_col = None;
-                                }
-                                app.clipboard = Some(new_clipboard);
-                            }
-                            Err(e) => {
-                                app.chat_entries.push(ChatEntry::SystemInfo(format!("Failed to initialize clipboard: {}", e)));
-                            }
-                        }
-                    }
-                }
-            }
-            KeyCode::Char('c') if app.focus == Focus::Chat => {
-                if let Some(code_text) = app.copy_code_block_at_vline(app.chat_selection.vline) {
-                    if let Some(clipboard) = &mut app.clipboard {
-                        if let Err(e) = clipboard.set_text(code_text) {
-                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
-                        } else {
-                            app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
-                        }
-                    } else {
-                        match arboard::Clipboard::new() {
-                            Ok(mut new_clipboard) => {
-                                if let Err(e) = new_clipboard.set_text(code_text) {
-                                    app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
-                                } else {
-                                    app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
-                                }
-                                app.clipboard = Some(new_clipboard);
-                            }
-                            Err(e) => {
-                                app.chat_entries.push(ChatEntry::SystemInfo(format!("Failed to initialize clipboard: {}", e)));
-                            }
-                        }
-                    }
-                } else {
-                    app.chat_entries.push(ChatEntry::SystemInfo("Cursor is not inside a code block.".to_string()));
-                }
-            }
-            KeyCode::Backspace if app.focus == Focus::Input => {
-                if app.cursor_pos > 0 {
-                    let mut chars: Vec<char> = app.input.chars().collect();
-                    if app.cursor_pos <= chars.len() {
-                        chars.remove(app.cursor_pos - 1);
-                        app.input = chars.into_iter().collect();
-                        app.cursor_pos -= 1;
-                    }
-                }
-            }
-            KeyCode::Delete if app.focus == Focus::Input => {
-                let chars: Vec<char> = app.input.chars().collect();
-                if app.cursor_pos < chars.len() {
-                    let mut new_chars = chars;
-                    new_chars.remove(app.cursor_pos);
-                    app.input = new_chars.into_iter().collect();
-                }
-            }
-            KeyCode::Left if app.focus == Focus::Input => app.cursor_pos = app.cursor_pos.saturating_sub(1),
-            KeyCode::Right if app.focus == Focus::Input => app.cursor_pos = (app.cursor_pos + 1).min(app.input.chars().count()),
-            KeyCode::Home if app.focus == Focus::Input => app.cursor_pos = 0,
-            KeyCode::End if app.focus == Focus::Input => app.cursor_pos = app.input.chars().count(),
-            KeyCode::Char(c) if app.focus == Focus::Input => {
-                let mut chars: Vec<char> = app.input.chars().collect();
-                if app.cursor_pos <= chars.len() {
-                    chars.insert(app.cursor_pos, *c);
-                    app.input = chars.into_iter().collect();
-                    app.cursor_pos += 1;
-                } else {
-                    app.input.push(*c);
-                    app.cursor_pos = app.input.chars().count();
-                }
-            }
-            _ => {}
-        }
-    } else if let Event::Mouse(ref mouse_event) = ev {
-        if app.focus == Focus::Chat || app.focus == Focus::Input {
-            match mouse_event.kind {
-                MouseEventKind::ScrollUp => {
-                    if !app.user_scrolled {
-                        app.scroll_offset = app.chat_max_scroll;
-                    }
-                    app.scroll_offset = app.scroll_offset.saturating_sub(3);
-                    app.user_scrolled = true;
-                }
-                MouseEventKind::ScrollDown => {
-                    app.scroll_offset = app.scroll_offset.saturating_add(3);
-                    if app.scroll_offset >= app.chat_max_scroll {
-                        app.user_scrolled = false;
-                    } else {
-                        app.user_scrolled = true;
-                    }
-                }
-                MouseEventKind::Down(_) => {
-                    // Check if click is inside chat panel
-                    if let Some(layout) = &app.layout {
-                        let chat_panel = layout.chat_panel;
-                        if mouse_event.column >= chat_panel.x && mouse_event.column < chat_panel.x + chat_panel.width &&
-                           mouse_event.row >= chat_panel.y && mouse_event.row < chat_panel.y + chat_panel.height {
-                            // Inside chat panel, compute inner chat rect
-                            let inner_chat = chat_panel.inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
-                            if mouse_event.column >= inner_chat.x && mouse_event.column < inner_chat.x + inner_chat.width &&
-                               mouse_event.row >= inner_chat.y && mouse_event.row < inner_chat.y + inner_chat.height {
-                                // Convert to visual line index
-                                let visual_line_index = (mouse_event.row - inner_chat.y) as usize + app.scroll_offset as usize;
-                                let vlines = app.calculate_visual_lines(inner_chat.width.saturating_sub(2));
-                                if let Some(vline) = vlines.get(visual_line_index) {
-                                    if vline.line_type == LineType::CodeBlockStart {
-                                        // Copy the code block
-                                        if let Some(code_text) = app.copy_code_block_at_vline(visual_line_index) {
-                                            if let Some(clipboard) = &mut app.clipboard {
-                                                if let Err(e) = clipboard.set_text(code_text) {
-                                                    app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
-                                                } else {
-                                                    app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
-                                                }
-                                            } else {
-                                                // Try to re-initialize clipboard
-                                                match arboard::Clipboard::new() {
-                                                    Ok(mut new_clipboard) => {
-                                                        if let Err(e) = new_clipboard.set_text(code_text) {
-                                                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Clipboard error: {}", e)));
-                                                        } else {
-                                                            app.chat_entries.push(ChatEntry::SystemInfo("Code block copied to clipboard!".to_string()));
-                                                        }
-                                                        app.clipboard = Some(new_clipboard);
-                                                    }
-                                                    Err(e) => {
-                                                        app.chat_entries.push(ChatEntry::SystemInfo(format!("Failed to initialize clipboard: {}", e)));
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    false
-} // handle_main_event
-
-fn handle_quit_confirm(app: &mut App, ev: &Event) -> bool {
-    if let Event::Key(KeyEvent { code, .. }) = ev {
-        match code {
-            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => return true,
-            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.mode = AppMode::Main,
-            _ => {}
-        }
-    }
-    false
-} // handle_quit_confirm
-
-fn render_help_dialog(frame: &mut Frame, area: Rect) {
-    let dialog_area = centered_rect(60, 14, area);
-    frame.render_widget(ratatui::widgets::Clear, dialog_area);
-
-    let block = ratatui::widgets::Block::default()
-        .title(" Seekr Help & Shortcuts ")
-        .borders(ratatui::widgets::Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Navigation",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::styled("    Tab       ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Cycle focus: Input ➔ Chat ➔ Tasks"),
-        ]),
-        Line::from(vec![
-            Span::styled("    Up/Down   ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Scroll Chat (Input focus) or Select (Chat focus)"),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Chat Selection (Focus on Chat panel)",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::styled("    j/k       ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Move selection up/down"),
-        ]),
-        Line::from(vec![
-            Span::styled("    y/c       ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Yank (Copy) selected message to clipboard"),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("    Enter     ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Send message"),
-        ]),
-        Line::from(vec![
-            Span::styled("    Ctrl+g    ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Open Unified Menu"),
-        ]),
-        Line::from(vec![
-            Span::styled("    Esc       ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Quit Seekr"),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("  Press "),
-            Span::styled(
-                "any key",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(" to close"),
-        ]),
-    ];
-
-    frame.render_widget(Paragraph::new(text).block(block), dialog_area);
-} // render_help_dialog

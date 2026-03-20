@@ -41,7 +41,7 @@
 
 ## 🛠️ TODO (Missing Features)
 
-- [ ] **Syntax Highlighting:** Add full syntax highlighting for code blocks in the chat window.
+- [x] **Syntax Highlighting:** Add full syntax highlighting for code blocks in the chat window.
 - [ ] **Focus Actions:** Add context-aware option menus and interactive actions based on the current panel focus (Chat vs Tasks).
 - [ ] **Advanced Thread Management:** Add a dedicated UI view for managing long-running background processes.
 - [x] **Advanced Context Management:** Sliding-window and basic pruning for long-running conversations.
@@ -104,15 +104,21 @@ On your first run, **seekr** will guide you through a setup wizard to configure 
 
 ## ⌨️ TUI Shortcuts
 
+| `Tab` | Switch focus between Chat and Tasks panel. |
+| `Ctrl+G` | Open **Unified Menu** (Sessions, Models, Providers, Settings). |
+| `Ctrl+R` | **Clear Chat** history (resets context). |
+| `F1` | Show the help / shortcut guide. |
+| `Esc` | Cancel selection or show Quit Confirmation. |
+| `Ctrl+C` | Force quit the application. |
+
+### Chat Selection & Copy (when focused)
 | Key | Action |
 | :--- | :--- |
-| `Tab` | Switch focus between Chat and Tasks panel. |
-| `Ctrl+S` | Open **Session List** (resume/delete previous chats). |
-| `Ctrl+R` | Toggle visibility of agent reasoning tokens. |
-| `Ctrl+L` | Clear the current chat history. |
-| `F1` | Show the help / shortcut guide. |
-| `PageUp/Dn`| Scroll chat or tasks quickly. |
-| `Esc`/`Ctrl+C` | Quit the application. |
+| `j / k` | Scroll selection up/down. |
+| `v / V` | Enter **Visual** / **Visual-Line** mode. |
+| `y` | Copy current selection to clipboard. |
+| `c` | Quick-copy the code block under the cursor. |
+| `i / Esc` | Return to **Input** focus. |
 
 ---
 

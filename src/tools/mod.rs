@@ -196,7 +196,8 @@ impl Tool for ScriptTool {
                     serde_json::Value::String(s) => s.clone(),
                     _ => v.to_string(),
                 };
-                final_command = final_command.replace(&placeholder, &val_str);
+                let escaped_val = shell_escape(&val_str);
+                final_command = final_command.replace(&placeholder, &escaped_val);
             }
         }
 
@@ -319,6 +320,14 @@ pub fn truncate(s: &str, max_len: usize) -> String {
         s.to_string()
     }
 } // truncate
+
+pub fn shell_escape(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    // For POSIX shell: wrap in '', escape ' with '\''
+    format!("'{}'", s.replace("'", "'\\''"))
+}
 
 #[cfg(test)]
 mod tests {
