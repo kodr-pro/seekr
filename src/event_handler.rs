@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyModifiers, KeyEvent};
-use crate::app::{App, AppMode, Focus, SelectionMode, ChatEntry};
+use crate::app::{App, AppMode, Focus, ChatEntry};
 use crate::agent::AgentCommand;
 use crate::config::AppConfig;
 use crate::api::client::ApiClient;
@@ -210,13 +210,7 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                 app.scroll_offset = app.chat_max_scroll;
             }
             KeyCode::Esc => {
-                if app.focus == Focus::Chat && app.chat_selection.mode != SelectionMode::Normal {
-                    app.chat_selection.mode = SelectionMode::Normal;
-                    app.chat_selection.anchor_vline = None;
-                    app.chat_selection.anchor_col = None;
-                } else {
-                    app.mode = AppMode::QuitConfirm;
-                }
+                app.mode = AppMode::QuitConfirm;
             }
             KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                 app.clear_chat();
@@ -236,7 +230,7 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
 fn handle_input_focus_keys(app: &mut App, code: &KeyCode, modifiers: &KeyModifiers) {
     match code {
         KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => app.focus = Focus::Chat,
-        KeyCode::Tab => app.focus = Focus::Tasks,
+        KeyCode::Tab => app.focus = Focus::Chat,
         KeyCode::Char(c) => {
             app.input.insert(app.cursor_pos, *c);
             app.cursor_pos += 1;
@@ -266,45 +260,15 @@ fn handle_input_focus_keys(app: &mut App, code: &KeyCode, modifiers: &KeyModifie
 
 fn handle_chat_focus_keys(app: &mut App, code: &KeyCode, _modifiers: &KeyModifiers) {
     match code {
+        KeyCode::Tab => app.focus = Focus::Tasks,
         KeyCode::Char('i') | KeyCode::Esc => app.focus = Focus::Input,
         KeyCode::Char('j') | KeyCode::Down => {
-            app.chat_selection.vline = (app.chat_selection.vline + 1).min(app.get_max_vline());
-            app.ensure_vline_visible();
+            app.scroll_offset = (app.scroll_offset + 1).min(app.chat_max_scroll);
+            app.user_scrolled = true;
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.chat_selection.vline = app.chat_selection.vline.saturating_sub(1);
-            app.ensure_vline_visible();
-        }
-        KeyCode::Char('v') => {
-            if app.chat_selection.mode == SelectionMode::Visual {
-                app.chat_selection.mode = SelectionMode::Normal;
-                app.chat_selection.anchor_vline = None;
-            } else {
-                app.chat_selection.mode = SelectionMode::Visual;
-                app.chat_selection.anchor_vline = Some(app.chat_selection.vline);
-                app.chat_selection.anchor_col = Some(app.chat_selection.col);
-            }
-        }
-        KeyCode::Char('V') => {
-            if app.chat_selection.mode == SelectionMode::VisualLine {
-                app.chat_selection.mode = SelectionMode::Normal;
-                app.chat_selection.anchor_vline = None;
-            } else {
-                app.chat_selection.mode = SelectionMode::VisualLine;
-                app.chat_selection.anchor_vline = Some(app.chat_selection.vline);
-            }
-        }
-        KeyCode::Char('y') => {
-            if let Some(text) = app.get_selected_text() {
-                if let Some(ref mut cb) = app.clipboard { cb.set_text(text).ok(); }
-                app.chat_selection.mode = SelectionMode::Normal;
-                app.chat_selection.anchor_vline = None;
-            }
-        }
-        KeyCode::Char('c') => {
-            if let Some(text) = app.copy_code_block_at_vline(app.chat_selection.vline) {
-                if let Some(ref mut cb) = app.clipboard { cb.set_text(text).ok(); }
-            }
+            app.scroll_offset = app.scroll_offset.saturating_sub(1);
+            app.user_scrolled = true;
         }
         _ => {}
     }

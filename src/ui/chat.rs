@@ -5,7 +5,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use crate::app::{ChatSelection, SelectionMode, VisualLine, LineType};
+use crate::app::{VisualLine, LineType};
 use crate::ui::syntax;
 use std::cmp::min;
 
@@ -67,7 +67,6 @@ pub fn render_chat(
     visual_lines: &[VisualLine],
     scroll_offset: u16,
     focused: bool,
-    selection: &ChatSelection,
 ) -> u16 {
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
@@ -92,26 +91,6 @@ pub fn render_chat(
     let effective_scroll = scroll_offset.min(max_scroll) as usize;
 
     let mut lines_to_render = Vec::new();
-    
-    // Determine selection range
-    let (sel_start_v, sel_start_c, sel_end_v, sel_end_c) = if let Some(av) = selection.anchor_vline {
-        let ac = selection.anchor_col.unwrap_or(0);
-        let (s_v, s_c, e_v, e_c) = if (av, ac) <= (selection.vline, selection.col) {
-            (av, ac, selection.vline, selection.col)
-        } else {
-            (selection.vline, selection.col, av, ac)
-        };
-        
-        if selection.mode == SelectionMode::VisualLine {
-            (s_v, 0, e_v, visual_lines.get(e_v).map(|l| l.text.chars().count()).unwrap_or(0))
-        } else {
-            (s_v, s_c, e_v, e_c)
-        }
-    } else {
-        (0, 0, 0, 0)
-    };
-
-    let has_selection = selection.mode != SelectionMode::Normal && selection.anchor_vline.is_some();
 
     for vidx in effective_scroll..min(effective_scroll + visible_height as usize, total_lines) {
         let vline = &visual_lines[vidx];
@@ -125,32 +104,8 @@ pub fn render_chat(
         let chars: Vec<char> = vline.text.chars().collect();
         let mut spans = Vec::new();
         
-        for (cidx, (&c, &style)) in chars.iter().zip(char_styles.iter()).enumerate() {
-            let mut char_style = style;
-            
-            // Apply selection highlight
-            let in_selection = has_selection && (
-                (vidx > sel_start_v && vidx < sel_end_v) ||
-                (vidx == sel_start_v && vidx == sel_end_v && cidx >= sel_start_c && cidx <= sel_end_c) ||
-                (vidx == sel_start_v && vidx < sel_end_v && cidx >= sel_start_c) ||
-                (vidx == sel_end_v && vidx > sel_start_v && cidx <= sel_end_c)
-            );
-
-            if in_selection {
-                char_style = char_style.bg(Color::Rgb(60, 60, 100));
-            }
-
-            // Apply cursor highlight
-            if focused && vidx == selection.vline && cidx == selection.col {
-                char_style = char_style.bg(Color::White).fg(Color::Black).remove_modifier(Modifier::DIM);
-            }
-            
-            spans.push(Span::styled(c.to_string(), char_style));
-        }
-
-        // Handle cursor at end of line
-        if focused && vidx == selection.vline && selection.col >= chars.len() {
-            spans.push(Span::styled(" ", Style::default().bg(Color::White).fg(Color::Black)));
+        for (&c, &style) in chars.iter().zip(char_styles.iter()) {
+            spans.push(Span::styled(c.to_string(), style));
         }
 
         lines_to_render.push(Line::from(spans));

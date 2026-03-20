@@ -85,7 +85,7 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         .style(Style::default().bg(Color::Rgb(20, 20, 20)).fg(Color::White));
 
     frame.render_widget(paragraph, area);
-} // render_status
+}
 
 fn format_tokens(tokens: u32) -> String {
     if tokens >= 1000 {
@@ -93,4 +93,4 @@ fn format_tokens(tokens: u32) -> String {
     } else {
         tokens.to_string()
     }
-} // format_tokens
+}

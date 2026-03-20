@@ -8,6 +8,7 @@ use ratatui::{
 
 pub struct TitleInfo<'a> {
     pub version: &'a str,
+    pub new_version: Option<&'a str>,
     pub session_id: Option<&'a str>,
     pub connected: bool,
     pub model: &'a str,
@@ -60,9 +61,20 @@ pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
         Style::default().fg(status_color).add_modifier(Modifier::BOLD),
     );
 
-    let line = Line::from(vec![
+    let mut spans = vec![
         title,
         version,
+    ];
+
+    if let Some(nv) = info.new_version {
+        spans.push(separator.clone());
+        spans.push(Span::styled(
+            format!(" 🎁 UPDATE: v{} ", nv),
+            Style::default().bg(Color::Rgb(255, 69, 0)).fg(Color::White).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    spans.extend(vec![
         separator.clone(),
         status,
         separator.clone(),
@@ -72,6 +84,8 @@ pub fn render_title(frame: &mut Frame, area: Rect, info: &TitleInfo) {
         separator,
         conn_status,
     ]);
+
+    let line = Line::from(spans);
 
     let block = Block::default()
         .borders(Borders::NONE);

@@ -36,11 +36,9 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
     render_title_bar(frame, layout.title_bar, app);
 
     let inner_chat = layout.chat_panel.inner(Margin { vertical: 1, horizontal: 1 });
-    // Recompute visual lines if needed
+    // Recompute visual lines if width changed or explicitly requested
     if app.needs_recompute_vlines || app.last_chat_width != inner_chat.width {
-        app.visual_lines = app.calculate_visual_lines(inner_chat.width.saturating_sub(2));
-        app.last_chat_width = inner_chat.width;
-        app.needs_recompute_vlines = false;
+        app.rebuild_vlines_cache(inner_chat.width);
     }
 
     app.chat_max_scroll = ui::chat::render_chat(
@@ -49,7 +47,6 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
         &app.visual_lines,
         app.scroll_offset,
         app.focus == Focus::Chat,
-        &app.chat_selection,
     );
 
     ui::tasks::render_tasks(
@@ -107,7 +104,8 @@ fn render_title_bar(frame: &mut Frame, area: Rect, app: &App) {
         frame,
         area,
         &ui::title::TitleInfo {
-            version: "0.1.1",
+            version: env!("CARGO_PKG_VERSION"),
+            new_version: app.new_version_available.as_deref(),
             session_id: app.session_id.as_deref(),
             connected: app.connected,
             model,
