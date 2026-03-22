@@ -1,34 +1,56 @@
-use tokio::sync::mpsc;
+use super::system_prompt::build_system_prompt;
 use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
+use crate::session::Session;
 use crate::tools;
 use crate::tools::task::TaskManager;
-use crate::session::Session;
-use anyhow::Result;
-use super::system_prompt::build_system_prompt;
 use crate::tools::SkillRegistry;
+use anyhow::Result;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     ContentDelta(String),
     ReasoningDelta(String),
-    ToolCallStart { name: String, arguments: String },
-    ToolCallResult { name: String, result: String },
+    ToolCallStart {
+        name: String,
+        arguments: String,
+    },
+    ToolCallResult {
+        name: String,
+        result: String,
+    },
     Activity(tools::ActivityEntry),
-    TokenUsage { prompt_tokens: u32, completion_tokens: u32, total_tokens: u32 },
+    TokenUsage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+    },
     IterationUpdate(u32),
     TurnComplete,
     MaxIterationsReached,
     Error(String),
-    ToolApprovalRequest { call_index: usize, name: String, arguments: String },
-    ShellInputNeeded { context: String, input_tx: tokio::sync::mpsc::UnboundedSender<String> },
+    ToolApprovalRequest {
+        call_index: usize,
+        name: String,
+        arguments: String,
+    },
+    ShellInputNeeded {
+        context: String,
+        input_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    },
     TaskCreated(crate::tools::task::Task),
     TaskUpdated(crate::tools::task::Task),
-    ContextPruned { count: usize },
-    ContextSummaryReady { id: String, summary: String },
+    ContextPruned {
+        count: usize,
+    },
+    ContextSummaryReady {
+        id: String,
+        summary: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +91,10 @@ impl AgentLoop {
 
         let session_id = uuid::Uuid::new_v4().to_string();
         let mut session = Session::new(session_id, "New Chat".to_string());
-        session.task_manager = session.task_manager.with_sender(event_tx.clone());
+        session.task_manager = session
+            .task_manager
+            .with_sender(event_tx.clone())
+            .with_config(config.clone());
         session.tool_registry = Some(registry);
         session.messages.push(ChatMessage::system(&system_prompt));
 
@@ -95,7 +120,10 @@ impl AgentLoop {
     ) -> Result<Self> {
         let client = ApiClient::new(&config);
         let mut session = Session::load(session_id)?;
-        session.task_manager = session.task_manager.with_sender(event_tx.clone());
+        session.task_manager = session
+            .task_manager
+            .with_sender(event_tx.clone())
+            .with_config(config.clone());
         session.tool_registry = Some(registry);
         let auto_approve = config.agent.auto_approve_tools;
 
@@ -119,13 +147,15 @@ impl AgentLoop {
                         AgentCommand::UserMessage(msg) => {
                             if self.session.title == "New Chat" {
                                 let title = if msg.len() > 30 {
-                                    format!("{}...", &msg[..27])
+                                    let mut t = msg.chars().take(27).collect::<String>();
+                                    t.push_str("...");
+                                    t
                                 } else {
                                     msg.clone()
                                 };
                                 self.session.title = title;
                             }
-                            
+
                             self.session.messages.push(ChatMessage::user(&msg));
                             self.iteration = 0;
                             self.run_agent_turn().await;
@@ -155,7 +185,9 @@ impl AgentLoop {
             match self.drain_pending_commands().await {
                 DrainResult::Shutdown => return,
                 DrainResult::UserMessageInjected => {
-                    self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
+                    self.event_tx
+                        .send(AgentEvent::IterationUpdate(self.iteration))
+                        .ok();
                     self.prune_messages();
                 }
                 DrainResult::Nothing => {}
@@ -166,8 +198,10 @@ impl AgentLoop {
                 match self.wait_for_continue_or_answer().await {
                     ContinueAction::Continue => {
                         self.iteration = 0;
-                        self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
-                        
+                        self.event_tx
+                            .send(AgentEvent::IterationUpdate(self.iteration))
+                            .ok();
+
                         self.session.messages.push(ChatMessage::user(
                             "I have authorized you to continue. You are on a strict step allowance \u{2014} please focus on finishing the task as quickly and efficiently as possible. Avoid unnecessary or repetitive steps."
                         ));
@@ -185,7 +219,9 @@ impl AgentLoop {
             }
 
             self.iteration += 1;
-            self.event_tx.send(AgentEvent::IterationUpdate(self.iteration)).ok();
+            self.event_tx
+                .send(AgentEvent::IterationUpdate(self.iteration))
+                .ok();
 
             let threshold = (self.config.agent.max_iterations as f32 * 0.8) as u32;
             if self.iteration == threshold && self.iteration > 1 {
@@ -199,7 +235,11 @@ impl AgentLoop {
             let registry = match self.session.tool_registry.as_ref() {
                 Some(reg) => reg,
                 None => {
-                    self.event_tx.send(AgentEvent::Error("Tool registry not initialized".to_string())).ok();
+                    self.event_tx
+                        .send(AgentEvent::Error(
+                            "Tool registry not initialized".to_string(),
+                        ))
+                        .ok();
                     break;
                 }
             };
@@ -216,7 +256,9 @@ impl AgentLoop {
             let mut stream_rx = match stream_result {
                 Ok(rx) => rx,
                 Err(e) => {
-                    self.event_tx.send(AgentEvent::Error(format!("API error: {e}"))).ok();
+                    self.event_tx
+                        .send(AgentEvent::Error(format!("API error: {e}")))
+                        .ok();
                     break;
                 }
             };
@@ -260,11 +302,11 @@ impl AgentLoop {
                             thread_id: None,
                             total_threads: None,
                         })).ok();
-                        
+
                         if !content_buf.is_empty() {
                              self.session.messages.push(ChatMessage::assistant(&content_buf));
                         }
-                        
+
                         self.iteration = 0;
                         self.session.save().ok();
                         continue 'turn;
@@ -274,44 +316,61 @@ impl AgentLoop {
             }
 
             if !tool_calls.is_empty() {
-                let content = if content_buf.is_empty() { None } else { Some(content_buf.clone()) };
+                let content = if content_buf.is_empty() {
+                    None
+                } else {
+                    Some(content_buf.clone())
+                };
                 // DeepSeek reasoner requires reasoning_content to be present when tool_calls are used.
-                let reasoning = if self.config.current_provider().model.contains("reasoner") || !reasoning_buf.is_empty() {
+                let reasoning = if self.config.current_provider().model.contains("reasoner")
+                    || !reasoning_buf.is_empty()
+                {
                     Some(reasoning_buf.clone())
                 } else {
                     None
                 };
 
-                self.session.messages.push(ChatMessage::assistant_with_tool_calls(
-                    content,
-                    reasoning,
-                    tool_calls.clone(),
-                ));
+                self.session
+                    .messages
+                    .push(ChatMessage::assistant_with_tool_calls(
+                        content,
+                        reasoning,
+                        tool_calls.clone(),
+                    ));
 
                 let mut join_set = tokio::task::JoinSet::new();
-                
-                for tc in &tool_calls {
-                    self.event_tx.send(AgentEvent::ToolCallStart {
-                        name: tc.function.name.clone(),
-                        arguments: tc.function.arguments.clone(),
-                    }).ok();
 
-                    if !self.auto_approve {
-                        self.event_tx.send(AgentEvent::ToolApprovalRequest {
-                            call_index: tool_calls.iter().position(|t| t.id == tc.id).unwrap_or(0),
+                for tc in &tool_calls {
+                    self.event_tx
+                        .send(AgentEvent::ToolCallStart {
                             name: tc.function.name.clone(),
                             arguments: tc.function.arguments.clone(),
-                        }).ok();
+                        })
+                        .ok();
+
+                    if !self.auto_approve {
+                        self.event_tx
+                            .send(AgentEvent::ToolApprovalRequest {
+                                call_index: tool_calls
+                                    .iter()
+                                    .position(|t| t.id == tc.id)
+                                    .unwrap_or(0),
+                                name: tc.function.name.clone(),
+                                arguments: tc.function.arguments.clone(),
+                            })
+                            .ok();
 
                         if !self.wait_for_approval().await {
                             self.session.messages.push(ChatMessage::tool_result(
                                 &tc.id,
                                 "Tool execution denied by user.",
                             ));
-                            self.event_tx.send(AgentEvent::ToolCallResult {
-                                name: tc.function.name.clone(),
-                                result: "Denied by user".to_string(),
-                            }).ok();
+                            self.event_tx
+                                .send(AgentEvent::ToolCallResult {
+                                    name: tc.function.name.clone(),
+                                    result: "Denied by user".to_string(),
+                                })
+                                .ok();
                             continue;
                         }
                     }
@@ -324,23 +383,26 @@ impl AgentLoop {
                         Some(reg) => reg.clone(),
                         None => {
                             // This should not happen since we checked earlier, but handle gracefully
-                            self.event_tx.send(AgentEvent::Error("Tool registry not available".to_string())).ok();
+                            self.event_tx
+                                .send(AgentEvent::Error("Tool registry not available".to_string()))
+                                .ok();
                             continue;
                         }
                     };
-                    
+
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
-                    
+
                     join_set.spawn(async move {
                         let (result, activity) = tools::execute_tool(
-                            &name, 
-                            &arguments, 
-                            &tm_clone, 
-                            &registry_clone, 
-                            Some(thread_id), 
-                            Some(total_threads)
-                        ).await;
+                            &name,
+                            &arguments,
+                            &tm_clone,
+                            &registry_clone,
+                            Some(thread_id),
+                            Some(total_threads),
+                        )
+                        .await;
                         (id, name, result, activity)
                     });
                 }
@@ -348,11 +410,15 @@ impl AgentLoop {
                 while let Some(res) = join_set.join_next().await {
                     if let Ok((id, name, result, activity)) = res {
                         self.event_tx.send(AgentEvent::Activity(activity)).ok();
-                        self.event_tx.send(AgentEvent::ToolCallResult {
-                            name,
-                            result: result.clone(),
-                        }).ok();
-                        self.session.messages.push(ChatMessage::tool_result(&id, &result));
+                        self.event_tx
+                            .send(AgentEvent::ToolCallResult {
+                                name,
+                                result: result.clone(),
+                            })
+                            .ok();
+                        self.session
+                            .messages
+                            .push(ChatMessage::tool_result(&id, &result));
                     }
                 }
 
@@ -361,7 +427,9 @@ impl AgentLoop {
             }
 
             if !content_buf.is_empty() {
-                self.session.messages.push(ChatMessage::assistant(&content_buf));
+                self.session
+                    .messages
+                    .push(ChatMessage::assistant(&content_buf));
             }
             self.session.save().ok();
             self.event_tx.send(AgentEvent::TurnComplete).ok();
@@ -416,7 +484,9 @@ impl AgentLoop {
         let mut stream_rx = match stream_result {
             Ok(rx) => rx,
             Err(e) => {
-                self.event_tx.send(AgentEvent::Error(format!("API error: {e}"))).ok();
+                self.event_tx
+                    .send(AgentEvent::Error(format!("API error: {e}")))
+                    .ok();
                 self.event_tx.send(AgentEvent::TurnComplete).ok();
                 return;
             }
@@ -429,12 +499,24 @@ impl AgentLoop {
                     content_buf.push_str(&text);
                     self.event_tx.send(AgentEvent::ContentDelta(text)).ok();
                 }
-                crate::api::stream::StreamEvent::Usage { prompt_tokens, completion_tokens, total_tokens } => {
-                    self.event_tx.send(AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens }).ok();
+                crate::api::stream::StreamEvent::Usage {
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                } => {
+                    self.event_tx
+                        .send(AgentEvent::TokenUsage {
+                            prompt_tokens,
+                            completion_tokens,
+                            total_tokens,
+                        })
+                        .ok();
                 }
                 crate::api::stream::StreamEvent::Done => break,
                 crate::api::stream::StreamEvent::Error(e) => {
-                    self.event_tx.send(AgentEvent::Error(format!("Stream error: {e}"))).ok();
+                    self.event_tx
+                        .send(AgentEvent::Error(format!("Stream error: {e}")))
+                        .ok();
                     break;
                 }
                 _ => {}
@@ -442,7 +524,9 @@ impl AgentLoop {
         }
 
         if !content_buf.is_empty() {
-            self.session.messages.push(ChatMessage::assistant(&content_buf));
+            self.session
+                .messages
+                .push(ChatMessage::assistant(&content_buf));
         }
         self.session.save().ok();
         self.event_tx.send(AgentEvent::TurnComplete).ok();
@@ -475,7 +559,7 @@ impl AgentLoop {
 
         while start < total {
             let role = self.session.messages[start].role.as_str();
-            
+
             if role == "tool" {
                 start += 1;
                 continue;
@@ -486,7 +570,7 @@ impl AgentLoop {
         if start <= keep_initial {
             return;
         }
-        
+
         // Extract the messages we're removing so we can summarize them
         let messages_to_summarize = self.session.messages[keep_initial..start].to_vec();
 
@@ -496,14 +580,21 @@ impl AgentLoop {
         }
 
         let summary_id = uuid::Uuid::new_v4().to_string();
-        new_messages.push(ChatMessage::system(&format!("[Summarizing context segment {}...]", summary_id)));
+        new_messages.push(ChatMessage::system(&format!(
+            "[Summarizing context segment {}...]",
+            summary_id
+        )));
 
         if start < total {
             new_messages.extend(self.session.messages[start..].iter().cloned());
         }
-        
+
         self.session.messages = new_messages;
-        self.event_tx.send(AgentEvent::ContextPruned { count: start - keep_initial }).ok();
+        self.event_tx
+            .send(AgentEvent::ContextPruned {
+                count: start - keep_initial,
+            })
+            .ok();
 
         // Spawn summarizer task
         let client = self.client.clone();
@@ -512,22 +603,37 @@ impl AgentLoop {
 
         tokio::spawn(async move {
             let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, specific file paths mentioned, and critical tool outputs. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
-            
+
             let mut summary_messages = vec![ChatMessage::system(&pt)];
             let mut conversation_text = String::new();
             for m in messages_to_summarize {
-                conversation_text.push_str(&format!("{}: {}\n\n", m.role, m.content.as_deref().unwrap_or("[No content]")));
+                conversation_text.push_str(&format!(
+                    "{}: {}\n\n",
+                    m.role,
+                    m.content.as_deref().unwrap_or("[No content]")
+                ));
                 if let Some(tcs) = &m.tool_calls {
                     for tc in tcs {
-                        conversation_text.push_str(&format!("Tool Call: {}({})\n", tc.function.name, tc.function.arguments));
+                        conversation_text.push_str(&format!(
+                            "Tool Call: {}({})\n",
+                            tc.function.name, tc.function.arguments
+                        ));
                     }
                 }
             }
-            
-            summary_messages.push(ChatMessage::user(&format!("Please summarize the following conversation history:\n\n{}", conversation_text)));
-            
+
+            summary_messages.push(ChatMessage::user(&format!(
+                "Please summarize the following conversation history:\n\n{}",
+                conversation_text
+            )));
+
             if let Ok(summary) = client.chat_completion(summary_messages, &model).await {
-                cmd_tx.send(AgentCommand::ContextSummarized { id: summary_id, summary }).ok();
+                cmd_tx
+                    .send(AgentCommand::ContextSummarized {
+                        id: summary_id,
+                        summary,
+                    })
+                    .ok();
             }
         });
     } // prune_messages
@@ -551,10 +657,17 @@ impl AgentLoop {
                 }
                 Ok(AgentCommand::ContextSummarized { id, summary }) => {
                     let search_str = format!("[Summarizing context segment {}...]", id);
-                    if let Some(msg) = self.session.messages.iter_mut().find(|m| m.role == "system" && m.content.as_deref() == Some(search_str.as_str())) {
-                        msg.content = Some(format!("--- PAST CONTEXT SUMMARY ---\n{}\n----------------------------", summary));
+                    if let Some(msg) = self.session.messages.iter_mut().find(|m| {
+                        m.role == "system" && m.content.as_deref() == Some(search_str.as_str())
+                    }) {
+                        msg.content = Some(format!(
+                            "--- PAST CONTEXT SUMMARY ---\n{}\n----------------------------",
+                            summary
+                        ));
                         self.session.save().ok();
-                        self.event_tx.send(AgentEvent::ContextSummaryReady { id, summary }).ok();
+                        self.event_tx
+                            .send(AgentEvent::ContextSummaryReady { id, summary })
+                            .ok();
                     }
                 }
                 Ok(_) => {}
@@ -601,27 +714,36 @@ mod tests {
     #[tokio::test]
     async fn test_prune_messages_no_orphaned_tools() {
         let mut agent = create_test_loop();
-        
+
         agent.session.messages.clear();
         agent.session.messages.push(ChatMessage::system("system"));
         for i in 1..105 {
-            agent.session.messages.push(ChatMessage::user(&format!("user {}", i)));
+            agent
+                .session
+                .messages
+                .push(ChatMessage::user(&format!("user {}", i)));
         }
-        
+
         let tc_id = "test_id".to_string();
-        agent.session.messages.push(ChatMessage::assistant_with_tool_calls(
-            None,
-            None,
-            vec![ToolCall {
-                id: tc_id.clone(),
-                call_type: "function".to_string(),
-                function: crate::api::types::FunctionCall {
-                    name: "test_tool".to_string(),
-                    arguments: "{}".to_string(),
-                },
-            }],
-        ));
-        agent.session.messages.push(ChatMessage::tool_result(&tc_id, "result"));
+        agent
+            .session
+            .messages
+            .push(ChatMessage::assistant_with_tool_calls(
+                None,
+                None,
+                vec![ToolCall {
+                    id: tc_id.clone(),
+                    call_type: "function".to_string(),
+                    function: crate::api::types::FunctionCall {
+                        name: "test_tool".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }],
+            ));
+        agent
+            .session
+            .messages
+            .push(ChatMessage::tool_result(&tc_id, "result"));
 
         agent.prune_messages();
 
@@ -629,7 +751,7 @@ mod tests {
             panic!("messages should not be empty");
         });
         assert_eq!(last_msg.role, "tool");
-        
+
         let prev_msg = &agent.session.messages[agent.session.messages.len() - 2];
         assert_eq!(prev_msg.role, "assistant");
         assert!(prev_msg.tool_calls.is_some());
@@ -638,29 +760,44 @@ mod tests {
     #[tokio::test]
     async fn test_prune_messages_keep_initial_expansion() {
         let mut agent = create_test_loop();
-        
+
         agent.session.messages.clear();
         agent.session.messages.push(ChatMessage::system("system"));
-        agent.session.messages.push(ChatMessage::user("initial user"));
-        agent.session.messages.push(ChatMessage::assistant("initial assistant"));
-        
+        agent
+            .session
+            .messages
+            .push(ChatMessage::user("initial user"));
+        agent
+            .session
+            .messages
+            .push(ChatMessage::assistant("initial assistant"));
+
         let tc_id = "tc1".to_string();
-        agent.session.messages.push(ChatMessage::assistant_with_tool_calls(
-            None,
-            None,
-            vec![ToolCall {
-                id: tc_id.clone(),
-                call_type: "function".to_string(),
-                function: crate::api::types::FunctionCall {
-                    name: "tool1".to_string(),
-                    arguments: "{}".to_string(),
-                },
-            }],
-        ));
-        agent.session.messages.push(ChatMessage::tool_result(&tc_id, "res1"));
-        
+        agent
+            .session
+            .messages
+            .push(ChatMessage::assistant_with_tool_calls(
+                None,
+                None,
+                vec![ToolCall {
+                    id: tc_id.clone(),
+                    call_type: "function".to_string(),
+                    function: crate::api::types::FunctionCall {
+                        name: "tool1".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                }],
+            ));
+        agent
+            .session
+            .messages
+            .push(ChatMessage::tool_result(&tc_id, "res1"));
+
         for i in 0..120 {
-            agent.session.messages.push(ChatMessage::user(&format!("msg {}", i)));
+            agent
+                .session
+                .messages
+                .push(ChatMessage::user(&format!("msg {}", i)));
         }
 
         agent.prune_messages();

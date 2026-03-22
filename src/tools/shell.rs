@@ -1,23 +1,23 @@
-use anyhow::{Context, Result, anyhow};
-use tokio::process::Command;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::process::Stdio;
-use async_trait::async_trait;
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{Tool, truncate, task::TaskManager};
+use crate::tools::{task::TaskManager, truncate, Tool};
+use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use serde_json::json;
+use std::process::Stdio;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
 
 fn strip_ansi_codes(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut iter = s.chars().peekable();
-    
+
     while let Some(c) = iter.next() {
         if c == '\x1b' {
             if let Some('[') = iter.peek() {
                 iter.next();
                 while let Some(&next) = iter.peek() {
                     iter.next();
-                    if (next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') || next == '@' {
+                    if next.is_ascii_uppercase() || next.is_ascii_lowercase() || next == '@' {
                         break;
                     }
                 }
@@ -40,7 +40,14 @@ fn strip_ansi_codes(s: &str) -> String {
 
 fn detect_prompt(line: &str) -> Option<String> {
     let stripped = strip_ansi_codes(line);
-    let prompt_patterns = ["[sudo] password", "(y/n)", "[Y/n]", "Password:", "confirm", "Enter something:"];
+    let prompt_patterns = [
+        "[sudo] password",
+        "(y/n)",
+        "[Y/n]",
+        "Password:",
+        "confirm",
+        "Enter something:",
+    ];
     for pattern in prompt_patterns {
         if stripped.to_lowercase().contains(&pattern.to_lowercase()) {
             return Some(stripped);
@@ -50,24 +57,36 @@ fn detect_prompt(line: &str) -> Option<String> {
 } // detect_prompt
 
 pub async fn shell_command(
-    args: &serde_json::Value, 
+    args: &serde_json::Value,
     task_manager: &TaskManager,
     thread_id: Option<usize>,
     total_threads: Option<usize>,
 ) -> Result<(String, String)> {
-    let command = args["command"].as_str().ok_or_else(|| anyhow!("Missing command"))?;
+    let command = args["command"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing command"))?;
     let background = args["background"].as_bool().unwrap_or(false);
-    
-    let summary = format!("shell_command {}", truncate(command, 20));
-    task_manager.log_activity("shell_command", &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
 
-    let dangerous_patterns = [
-        "rm -rf /", "mkfs", "dd if=", ":(){ :|:& };:", 
-        "> /dev/sda", "> /dev/nvme", "chmod -R 777 /", "chown -R"
-    ];
-    for pattern in dangerous_patterns {
+    let summary = format!("shell_command {}", truncate(command, 20));
+    task_manager.log_activity(
+        "shell_command",
+        &summary,
+        crate::tools::task::ActivityStatus::Starting,
+        thread_id,
+        total_threads,
+    );
+
+    let task_config = task_manager.config.clone();
+    let blocklist = task_config
+        .map(|cfg| cfg.agent.shell_blocklist)
+        .unwrap_or_else(|| crate::config::AgentConfig::default().shell_blocklist);
+
+    for pattern in blocklist.iter() {
         if command.contains(pattern) {
-            return Err(anyhow!("Security Error: Command contains a forbidden pattern: '{}'", pattern));
+            return Err(anyhow!(
+                "Security Error: Command contains a forbidden pattern: '{}'",
+                pattern
+            ));
         }
     }
 
@@ -80,7 +99,7 @@ pub async fn shell_command(
             .stderr(Stdio::null())
             .spawn()
             .with_context(|| format!("Failed to spawn background command: {}", command))?;
-        
+
         let res = format!("Command started in background: {}", command);
         return Ok((res, format!("bg: {}", truncate(command, 15))));
     }
@@ -141,7 +160,9 @@ pub async fn shell_command(
                                 if !trimmed.is_empty() {
                                     let mut ctx = context_clone_out.lock().await;
                                     ctx.push(trimmed.clone());
-                                    if ctx.len() > 5 { ctx.remove(0); }
+                                    if ctx.len() > 5 {
+                                        ctx.remove(0);
+                                    }
                                 }
                                 if let Some(prompt) = detect_prompt(&line) {
                                     tx_out.send(prompt).ok();
@@ -184,7 +205,9 @@ pub async fn shell_command(
                             line.push(c);
                             {
                                 let mut res = result_clone_err.lock().await;
-                                if line.len() == 1 { res.push_str("[stderr] "); }
+                                if line.len() == 1 {
+                                    res.push_str("[stderr] ");
+                                }
                                 res.push(c);
                             }
                             if c == '\n' {
@@ -192,7 +215,9 @@ pub async fn shell_command(
                                 if !trimmed.is_empty() {
                                     let mut ctx = context_clone_err.lock().await;
                                     ctx.push(trimmed.clone());
-                                    if ctx.len() > 5 { ctx.remove(0); }
+                                    if ctx.len() > 5 {
+                                        ctx.remove(0);
+                                    }
                                 }
                                 if let Some(prompt) = detect_prompt(&line) {
                                     tx_err.send(prompt).ok();
@@ -291,8 +316,8 @@ impl Tool for ShellCommandTool {
     } // definition
 
     async fn execute(
-        &self, 
-        args: &serde_json::Value, 
+        &self,
+        args: &serde_json::Value,
         task_manager: &TaskManager,
         thread_id: Option<usize>,
         total_threads: Option<usize>,

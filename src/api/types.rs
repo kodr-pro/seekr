@@ -44,7 +44,11 @@ impl ChatMessage {
         }
     } // assistant
 
-    pub fn assistant_with_tool_calls(content: Option<String>, reasoning_content: Option<String>, tool_calls: Vec<ToolCall>) -> Self {
+    pub fn assistant_with_tool_calls(
+        content: Option<String>,
+        reasoning_content: Option<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
         Self {
             role: "assistant".to_string(),
             content,
@@ -123,7 +127,6 @@ pub struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<serde_json::Value>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Usage {

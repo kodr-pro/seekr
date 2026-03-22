@@ -1,10 +1,10 @@
-use anyhow::{Result, Context};
 use crate::config::AppConfig;
 use crate::session::{Session, SessionMetadata};
+use anyhow::{Context, Result};
 use tokio::sync::RwLock;
 
-use std::sync::Arc;
 use crate::tools::SkillRegistry;
+use std::sync::Arc;
 
 pub struct SeekrManager {
     pub config: AppConfig,
@@ -34,8 +34,8 @@ impl SeekrManager {
     } // list_sessions
 
     pub fn resume_session(&self, id: &str) -> Result<Session> {
-        let mut session = Session::load(id)
-            .with_context(|| format!("Failed to resume session {}", id))?;
+        let mut session =
+            Session::load(id).with_context(|| format!("Failed to resume session {}", id))?;
         session.tool_registry = Some(self.tool_registry.clone());
         Ok(session)
     } // resume_session
@@ -53,13 +53,13 @@ impl SeekrManager {
         if path.exists() {
             std::fs::remove_file(&path)?;
         }
-        
+
         let mut active = self.active_sessions.write().await;
         active.retain(|s| s.id != id);
-        
+
         Ok(())
     } // delete_session
-    
+
     pub fn tool_registry(&self) -> Arc<SkillRegistry> {
         self.tool_registry.clone()
     } // tool_registry

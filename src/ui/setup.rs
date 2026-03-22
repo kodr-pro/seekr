@@ -91,7 +91,9 @@ fn render_provider_step(frame: &mut Frame, area: Rect, state: &SetupState) {
     let text: Vec<Line> = std::iter::once(Line::from(""))
         .chain(std::iter::once(Line::from(Span::styled(
             "Step 1: AI Provider",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ))))
         .chain(std::iter::once(Line::from("")))
         .chain(std::iter::once(Line::from(Span::styled(
@@ -103,7 +105,9 @@ fn render_provider_step(frame: &mut Frame, area: Rect, state: &SetupState) {
             let selected = i == state.provider_selection;
             let prefix = if selected { " > " } else { "   " };
             let style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -126,12 +130,23 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         Line::from(""),
         Line::from(Span::styled(
             "Step 2: API Key",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
             "Enter your provider API key (e.g. OpenAI, DeepSeek, etc.):",
             Style::default().fg(Color::Gray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  > Keys are securely stored in the OS Keyring and NOT in config.toml",
+            Style::default().fg(Color::Cyan),
+        )),
+        Line::from(Span::styled(
+            "  > For headless usage, set SEEKR_API_KEY=<key> or SEEKR_API_KEY_OPENAI=<key>",
+            Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
         Line::from(Span::styled(
@@ -162,7 +177,13 @@ fn render_model_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         0 => vec!["gpt-4o", "gpt-4o-mini"],
         1 => vec!["deepseek-chat", "deepseek-reasoner"],
         2 => vec!["claude-3-5-sonnet-latest"],
-        _ => vec!["gpt-4o", "gpt-4o-mini", "claude-3-5-sonnet-latest", "deepseek-chat", "deepseek-reasoner"],
+        _ => vec![
+            "gpt-4o",
+            "gpt-4o-mini",
+            "claude-3-5-sonnet-latest",
+            "deepseek-chat",
+            "deepseek-reasoner",
+        ],
     };
 
     let text: Vec<Line> = std::iter::once(Line::from(""))
@@ -201,9 +222,11 @@ fn render_auto_approve_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         "Yes (auto-approve all tool executions)",
     ];
     let text: Vec<Line> = std::iter::once(Line::from(""))
-        .chain(std::iter::once(        Line::from(Span::styled(
+        .chain(std::iter::once(Line::from(Span::styled(
             "Step 4: Auto-approve Tools",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ))))
         .chain(std::iter::once(Line::from("")))
         .chain(std::iter::once(Line::from(Span::styled(
@@ -215,7 +238,9 @@ fn render_auto_approve_step(frame: &mut Frame, area: Rect, state: &SetupState) {
             let selected = i == state.auto_approve_selection;
             let prefix = if selected { " > " } else { "   " };
             let style = if selected {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White)
             };
@@ -237,7 +262,9 @@ fn render_working_dir_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         Line::from(""),
         Line::from(Span::styled(
             "Step 5: Working Directory",
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
@@ -346,10 +373,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &SetupState) {
     };
 
     let line = Line::from(vec![
-        Span::styled(
-            format!(" {} ", nav),
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled(format!(" {} ", nav), Style::default().fg(Color::DarkGray)),
         Span::raw("  "),
         Span::styled(step_text, Style::default().fg(Color::DarkGray)),
     ]);

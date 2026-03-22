@@ -1,16 +1,16 @@
+use crate::agent::{AgentCommand, AgentEvent};
+use crate::api::client::ApiClient;
+use crate::app_state::{AgentState, SessionState, UiState};
+use crate::config::AppConfig;
+use crate::event_handler::handle_event;
+use crate::tools::task::Task;
+use crate::ui::render::render;
 use anyhow::Result;
 use crossterm::event::EventStream;
 use ratatui::DefaultTerminal;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
-use crate::agent::{AgentCommand, AgentEvent};
-use crate::api::client::ApiClient;
-use crate::config::AppConfig;
-use crate::tools::task::Task;
-use crate::tools::ActivityEntry;
-use crate::ui::render::render;
-use crate::event_handler::handle_event;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppMode {
@@ -28,8 +28,6 @@ pub enum Focus {
     Chat,
     Tasks,
 }
-
-
 
 #[derive(Debug, Clone)]
 pub enum InputMode {
@@ -56,13 +54,26 @@ pub enum ChatEntry {
     AssistantContent(String),
     AssistantStreaming(String),
     Reasoning(String),
-    ToolCall { name: String, arguments: String },
-    ToolResult { name: String, result: String },
+    ToolCall {
+        name: String,
+        arguments: String,
+    },
+    ToolResult {
+        name: String,
+        result: String,
+    },
     Error(String),
     SystemInfo(String),
-    ToolApproval { name: String, arguments: String },
+    ToolApproval {
+        name: String,
+        arguments: String,
+    },
     CliInputPrompt(String),
-    ContextSummary { id: String, summary: String, is_pending: bool },
+    ContextSummary {
+        id: String,
+        summary: String,
+        is_pending: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -104,17 +115,17 @@ pub enum MenuTab {
     Help,
 }
 
+#[derive(Debug)]
+pub enum BgEvent {
+    ModelsFetched(Result<Vec<String>, String>),
+    UpdateAvailable(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct MenuState {
     pub active_tab: MenuTab,
     pub selection_idx: usize,
     pub scroll_offset: usize,
-}
-
-#[derive(Debug)]
-pub enum BgEvent {
-    ModelsFetched(Result<Vec<String>, String>),
-    UpdateAvailable(String),
 }
 
 impl Default for MenuState {
@@ -134,46 +145,23 @@ pub struct App {
 
     pub chat_entries: Vec<ChatEntry>,
     pub visual_lines: Vec<VisualLine>,
-    pub needs_recompute_vlines: bool,
     pub input: String,
     pub cursor_pos: usize,
-    pub scroll_offset: u16,
-    pub chat_max_scroll: u16,
-    pub user_scrolled: bool,
-    pub show_reasoning: bool,
 
-    pub agent_cmd_tx: Option<mpsc::UnboundedSender<AgentCommand>>,
-    pub agent_event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
+    pub ui: UiState,
+    pub agent: AgentState,
+    pub session: SessionState,
 
-    pub total_tokens: u32,
-    pub iteration: u32,
-    pub connected: bool,
-    pub awaiting_approval: bool,
     pub input_mode: InputMode,
 
     pub tasks: Vec<Task>,
-    pub activities: Vec<ActivityEntry>,
-    pub live_activities: Vec<ActivityEntry>,
 
     pub menu_state: MenuState,
 
-    pub streaming_content: String,
-    pub streaming_reasoning: String,
-    pub is_streaming: bool,
-
     pub manager: Option<std::sync::Arc<crate::manager::SeekrManager>>,
     pub setup_state: SetupState,
-    pub session_id: Option<String>,
 
-    pub sessions: Vec<crate::session::SessionMetadata>,
-    pub session_list_error: Option<String>,
-
-    pub available_models: Vec<String>,
-    pub last_chat_width: u16,
     pub clipboard: Option<arboard::Clipboard>,
-    pub layout: Option<crate::ui::layout::AppLayout>,
-    pub terminal_width: u16,
-    pub terminal_height: u16,
 
     pub bg_tx: tokio::sync::mpsc::UnboundedSender<BgEvent>,
     pub bg_rx: tokio::sync::mpsc::UnboundedReceiver<BgEvent>,
@@ -192,27 +180,14 @@ impl App {
             manager: None,
             chat_entries: Vec::new(),
             visual_lines: Vec::new(),
-            needs_recompute_vlines: true,
             input: String::new(),
             cursor_pos: 0,
-            scroll_offset: 0,
-            chat_max_scroll: 0,
-            show_reasoning: true,
-            user_scrolled: false,
-            agent_cmd_tx: None,
-            agent_event_rx: None,
-            total_tokens: 0,
-            iteration: 0,
-            connected: false,
-            awaiting_approval: false,
+            ui: UiState::default(),
+            agent: AgentState::default(),
+            session: SessionState::default(),
             input_mode: InputMode::Normal,
             tasks: Vec::new(),
-            activities: Vec::new(),
-            live_activities: Vec::new(),
             menu_state: MenuState::default(),
-            streaming_content: String::new(),
-            streaming_reasoning: String::new(),
-            is_streaming: false,
             setup_state: SetupState {
                 current_step: 0,
                 provider_selection: 0,
@@ -223,14 +198,6 @@ impl App {
                 error_message: None,
                 validating: false,
             },
-            session_id: None,
-            sessions: Vec::new(),
-            session_list_error: None,
-            available_models: Vec::new(),
-            last_chat_width: 80,
-            layout: None,
-            terminal_width: 0,
-            terminal_height: 0,
             clipboard: arboard::Clipboard::new().ok(),
             bg_tx,
             bg_rx,
@@ -244,15 +211,21 @@ impl App {
         let manager = std::sync::Arc::new(crate::manager::SeekrManager::new(config.clone()));
         let mut app = Self {
             mode: AppMode::Main,
-            config: Some(config),
+            config: Some(config.clone()),
             manager: Some(manager),
-            show_reasoning,
             ..Self::new_setup()
         };
+        app.ui.show_reasoning = show_reasoning;
         app.chat_entries.push(ChatEntry::SystemInfo(
             "Welcome to Seekr! Type a message to start.".to_string(),
         ));
-        app.needs_recompute_vlines = true;
+
+        if config.agent.show_shell_warnings {
+            let warning = "SECURITY WARNING: The shell tool is enabled. Seekr can execute terminal commands. A basic blocklist is active, but you should review commands before execution or run in an isolated environment.";
+            app.chat_entries.push(ChatEntry::Error(warning.to_string()));
+        }
+
+        app.ui.needs_recompute_vlines = true;
         app
     }
 
@@ -262,27 +235,36 @@ impl App {
             None => return,
         };
 
-        if let Some(ref tx) = self.agent_cmd_tx {
+        if let Some(ref tx) = self.agent.cmd_tx {
             tx.send(AgentCommand::Shutdown).ok();
         }
 
         let (evt_tx, evt_rx) = mpsc::unbounded_channel();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
-        let agent_res = if let Some(sid) = &self.session_id {
+        let agent_res = if let Some(sid) = &self.session.session_id {
             let registry = match self.manager.as_ref() {
                 Some(m) => m.tool_registry(),
                 None => {
-                    self.chat_entries.push(ChatEntry::Error("Manager not initialized".to_string()));
+                    self.chat_entries
+                        .push(ChatEntry::Error("Manager not initialized".to_string()));
                     return;
                 }
             };
-            crate::agent::loop_mod::AgentLoop::resume(config.clone(), sid, evt_tx, cmd_rx, cmd_tx.clone(), registry)
+            crate::agent::loop_mod::AgentLoop::resume(
+                config.clone(),
+                sid,
+                evt_tx,
+                cmd_rx,
+                cmd_tx.clone(),
+                registry,
+            )
         } else {
             let registry = match self.manager.as_ref() {
                 Some(m) => m.tool_registry(),
                 None => {
-                    self.chat_entries.push(ChatEntry::Error("Manager not initialized".to_string()));
+                    self.chat_entries
+                        .push(ChatEntry::Error("Manager not initialized".to_string()));
                     return;
                 }
             };
@@ -298,9 +280,9 @@ impl App {
         match agent_res {
             Ok(agent) => {
                 tokio::spawn(agent.run());
-                self.agent_cmd_tx = Some(cmd_tx);
-                self.agent_event_rx = Some(evt_rx);
-                self.connected = true;
+                self.agent.cmd_tx = Some(cmd_tx);
+                self.agent.event_rx = Some(evt_rx);
+                self.agent.connected = true;
             }
             Err(e) => {
                 self.chat_entries
@@ -310,11 +292,11 @@ impl App {
     } // start_agent
 
     pub fn resume_session(&mut self, session_id: String) {
-        self.session_id = Some(session_id.clone());
+        self.session.session_id = Some(session_id.clone());
         match crate::session::Session::load(&session_id) {
             Ok(session) => {
                 self.chat_entries.clear();
-                self.needs_recompute_vlines = true;
+                self.ui.needs_recompute_vlines = true;
                 for msg in session.messages {
                     match (msg.role.as_str(), msg.content) {
                         ("user", Some(content)) => {
@@ -343,11 +325,18 @@ impl App {
                             if content.contains("--- PAST CONTEXT SUMMARY ---") {
                                 self.chat_entries.push(ChatEntry::ContextSummary {
                                     id: String::new(),
-                                    summary: content.replace("--- PAST CONTEXT SUMMARY ---\n", "").replace("\n----------------------------", ""),
+                                    summary: content
+                                        .replace("--- PAST CONTEXT SUMMARY ---\n", "")
+                                        .replace("\n----------------------------", ""),
                                     is_pending: false,
                                 });
                             } else if content.contains("[Summarizing context segment") {
-                                let id = content.split_whitespace().last().unwrap_or("").trim_end_matches("...]").to_string();
+                                let id = content
+                                    .split_whitespace()
+                                    .last()
+                                    .unwrap_or("")
+                                    .trim_end_matches("...]")
+                                    .to_string();
                                 self.chat_entries.push(ChatEntry::ContextSummary {
                                     id,
                                     summary: "Summarizing past context...".to_string(),
@@ -378,27 +367,27 @@ impl App {
         if let InputMode::ShellStdin { ref input_tx, .. } = self.input_mode.clone() {
             let _ = input_tx.send(msg);
             self.input_mode = InputMode::Normal;
-            self.needs_recompute_vlines = true;
+            self.ui.needs_recompute_vlines = true;
             return;
         }
 
         self.chat_entries.push(ChatEntry::UserMessage(msg.clone()));
-        self.update_vlines_for_entry(self.chat_entries.len() - 1, self.last_chat_width);
-        self.is_streaming = true;
-        self.streaming_content.clear();
-        self.streaming_reasoning.clear();
-        self.user_scrolled = false;
+        self.update_vlines_for_entry(self.chat_entries.len() - 1, self.ui.last_chat_width);
+        self.agent.is_streaming = true;
+        self.agent.streaming_content.clear();
+        self.agent.streaming_reasoning.clear();
+        self.ui.user_scrolled = false;
 
-        if let Some(ref tx) = self.agent_cmd_tx {
+        if let Some(ref tx) = self.agent.cmd_tx {
             tx.send(AgentCommand::UserMessage(msg)).ok();
         }
 
-        self.scroll_offset = self.chat_max_scroll;
+        self.ui.scroll_offset = self.ui.chat_max_scroll;
     } // send_message
 
     pub fn poll_agent_events(&mut self) {
         let events: Vec<AgentEvent> = {
-            let rx = match self.agent_event_rx.as_mut() {
+            let rx = match self.agent.event_rx.as_mut() {
                 Some(rx) => rx,
                 None => return,
             };
@@ -412,87 +401,89 @@ impl App {
         for event in events {
             match event {
                 AgentEvent::ContentDelta(text) => {
-                    self.streaming_content.push_str(&text);
+                    self.agent.streaming_content.push_str(&text);
                     self.update_streaming_entry();
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::ReasoningDelta(text) => {
-                    self.streaming_reasoning.push_str(&text);
-                    if self.show_reasoning {
+                    self.agent.streaming_reasoning.push_str(&text);
+                    if self.ui.show_reasoning {
                         self.update_reasoning_entry();
                     }
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::ToolCallStart { name, arguments } => {
                     self.finalize_streaming();
                     self.chat_entries
                         .push(ChatEntry::ToolCall { name, arguments });
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::ToolCallResult { name, result } => {
                     self.chat_entries
                         .push(ChatEntry::ToolResult { name, result });
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::Activity(entry) => {
-                    self.activities.push(entry.clone());
+                    self.agent.activities.push(entry.clone());
                     if let Some(tid) = entry.thread_id {
                         if entry.status == crate::tools::ActivityStatus::Starting {
-                            self.live_activities.push(entry);
+                            self.agent.live_activities.push(entry);
                         } else {
-                            self.live_activities.retain(|a| a.thread_id != Some(tid));
+                            self.agent
+                                .live_activities
+                                .retain(|a| a.thread_id != Some(tid));
                         }
                     }
                 }
                 AgentEvent::TokenUsage { total_tokens, .. } => {
-                    self.total_tokens = total_tokens;
+                    self.agent.total_tokens = total_tokens;
                 }
                 AgentEvent::IterationUpdate(n) => {
-                    self.iteration = n;
+                    self.agent.iteration = n;
                 }
                 AgentEvent::TurnComplete => {
                     self.finalize_streaming();
-                    self.is_streaming = false;
-                    self.iteration = 0;
+                    self.agent.is_streaming = false;
+                    self.agent.iteration = 0;
                     if self.mode == AppMode::AwaitingContinue {
                         self.mode = AppMode::Main;
                     }
                 }
                 AgentEvent::MaxIterationsReached => {
                     self.finalize_streaming();
-                    self.is_streaming = false;
+                    self.agent.is_streaming = false;
                     self.mode = AppMode::AwaitingContinue;
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::Error(msg) => {
                     self.finalize_streaming();
-                    self.is_streaming = false;
+                    self.agent.is_streaming = false;
                     self.chat_entries.push(ChatEntry::Error(msg));
                 }
                 AgentEvent::ToolApprovalRequest {
                     name, arguments, ..
                 } => {
-                    self.awaiting_approval = true;
+                    self.agent.awaiting_approval = true;
                     self.chat_entries
                         .push(ChatEntry::ToolApproval { name, arguments });
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::ShellInputNeeded { context, input_tx } => {
                     self.input_mode = InputMode::ShellStdin { context, input_tx };
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
                 AgentEvent::TaskCreated(task) | AgentEvent::TaskUpdated(task) => {
@@ -503,13 +494,24 @@ impl App {
                     }
                 }
                 AgentEvent::ContextPruned { count } => {
-                    // Try to find where to remove messages. 
+                    // Try to find where to remove messages.
                     // Usually we keep the first few SystemInfo/Welcome messages.
-                    let start_idx = self.chat_entries.iter().position(|e| !matches!(e, ChatEntry::SystemInfo(_))).unwrap_or(0);
+                    let start_idx = self
+                        .chat_entries
+                        .iter()
+                        .position(|e| !matches!(e, ChatEntry::SystemInfo(_)))
+                        .unwrap_or(0);
                     let mut removed = 0;
                     let mut i = start_idx;
                     while removed < count && i < self.chat_entries.len() {
-                        if matches!(self.chat_entries[i], ChatEntry::UserMessage(_) | ChatEntry::AssistantContent(_) | ChatEntry::ToolCall { .. } | ChatEntry::ToolResult { .. } | ChatEntry::Reasoning(_)) {
+                        if matches!(
+                            self.chat_entries[i],
+                            ChatEntry::UserMessage(_)
+                                | ChatEntry::AssistantContent(_)
+                                | ChatEntry::ToolCall { .. }
+                                | ChatEntry::ToolResult { .. }
+                                | ChatEntry::Reasoning(_)
+                        ) {
                             self.chat_entries.remove(i);
                             if i < self.entry_vlines.len() {
                                 self.entry_vlines.remove(i);
@@ -520,26 +522,35 @@ impl App {
                         }
                     }
                     self.sync_visual_lines();
-                    // The placeholder will be handled by the next message or we can add it here if we had the ID.
-                    // But AgentLoop emits ContextPruned, and it already added the placeholder to its session.
-                    // Let's rely on the fact that we'll get a ContextSummaryReady event soon with the same ID.
                 }
                 AgentEvent::ContextSummaryReady { id, summary } => {
-                    if let Some(pos) = self.chat_entries.iter().rposition(|e| match e { 
+                    if let Some(pos) = self.chat_entries.iter().rposition(|e| match e {
                         ChatEntry::ContextSummary { id: s_id, .. } => s_id == &id,
-                        _ => false 
+                        _ => false,
                     }) {
-                         if let ChatEntry::ContextSummary { summary: ref mut s, is_pending: ref mut p, .. } = self.chat_entries[pos] {
-                             *s = summary;
-                             *p = false;
-                         }
+                        if let ChatEntry::ContextSummary {
+                            summary: ref mut s,
+                            is_pending: ref mut p,
+                            ..
+                        } = self.chat_entries[pos]
+                        {
+                            *s = summary;
+                            *p = false;
+                        }
                     } else {
-                        self.chat_entries.push(ChatEntry::ContextSummary { id, summary, is_pending: false });
-                        self.update_vlines_for_entry(self.chat_entries.len() - 1, self.last_chat_width);
+                        self.chat_entries.push(ChatEntry::ContextSummary {
+                            id,
+                            summary,
+                            is_pending: false,
+                        });
+                        self.update_vlines_for_entry(
+                            self.chat_entries.len() - 1,
+                            self.ui.last_chat_width,
+                        );
                     }
                     self.sync_visual_lines();
-                    if !self.user_scrolled {
-                        self.scroll_offset = self.chat_max_scroll;
+                    if !self.ui.user_scrolled {
+                        self.ui.scroll_offset = self.ui.chat_max_scroll;
                     }
                 }
             }
@@ -549,22 +560,22 @@ impl App {
     fn update_streaming_entry(&mut self) {
         let last_idx = self.chat_entries.len().saturating_sub(1);
         if let Some(ChatEntry::AssistantStreaming(ref mut content)) = self.chat_entries.last_mut() {
-            *content = self.streaming_content.clone();
-            self.update_vlines_for_entry(last_idx, self.last_chat_width);
+            *content = self.agent.streaming_content.clone();
+            self.update_vlines_for_entry(last_idx, self.ui.last_chat_width);
             return;
         }
         self.chat_entries.push(ChatEntry::AssistantStreaming(
-            self.streaming_content.clone(),
+            self.agent.streaming_content.clone(),
         ));
-        self.update_vlines_for_entry(self.chat_entries.len() - 1, self.last_chat_width);
+        self.update_vlines_for_entry(self.chat_entries.len() - 1, self.ui.last_chat_width);
     } // end update_streaming_entry
 
     fn update_reasoning_entry(&mut self) {
         let len = self.chat_entries.len();
         for i in (0..len).rev() {
             if let ChatEntry::Reasoning(ref mut text) = self.chat_entries[i] {
-                *text = self.streaming_reasoning.clone();
-                self.update_vlines_for_entry(i, self.last_chat_width);
+                *text = self.agent.streaming_reasoning.clone();
+                self.update_vlines_for_entry(i, self.ui.last_chat_width);
                 return;
             }
             if !matches!(
@@ -585,37 +596,38 @@ impl App {
         };
         self.chat_entries.insert(
             insert_pos,
-            ChatEntry::Reasoning(self.streaming_reasoning.clone()),
+            ChatEntry::Reasoning(self.agent.streaming_reasoning.clone()),
         );
         while self.entry_vlines.len() < insert_pos {
             self.entry_vlines.push(Vec::new());
         }
         self.entry_vlines.insert(insert_pos, Vec::new());
-        self.update_vlines_for_entry(insert_pos, self.last_chat_width);
+        self.update_vlines_for_entry(insert_pos, self.ui.last_chat_width);
     } // end update_reasoning_entry
 
     fn finalize_streaming(&mut self) {
-        if !self.streaming_content.is_empty() {
+        if !self.agent.streaming_content.is_empty() {
             if let Some(pos) = self
                 .chat_entries
                 .iter()
                 .rposition(|e| matches!(e, ChatEntry::AssistantStreaming(_)))
             {
                 self.chat_entries[pos] =
-                    ChatEntry::AssistantContent(self.streaming_content.clone());
-                self.update_vlines_for_entry(pos, self.last_chat_width);
+                    ChatEntry::AssistantContent(self.agent.streaming_content.clone());
+                self.update_vlines_for_entry(pos, self.ui.last_chat_width);
             } else {
-                self.chat_entries
-                    .push(ChatEntry::AssistantContent(self.streaming_content.clone()));
-                self.update_vlines_for_entry(self.chat_entries.len() - 1, self.last_chat_width);
+                self.chat_entries.push(ChatEntry::AssistantContent(
+                    self.agent.streaming_content.clone(),
+                ));
+                self.update_vlines_for_entry(self.chat_entries.len() - 1, self.ui.last_chat_width);
             }
-            self.streaming_content.clear();
+            self.agent.streaming_content.clear();
         }
-        self.streaming_reasoning.clear();
+        self.agent.streaming_reasoning.clear();
     } // finalize_streaming
 
     pub fn handle_approval(&mut self, approved: bool, always: bool) {
-        self.awaiting_approval = false;
+        self.agent.awaiting_approval = false;
         if let Some(pos) = self
             .chat_entries
             .iter()
@@ -624,7 +636,7 @@ impl App {
             self.chat_entries.remove(pos);
         }
 
-        if let Some(ref tx) = self.agent_cmd_tx {
+        if let Some(ref tx) = self.agent.cmd_tx {
             if always {
                 tx.send(AgentCommand::ToolAlwaysApprove).ok();
             } else if approved {
@@ -640,31 +652,31 @@ impl App {
         self.chat_entries.push(ChatEntry::SystemInfo(
             "Chat cleared. Type a message to continue.".to_string(),
         ));
-        self.scroll_offset = 0;
-        self.needs_recompute_vlines = true;
+        self.ui.scroll_offset = 0;
+        self.ui.needs_recompute_vlines = true;
     } // clear_chat
 
     pub async fn load_sessions(&mut self) {
         if let Some(ref mgr) = self.manager {
             match mgr.load_sessions().await {
                 Ok(_) => {
-                    self.sessions = mgr.list_sessions().await;
-                    self.session_list_error = None;
+                    self.session.sessions = mgr.list_sessions().await;
+                    self.session.session_list_error = None;
                 }
                 Err(e) => {
-                    self.session_list_error = Some(format!("Failed to load sessions: {e}"));
-                    self.sessions.clear();
+                    self.session.session_list_error = Some(format!("Failed to load sessions: {e}"));
+                    self.session.sessions.clear();
                 }
             }
         } else {
             match crate::session::Session::list_all() {
                 Ok(s) => {
-                    self.sessions = s;
-                    self.session_list_error = None;
+                    self.session.sessions = s;
+                    self.session.session_list_error = None;
                 }
                 Err(e) => {
-                    self.session_list_error = Some(format!("Failed to load sessions: {e}"));
-                    self.sessions.clear();
+                    self.session.session_list_error = Some(format!("Failed to load sessions: {e}"));
+                    self.session.sessions.clear();
                 }
             }
         }
@@ -674,7 +686,7 @@ impl App {
         while let Ok(event) = self.bg_rx.try_recv() {
             match event {
                 BgEvent::ModelsFetched(Ok(models)) => {
-                    self.available_models = models;
+                    self.session.available_models = models;
                 }
                 BgEvent::ModelsFetched(Err(e)) => {
                     self.chat_entries
@@ -710,17 +722,27 @@ impl App {
                 .user_agent("seekr-tui")
                 .build()
                 .unwrap_or_default();
-            
-            let res = client.get("https://api.github.com/repos/kodr-pro/seekr/releases/latest")
+
+            let res = client
+                .get("https://api.github.com/repos/kodr-pro/seekr/releases/latest")
                 .send()
                 .await;
-            
+
             if let Ok(response) = res {
                 if let Ok(json) = response.json::<serde_json::Value>().await {
                     if let Some(tag) = json["tag_name"].as_str() {
                         let current = env!("CARGO_PKG_VERSION");
                         let version = tag.trim_start_matches('v');
-                        if version != current {
+
+                        if let (Ok(current_v), Ok(latest_v)) = (
+                            semver::Version::parse(current),
+                            semver::Version::parse(version),
+                        ) {
+                            if latest_v > current_v {
+                                let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
+                            }
+                        } else if version != current {
+                            // Fallback to basic string comparison if semver fails
                             let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
                         }
                     }
@@ -731,7 +753,7 @@ impl App {
 
     pub async fn open_unified_menu(&mut self) {
         self.load_sessions().await;
-        if self.available_models.is_empty() {
+        if self.session.available_models.is_empty() {
             self.fetch_available_models();
         }
         self.mode = AppMode::UnifiedMenu;
@@ -739,7 +761,7 @@ impl App {
     } // open_unified_menu
 
     pub async fn delete_session_at(&mut self, idx: usize) {
-        let session = match self.sessions.get(idx) {
+        let session = match self.session.sessions.get(idx) {
             Some(s) => s,
             None => return,
         };
@@ -747,15 +769,15 @@ impl App {
 
         if let Some(ref mgr) = self.manager {
             if let Err(e) = mgr.delete_session(&id).await {
-                self.session_list_error = Some(format!("Failed to delete session: {e}"));
+                self.session.session_list_error = Some(format!("Failed to delete session: {e}"));
                 return;
             }
-            self.sessions = mgr.list_sessions().await;
+            self.session.sessions = mgr.list_sessions().await;
         } else {
             if let Ok(dir) = crate::session::Session::sessions_dir() {
                 let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
             }
-            self.sessions.retain(|s| s.id != id);
+            self.session.sessions.retain(|s| s.id != id);
         }
     } // delete_session_at
     pub fn rebuild_vlines_cache(&mut self, width: u16) {
@@ -764,12 +786,14 @@ impl App {
             let lines = self.calculate_lines_for_entry(i, width);
             self.entry_vlines.push(lines);
         }
-        self.last_chat_width = width;
+        self.ui.last_chat_width = width;
         self.sync_visual_lines();
     }
 
     pub fn update_vlines_for_entry(&mut self, idx: usize, width: u16) {
-        if idx >= self.chat_entries.len() { return; }
+        if idx >= self.chat_entries.len() {
+            return;
+        }
         let lines = self.calculate_lines_for_entry(idx, width);
         while self.entry_vlines.len() <= idx {
             self.entry_vlines.push(Vec::new());
@@ -780,12 +804,14 @@ impl App {
 
     pub fn sync_visual_lines(&mut self) {
         self.visual_lines = self.entry_vlines.iter().flatten().cloned().collect();
-        self.needs_recompute_vlines = false;
+        self.ui.needs_recompute_vlines = false;
     }
 
     fn calculate_lines_for_entry(&self, idx: usize, width: u16) -> Vec<VisualLine> {
         let mut visual_lines = Vec::new();
-        if width == 0 { return visual_lines; }
+        if width == 0 {
+            return visual_lines;
+        }
         let entry = match self.chat_entries.get(idx) {
             Some(e) => e,
             None => return visual_lines,
@@ -793,24 +819,55 @@ impl App {
 
         let (header, content) = match entry {
             ChatEntry::UserMessage(msg) => (Some("[YOU]"), msg.as_str()),
-            ChatEntry::AssistantContent(text) | ChatEntry::AssistantStreaming(text) => (Some("[SEEKR]"), if text.is_empty() && matches!(entry, ChatEntry::AssistantStreaming(_)) { "..." } else { text.as_str() }),
+            ChatEntry::AssistantContent(text) | ChatEntry::AssistantStreaming(text) => (
+                Some("[SEEKR]"),
+                if text.is_empty() && matches!(entry, ChatEntry::AssistantStreaming(_)) {
+                    "..."
+                } else {
+                    text.as_str()
+                },
+            ),
             ChatEntry::Reasoning(text) => (Some("[THINKING]"), text.as_str()),
             ChatEntry::ToolCall { name, arguments } => {
-                let args_short = if arguments.len() > 64 { format!("{}...", &arguments[..64]) } else { arguments.clone() };
+                let args_short = if arguments.len() > 64 {
+                    format!("{}...", &arguments[..64])
+                } else {
+                    arguments.clone()
+                };
                 (None, &*format!("➞ Tool Call: {} ({})", name, args_short))
             }
             ChatEntry::ToolResult { name, result } => {
-                 let max_len = 2000;
-                 let display_result = if result.len() > max_len { format!("{}... (truncated)", &result[..max_len]) } else { result.clone() };
-                 (None, &*format!("✓ Tool Result: {}\n{}", name, display_result))
+                let max_len = 2000;
+                let display_result = if result.len() > max_len {
+                    format!("{}... (truncated)", &result[..max_len])
+                } else {
+                    result.clone()
+                };
+                (
+                    None,
+                    &*format!("✓ Tool Result: {}\n{}", name, display_result),
+                )
             }
             ChatEntry::Error(msg) => (Some("[ERROR]"), msg.as_str()),
             ChatEntry::SystemInfo(msg) => (None, &*format!("[INFO] {}", msg)),
-            ChatEntry::ToolApproval { name, arguments } => (Some("[APPROVAL REQUIRED]"), &*format!("Agent wants to execute: {}({})\n  [Y]es / [N]o / [A]lways", name, arguments)),
+            ChatEntry::ToolApproval { name, arguments } => (
+                Some("[APPROVAL REQUIRED]"),
+                &*format!(
+                    "Agent wants to execute: {}({})\n  [Y]es / [N]o / [A]lways",
+                    name, arguments
+                ),
+            ),
             ChatEntry::CliInputPrompt(prompt) => (Some("[INPUT REQUIRED]"), prompt.as_str()),
-            ChatEntry::ContextSummary { summary, is_pending, .. } => {
+            ChatEntry::ContextSummary {
+                summary,
+                is_pending,
+                ..
+            } => {
                 if *is_pending {
-                    (Some("[CONTEXT WINDOW]"), "Summarizing past conversation to free up context space...")
+                    (
+                        Some("[CONTEXT WINDOW]"),
+                        "Summarizing past conversation to free up context space...",
+                    )
                 } else {
                     (Some("[CONTEXT SUMMARY]"), summary.as_str())
                 }
@@ -818,11 +875,23 @@ impl App {
         };
 
         if idx > 0 {
-            visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false, line_type: LineType::Normal, language: None });
+            visual_lines.push(VisualLine {
+                entry_idx: idx,
+                text: String::new(),
+                is_header: false,
+                line_type: LineType::Normal,
+                language: None,
+            });
         }
 
         if let Some(h) = header {
-            visual_lines.push(VisualLine { entry_idx: idx, text: h.to_string(), is_header: true, line_type: LineType::Normal, language: None });
+            visual_lines.push(VisualLine {
+                entry_idx: idx,
+                text: h.to_string(),
+                is_header: true,
+                line_type: LineType::Normal,
+                language: None,
+            });
         }
 
         let mut in_code_block = false;
@@ -832,14 +901,16 @@ impl App {
             let is_fence_start = trimmed.starts_with("```");
             let mut line_type = LineType::Normal;
             let mut language: Option<String> = None;
-            
+
             if is_fence_start {
                 if !in_code_block {
                     line_type = LineType::CodeBlockStart;
                     let after_backticks = &trimmed[3..].trim();
                     if !after_backticks.is_empty() {
                         let lang = after_backticks.split_whitespace().next().unwrap_or("");
-                        if !lang.is_empty() { current_language = Some(lang.to_string()); } 
+                        if !lang.is_empty() {
+                            current_language = Some(lang.to_string());
+                        }
                     }
                     language = current_language.clone();
                 } else {
@@ -859,7 +930,13 @@ impl App {
             };
 
             if line.is_empty() {
-                visual_lines.push(VisualLine { entry_idx: idx, text: String::new(), is_header: false, line_type, language });
+                visual_lines.push(VisualLine {
+                    entry_idx: idx,
+                    text: String::new(),
+                    is_header: false,
+                    line_type,
+                    language,
+                });
                 continue;
             }
 
@@ -868,14 +945,30 @@ impl App {
             for word in words {
                 if current_line.chars().count() + word.chars().count() > width as usize {
                     if !current_line.is_empty() {
-                        visual_lines.push(VisualLine { entry_idx: idx, text: current_line.clone(), is_header: false, line_type, language: language.clone() });
+                        visual_lines.push(VisualLine {
+                            entry_idx: idx,
+                            text: current_line.clone(),
+                            is_header: false,
+                            line_type,
+                            language: language.clone(),
+                        });
                         current_line.clear();
                     }
                     let mut remaining_word = word;
                     while remaining_word.chars().count() > width as usize {
-                        let split_idx = remaining_word.char_indices().map(|(i, _)| i).nth(width as usize).unwrap_or(remaining_word.len());
+                        let split_idx = remaining_word
+                            .char_indices()
+                            .map(|(i, _)| i)
+                            .nth(width as usize)
+                            .unwrap_or(remaining_word.len());
                         let (head, tail) = remaining_word.split_at(split_idx);
-                        visual_lines.push(VisualLine { entry_idx: idx, text: head.to_string(), is_header: false, line_type, language: language.clone() });
+                        visual_lines.push(VisualLine {
+                            entry_idx: idx,
+                            text: head.to_string(),
+                            is_header: false,
+                            line_type,
+                            language: language.clone(),
+                        });
                         remaining_word = tail;
                     }
                     current_line.push_str(remaining_word);
@@ -884,7 +977,13 @@ impl App {
                 }
             }
             if !current_line.is_empty() {
-                visual_lines.push(VisualLine { entry_idx: idx, text: current_line, is_header: false, line_type, language });
+                visual_lines.push(VisualLine {
+                    entry_idx: idx,
+                    text: current_line,
+                    is_header: false,
+                    line_type,
+                    language,
+                });
             }
         }
         visual_lines
@@ -895,14 +994,12 @@ impl App {
     }
 
     pub fn get_vline_char_count(&self, vline_idx: usize) -> usize {
-        self.visual_lines.get(vline_idx).map(|l| l.text.chars().count()).unwrap_or(0)
+        self.visual_lines
+            .get(vline_idx)
+            .map(|l| l.text.chars().count())
+            .unwrap_or(0)
     }
-
-
-
-
 } // impl App
-
 
 pub async fn run_app(mut app: App) -> Result<()> {
     let mut terminal = ratatui::init();
@@ -916,7 +1013,7 @@ pub async fn run_app(mut app: App) -> Result<()> {
 
     ratatui::restore();
 
-    if let Some(ref tx) = app.agent_cmd_tx {
+    if let Some(ref tx) = app.agent.cmd_tx {
         tx.send(AgentCommand::Shutdown).ok();
     }
 

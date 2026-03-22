@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use async_trait::async_trait;
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::Tool;
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 
@@ -83,6 +83,7 @@ struct TaskManagerState {
 pub struct TaskManager {
     state: Arc<Mutex<TaskManagerState>>,
     pub event_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>>,
+    pub config: Option<crate::config::AppConfig>,
 }
 
 impl Serialize for TaskManager {
@@ -107,6 +108,7 @@ impl<'de> Deserialize<'de> for TaskManager {
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
             event_tx: None,
+            config: None,
         })
     }
 } // deserialize
@@ -127,6 +129,7 @@ impl TaskManager {
                 next_id: 1,
             })),
             event_tx: None,
+            config: None,
         }
     } // new
 
@@ -155,9 +158,9 @@ impl TaskManager {
     } // tasks
 
     pub fn log_activity(
-        &self, 
-        tool_name: &str, 
-        summary: &str, 
+        &self,
+        tool_name: &str,
+        summary: &str,
         status: ActivityStatus,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
@@ -185,10 +188,18 @@ impl TaskManager {
         }
     } // log_activity
 
-    pub fn with_sender(mut self, tx: tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>) -> Self {
+    pub fn with_sender(
+        mut self,
+        tx: tokio::sync::mpsc::UnboundedSender<crate::agent::AgentEvent>,
+    ) -> Self {
         self.event_tx = Some(tx);
         self
     } // with_sender
+
+    pub fn with_config(mut self, config: crate::config::AppConfig) -> Self {
+        self.config = Some(config);
+        self
+    } // with_config
 
     pub fn create_task(&self, title: &str, status: Option<&str>) -> usize {
         let mut state = match self.state.lock() {
@@ -197,7 +208,7 @@ impl TaskManager {
         };
         let id = state.next_id;
         state.next_id += 1;
-        
+
         let task = Task {
             id,
             title: title.to_string(),
@@ -205,13 +216,13 @@ impl TaskManager {
                 .map(TaskStatus::from_str_loose)
                 .unwrap_or(TaskStatus::Pending),
         };
-        
+
         state.tasks.push(task.clone());
-        
+
         if let Some(ref tx) = self.event_tx {
             tx.send(crate::agent::AgentEvent::TaskCreated(task)).ok();
         }
-        
+
         id
     } // create_task
 
@@ -220,11 +231,12 @@ impl TaskManager {
         if let Some(task) = state.tasks.iter_mut().find(|t| t.id == task_id) {
             task.status = TaskStatus::from_str_loose(status);
             let updated_task = task.clone();
-            
+
             if let Some(ref tx) = self.event_tx {
-                tx.send(crate::agent::AgentEvent::TaskUpdated(updated_task)).ok();
+                tx.send(crate::agent::AgentEvent::TaskUpdated(updated_task))
+                    .ok();
             }
-            
+
             Ok(format!("Task {} updated to {}", task_id, task.status))
         } else {
             Err(format!("Task {} not found", task_id))
@@ -245,7 +257,8 @@ impl Tool for CreateTaskTool {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Create a task to track progress on a multi-step operation.".to_string(),
+                description: "Create a task to track progress on a multi-step operation."
+                    .to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -259,17 +272,25 @@ impl Tool for CreateTaskTool {
     } // definition
 
     async fn execute(
-        &self, 
-        args: &serde_json::Value, 
+        &self,
+        args: &serde_json::Value,
         task_manager: &TaskManager,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let title = args["title"].as_str().ok_or_else(|| anyhow!("Missing title"))?;
+        let title = args["title"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing title"))?;
         let status = args["status"].as_str();
         let task_id = task_manager.create_task(title, status);
         let summary = format!("Created task {}: {}", task_id, title);
-        task_manager.log_activity(self.name(), &summary, ActivityStatus::Success, thread_id, total_threads);
+        task_manager.log_activity(
+            self.name(),
+            &summary,
+            ActivityStatus::Success,
+            thread_id,
+            total_threads,
+        );
         Ok((format!("Created task ID: {}", task_id), summary))
     } // execute
 } // impl CreateTaskTool
@@ -301,19 +322,28 @@ impl Tool for UpdateTaskTool {
     } // definition
 
     async fn execute(
-        &self, 
-        args: &serde_json::Value, 
+        &self,
+        args: &serde_json::Value,
         task_manager: &TaskManager,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
         let id_raw = args["id"].as_u64().ok_or_else(|| anyhow!("Missing id"))? as usize;
-        let status = args["status"].as_str().ok_or_else(|| anyhow!("Missing status"))?;
-        
-        task_manager.update_task(id_raw, status)
+        let status = args["status"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing status"))?;
+
+        task_manager
+            .update_task(id_raw, status)
             .map_err(|e| anyhow!(e))?;
         let summary = format!("Updated task {} to {}", id_raw, status);
-        task_manager.log_activity(self.name(), &summary, ActivityStatus::Success, thread_id, total_threads);
+        task_manager.log_activity(
+            self.name(),
+            &summary,
+            ActivityStatus::Success,
+            thread_id,
+            total_threads,
+        );
         Ok((format!("Successfully updated task to {}", status), summary))
     } // execute
 } // impl UpdateTaskTool
@@ -321,31 +351,33 @@ impl Tool for UpdateTaskTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::sync::mpsc;
     use crate::agent::AgentEvent;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_task_sync() {
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
         let task_manager = TaskManager::new().with_sender(event_tx);
-        
+
         let task_id = task_manager.create_task("Test Task", Some("in_progress"));
         assert_eq!(task_manager.tasks().len(), 1);
         assert_eq!(task_manager.tasks()[0].status, TaskStatus::InProgress);
-        
+
         match event_rx.recv().await {
             Some(AgentEvent::TaskCreated(task)) => {
                 assert_eq!(task.id, task_id);
             }
             _ => {
                 // This should not happen in a valid test
-                assert!(false, "Expected TaskCreated event");
+                panic!("Expected TaskCreated event");
             }
         }
-        
-        task_manager.update_task(task_id, "completed").expect("update_task failed");
+
+        task_manager
+            .update_task(task_id, "completed")
+            .expect("update_task failed");
         assert_eq!(task_manager.tasks()[0].status, TaskStatus::Completed);
-        
+
         match event_rx.recv().await {
             Some(AgentEvent::TaskUpdated(task)) => {
                 assert_eq!(task.id, task_id);
@@ -353,7 +385,7 @@ mod tests {
             }
             _ => {
                 // This should not happen in a valid test
-                assert!(false, "Expected TaskUpdated event");
+                panic!("Expected TaskUpdated event");
             }
         }
     } // test_task_sync

@@ -1,8 +1,8 @@
-use anyhow::Result;
-use crate::config::AppConfig;
 use crate::api::client::ApiClient;
-use std::path::Path;
+use crate::config::AppConfig;
+use anyhow::Result;
 use colored::*;
+use std::path::Path;
 
 pub enum CheckResult {
     Ok(String),
@@ -40,12 +40,21 @@ pub async fn run_diagnostics() -> Result<()> {
         }
     }
 
-    println!("\nDiagnostics complete: {} errors, {} warnings.\n", errors, warnings);
-    
+    println!(
+        "\nDiagnostics complete: {} errors, {} warnings.\n",
+        errors, warnings
+    );
+
     if errors > 0 {
-        println!("{}", "Please fix the red issues above before running Seekr.".red());
+        println!(
+            "{}",
+            "Please fix the red issues above before running Seekr.".red()
+        );
     } else if warnings > 0 {
-        println!("{}", "Seekr should run, but some features might be limited.".yellow());
+        println!(
+            "{}",
+            "Seekr should run, but some features might be limited.".yellow()
+        );
     } else {
         println!("{}", "All systems go! Seekr is ready to help.".green());
     }
@@ -55,15 +64,20 @@ pub async fn run_diagnostics() -> Result<()> {
 
 fn check_config() -> CheckResult {
     if !AppConfig::exists() {
-        return CheckResult::Error("Config file missing. Run Seekr to start the setup wizard.".to_string());
+        return CheckResult::Error(
+            "Config file missing. Run Seekr to start the setup wizard.".to_string(),
+        );
     }
-    
+
     match AppConfig::load() {
         Ok(cfg) => {
             if cfg.providers.is_empty() || cfg.current_provider().key.is_empty() {
                 CheckResult::Error("No providers configured or API key is empty.".to_string())
             } else {
-                CheckResult::Ok(format!("Valid configuration found for provider: {}", cfg.current_provider().name))
+                CheckResult::Ok(format!(
+                    "Valid configuration found for provider: {}",
+                    cfg.current_provider().name
+                ))
             }
         }
         Err(e) => CheckResult::Error(format!("Failed to parse config: {}", e)),
@@ -78,11 +92,14 @@ async fn check_api() -> CheckResult {
 
     let client = ApiClient::new(&cfg);
     let provider = cfg.current_provider();
-    match client.chat_completion_stream(
-        vec![crate::api::types::ChatMessage::user("ping")],
-        &provider.model,
-        None,
-    ).await {
+    match client
+        .chat_completion_stream(
+            vec![crate::api::types::ChatMessage::user("ping")],
+            &provider.model,
+            None,
+        )
+        .await
+    {
         Ok(_) => CheckResult::Ok(format!("Connected to {} API successfully.", provider.name)),
         Err(e) => CheckResult::Error(format!("{} API error: {}", provider.name, e)),
     }
@@ -91,43 +108,68 @@ async fn check_api() -> CheckResult {
 fn check_working_dir() -> CheckResult {
     let cfg = match AppConfig::load() {
         Ok(cfg) => cfg,
-        Err(_) => return CheckResult::Error("Cannot check directory without valid config.".to_string()),
+        Err(_) => {
+            return CheckResult::Error("Cannot check directory without valid config.".to_string())
+        }
     };
 
     let expanded_path = shellexpand::tilde(&cfg.agent.working_directory);
     let path = Path::new(expanded_path.as_ref());
     if !path.exists() {
-        return CheckResult::Error(format!("Working directory does not exist: {}", cfg.agent.working_directory));
+        return CheckResult::Error(format!(
+            "Working directory does not exist: {}",
+            cfg.agent.working_directory
+        ));
     }
-    
+
     if !path.is_dir() {
-        return CheckResult::Error(format!("Working path is not a directory: {}", cfg.agent.working_directory));
+        return CheckResult::Error(format!(
+            "Working path is not a directory: {}",
+            cfg.agent.working_directory
+        ));
     }
 
     let test_file = path.join(".seekr_doctor_test");
     match std::fs::write(&test_file, "test") {
         Ok(_) => {
             let _ = std::fs::remove_file(&test_file);
-            CheckResult::Ok(format!("Working directory is readable and writable: {}", expanded_path))
+            CheckResult::Ok(format!(
+                "Working directory is readable and writable: {}",
+                expanded_path
+            ))
         }
-        Err(e) => CheckResult::Warning(format!("Detected limited write permissions in {}: {}", expanded_path, e)),
+        Err(e) => CheckResult::Warning(format!(
+            "Detected limited write permissions in {}: {}",
+            expanded_path, e
+        )),
     }
 } // check_working_dir
 
 fn check_system_tools() -> CheckResult {
     let mut missing = Vec::new();
-    
-    if std::process::Command::new("git").arg("--version").output().is_err() {
+
+    if std::process::Command::new("git")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         missing.push("git");
     }
-    
-    if std::process::Command::new("rustc").arg("--version").output().is_err() {
+
+    if std::process::Command::new("rustc")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
         missing.push("rustc");
     }
 
     if missing.is_empty() {
         CheckResult::Ok("Required system tools (git, rustc) are available.".to_string())
     } else {
-        CheckResult::Warning(format!("Missing system tools: {}. Some tools might not work correctly.", missing.join(", ")))
+        CheckResult::Warning(format!(
+            "Missing system tools: {}. Some tools might not work correctly.",
+            missing.join(", ")
+        ))
     }
 } // check_system_tools

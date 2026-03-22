@@ -1,9 +1,9 @@
-use anyhow::Result;
-use crossterm::event::{Event, KeyCode, KeyModifiers, KeyEvent};
-use crate::app::{App, AppMode, Focus, ChatEntry};
 use crate::agent::AgentCommand;
-use crate::config::AppConfig;
 use crate::api::client::ApiClient;
+use crate::app::{App, AppMode, ChatEntry, Focus};
+use crate::config::AppConfig;
+use anyhow::Result;
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 pub async fn handle_event(app: &mut App, ev: &Event) -> Result<bool> {
     match app.mode {
@@ -49,8 +49,14 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                 }
             }
             1 => match key.code {
-                KeyCode::Up => app.setup_state.provider_selection = app.setup_state.provider_selection.saturating_sub(1),
-                KeyCode::Down => app.setup_state.provider_selection = (app.setup_state.provider_selection + 1).min(3),
+                KeyCode::Up => {
+                    app.setup_state.provider_selection =
+                        app.setup_state.provider_selection.saturating_sub(1)
+                }
+                KeyCode::Down => {
+                    app.setup_state.provider_selection =
+                        (app.setup_state.provider_selection + 1).min(3)
+                }
                 KeyCode::Enter => app.setup_state.current_step = 2,
                 KeyCode::Esc => app.setup_state.current_step = 0,
                 _ => {}
@@ -65,7 +71,9 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                     }
                 }
                 KeyCode::Esc => app.setup_state.current_step = 1,
-                KeyCode::Backspace => { app.setup_state.api_key_input.pop(); }
+                KeyCode::Backspace => {
+                    app.setup_state.api_key_input.pop();
+                }
                 KeyCode::Char(c) => {
                     app.setup_state.api_key_input.push(c);
                     app.setup_state.error_message = None;
@@ -73,20 +81,33 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                 _ => {}
             },
             3 => match key.code {
-                KeyCode::Up => app.setup_state.model_selection = app.setup_state.model_selection.saturating_sub(1),
+                KeyCode::Up => {
+                    app.setup_state.model_selection =
+                        app.setup_state.model_selection.saturating_sub(1)
+                }
                 KeyCode::Down => {
                     let models_count: usize = match app.setup_state.provider_selection {
-                        0 => 2, 1 => 2, 2 => 1, _ => 5
+                        0 => 2,
+                        1 => 2,
+                        2 => 1,
+                        _ => 5,
                     };
-                    app.setup_state.model_selection = (app.setup_state.model_selection + 1).min(models_count.saturating_sub(1));
+                    app.setup_state.model_selection =
+                        (app.setup_state.model_selection + 1).min(models_count.saturating_sub(1));
                 }
                 KeyCode::Enter => app.setup_state.current_step = 4,
                 KeyCode::Esc => app.setup_state.current_step = 2,
                 _ => {}
             },
             4 => match key.code {
-                KeyCode::Up => app.setup_state.auto_approve_selection = app.setup_state.auto_approve_selection.saturating_sub(1),
-                KeyCode::Down => app.setup_state.auto_approve_selection = (app.setup_state.auto_approve_selection + 1).min(1),
+                KeyCode::Up => {
+                    app.setup_state.auto_approve_selection =
+                        app.setup_state.auto_approve_selection.saturating_sub(1)
+                }
+                KeyCode::Down => {
+                    app.setup_state.auto_approve_selection =
+                        (app.setup_state.auto_approve_selection + 1).min(1)
+                }
                 KeyCode::Enter => app.setup_state.current_step = 5,
                 KeyCode::Esc => app.setup_state.current_step = 3,
                 _ => {}
@@ -99,12 +120,28 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 
                     let key = app.setup_state.api_key_input.clone();
                     let model_id = match app.setup_state.provider_selection {
-                        0 => if app.setup_state.model_selection == 0 { "gpt-4o" } else { "gpt-4o-mini" },
-                        1 => if app.setup_state.model_selection == 0 { "deepseek-chat" } else { "deepseek-reasoner" },
+                        0 => {
+                            if app.setup_state.model_selection == 0 {
+                                "gpt-4o"
+                            } else {
+                                "gpt-4o-mini"
+                            }
+                        }
+                        1 => {
+                            if app.setup_state.model_selection == 0 {
+                                "deepseek-chat"
+                            } else {
+                                "deepseek-reasoner"
+                            }
+                        }
                         2 => "claude-3-5-sonnet-latest",
                         _ => match app.setup_state.model_selection {
-                            0 => "gpt-4o", 1 => "gpt-4o-mini", 2 => "claude-3-5-sonnet-latest", 3 => "deepseek-chat", _ => "deepseek-reasoner"
-                        }
+                            0 => "gpt-4o",
+                            1 => "gpt-4o-mini",
+                            2 => "claude-3-5-sonnet-latest",
+                            3 => "deepseek-chat",
+                            _ => "deepseek-reasoner",
+                        },
                     };
                     let base_url = AppConfig::get_default_base_url(model_id);
                     let valid = ApiClient::validate_key(&key, &base_url, model_id).await;
@@ -113,13 +150,21 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                     match valid {
                         Ok(true) => {
                             let auto_approve = app.setup_state.auto_approve_selection == 1;
-                            let working_dir = if app.setup_state.working_dir_input.is_empty() { ".".to_string() } else { app.setup_state.working_dir_input.clone() };
+                            let working_dir = if app.setup_state.working_dir_input.is_empty() {
+                                ".".to_string()
+                            } else {
+                                app.setup_state.working_dir_input.clone()
+                            };
 
                             let config = AppConfig {
                                 providers: vec![crate::config::ProviderConfig {
                                     name: match app.setup_state.provider_selection {
-                                        0 => "OpenAI", 1 => "DeepSeek", 2 => "Anthropic", _ => "AI Provider"
-                                    }.to_string(),
+                                        0 => "OpenAI",
+                                        1 => "DeepSeek",
+                                        2 => "Anthropic",
+                                        _ => "AI Provider",
+                                    }
+                                    .to_string(),
                                     key: app.setup_state.api_key_input.clone(),
                                     base_url: base_url.clone(),
                                     model: model_id.to_string(),
@@ -130,35 +175,56 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     max_iterations: 15,
                                     auto_approve_tools: auto_approve,
                                     working_directory: working_dir,
-                                    context_window_threshold: 40,
-                                    context_window_keep: 10,
+                                    ..Default::default()
                                 },
-                                ui: crate::config::UiConfig { theme: "dark".to_string(), show_reasoning: true },
+                                ui: crate::config::UiConfig {
+                                    theme: "dark".to_string(),
+                                    show_reasoning: true,
+                                },
                             };
 
                             if let Err(e) = config.save() {
-                                app.setup_state.error_message = Some(format!("Failed to save config: {e}"));
+                                app.setup_state.error_message =
+                                    Some(format!("Failed to save config: {e}"));
                             } else {
-                                app.manager = Some(std::sync::Arc::new(crate::manager::SeekrManager::new(config.clone())));
+                                app.manager = Some(std::sync::Arc::new(
+                                    crate::manager::SeekrManager::new(config.clone()),
+                                ));
                                 app.config = Some(config);
                                 app.setup_state.current_step = 7;
                             }
                         }
-                        Ok(false) => { app.setup_state.error_message = Some("Invalid API key.".to_string()); }
-                        Err(e) => { app.setup_state.error_message = Some(format!("Connection error: {e}")); }
+                        Ok(false) => {
+                            app.setup_state.error_message = Some("Invalid API key.".to_string());
+                        }
+                        Err(e) => {
+                            app.setup_state.error_message = Some(format!("Connection error: {e}"));
+                        }
                     }
                 }
                 KeyCode::Esc => app.setup_state.current_step = 4,
-                KeyCode::Backspace => { app.setup_state.working_dir_input.pop(); }
-                KeyCode::Char(c) => { app.setup_state.working_dir_input.push(c); }
+                KeyCode::Backspace => {
+                    app.setup_state.working_dir_input.pop();
+                }
+                KeyCode::Char(c) => {
+                    app.setup_state.working_dir_input.push(c);
+                }
                 _ => {}
             },
-            6 => if key.code == KeyCode::Enter { app.setup_state.current_step = 2; app.setup_state.error_message = None; }
-            7 => if key.code == KeyCode::Enter {
-                app.mode = AppMode::Main;
-                app.show_reasoning = true;
-                app.chat_entries.push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
-                app.start_agent();
+            6 => {
+                if key.code == KeyCode::Enter {
+                    app.setup_state.current_step = 2;
+                    app.setup_state.error_message = None;
+                }
+            }
+            7 => {
+                if key.code == KeyCode::Enter {
+                    app.mode = AppMode::Main;
+                    app.ui.show_reasoning = true;
+                    app.chat_entries
+                        .push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
+                    app.start_agent();
+                }
             }
             _ => {}
         }
@@ -167,7 +233,10 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
 }
 
 pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
-    if let Event::Key(KeyEvent { code, modifiers, .. }) = ev {
+    if let Event::Key(KeyEvent {
+        code, modifiers, ..
+    }) = ev
+    {
         if *code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             return true;
         }
@@ -176,20 +245,24 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             match code {
                 KeyCode::Char('c') | KeyCode::Char('C') => {
                     app.mode = AppMode::Main;
-                    app.is_streaming = true;
-                    app.user_scrolled = false;
-                    if let Some(ref tx) = app.agent_cmd_tx { tx.send(AgentCommand::Continue).ok(); }
+                    app.agent.is_streaming = true;
+                    app.ui.user_scrolled = false;
+                    if let Some(ref tx) = app.agent.cmd_tx {
+                        tx.send(AgentCommand::Continue).ok();
+                    }
                 }
                 KeyCode::Char('a') | KeyCode::Char('A') => {
                     app.mode = AppMode::Main;
-                    if let Some(ref tx) = app.agent_cmd_tx { tx.send(AgentCommand::AnswerNow).ok(); }
+                    if let Some(ref tx) = app.agent.cmd_tx {
+                        tx.send(AgentCommand::AnswerNow).ok();
+                    }
                 }
                 _ => {}
             }
             return false;
         }
 
-        if app.awaiting_approval {
+        if app.agent.awaiting_approval {
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => app.handle_approval(true, false),
                 KeyCode::Char('n') | KeyCode::Char('N') => app.handle_approval(false, false),
@@ -206,8 +279,8 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             }
             KeyCode::Enter => {
                 app.send_message();
-                app.user_scrolled = false;
-                app.scroll_offset = app.chat_max_scroll;
+                app.ui.user_scrolled = false;
+                app.ui.scroll_offset = app.ui.chat_max_scroll;
             }
             KeyCode::Esc => {
                 app.mode = AppMode::QuitConfirm;
@@ -215,13 +288,11 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
             KeyCode::Char('r') if modifiers.contains(KeyModifiers::CONTROL) => {
                 app.clear_chat();
             }
-            _ => {
-                match app.focus {
-                    Focus::Input => handle_input_focus_keys(app, code, modifiers),
-                    Focus::Chat => handle_chat_focus_keys(app, code, modifiers),
-                    Focus::Tasks => handle_tasks_focus_keys(app, code, modifiers),
-                }
-            }
+            _ => match app.focus {
+                Focus::Input => handle_input_focus_keys(app, code, modifiers),
+                Focus::Chat => handle_chat_focus_keys(app, code, modifiers),
+                Focus::Tasks => handle_tasks_focus_keys(app, code, modifiers),
+            },
         }
     }
     false
@@ -263,21 +334,20 @@ fn handle_chat_focus_keys(app: &mut App, code: &KeyCode, _modifiers: &KeyModifie
         KeyCode::Tab => app.focus = Focus::Tasks,
         KeyCode::Char('i') | KeyCode::Esc => app.focus = Focus::Input,
         KeyCode::Char('j') | KeyCode::Down => {
-            app.scroll_offset = (app.scroll_offset + 1).min(app.chat_max_scroll);
-            app.user_scrolled = true;
+            app.ui.scroll_offset = (app.ui.scroll_offset + 1).min(app.ui.chat_max_scroll);
+            app.ui.user_scrolled = true;
         }
         KeyCode::Char('k') | KeyCode::Up => {
-            app.scroll_offset = app.scroll_offset.saturating_sub(1);
-            app.user_scrolled = true;
+            app.ui.scroll_offset = app.ui.scroll_offset.saturating_sub(1);
+            app.ui.user_scrolled = true;
         }
         _ => {}
     }
 }
 
 fn handle_tasks_focus_keys(app: &mut App, code: &KeyCode, _modifiers: &KeyModifiers) {
-    match code {
-        KeyCode::Tab => app.focus = Focus::Input,
-        _ => {}
+    if code == &KeyCode::Tab {
+        app.focus = Focus::Input
     }
 }
 
@@ -311,9 +381,11 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
         }
         KeyCode::Down | KeyCode::Char('j') => {
             let max = match app.menu_state.active_tab {
-                crate::app::MenuTab::Sessions => app.sessions.len(),
-                crate::app::MenuTab::Models => app.available_models.len(),
-                crate::app::MenuTab::Providers => app.config.as_ref().map(|c| c.providers.len()).unwrap_or(0),
+                crate::app::MenuTab::Sessions => app.session.sessions.len(),
+                crate::app::MenuTab::Models => app.session.available_models.len(),
+                crate::app::MenuTab::Providers => {
+                    app.config.as_ref().map(|c| c.providers.len()).unwrap_or(0)
+                }
                 crate::app::MenuTab::Settings => 5,
                 crate::app::MenuTab::Help => 0,
             };
@@ -321,60 +393,76 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                 app.menu_state.selection_idx += 1;
             }
         }
-        KeyCode::Enter => {
-            match app.menu_state.active_tab {
-                crate::app::MenuTab::Sessions => {
-                    if let Some(session) = app.sessions.get(app.menu_state.selection_idx) {
-                        let id = session.id.clone();
-                        app.session_id = Some(id.clone());
-                        app.mode = AppMode::Main;
-                        app.resume_session(id);
-                        app.start_agent();
-                    }
+        KeyCode::Enter => match app.menu_state.active_tab {
+            crate::app::MenuTab::Sessions => {
+                if let Some(session) = app.session.sessions.get(app.menu_state.selection_idx) {
+                    let id = session.id.clone();
+                    app.session.session_id = Some(id.clone());
+                    app.mode = AppMode::Main;
+                    app.resume_session(id);
+                    app.start_agent();
                 }
-                crate::app::MenuTab::Models => {
-                    if let Some(model) = app.available_models.get(app.menu_state.selection_idx) {
-                        let model_clone = model.clone();
-                        if let Some(cfg) = app.config.as_mut() {
-                            cfg.current_provider_mut().model = model_clone.clone();
-                            cfg.save().ok();
-                            app.mode = AppMode::Main;
-                            app.chat_entries.push(ChatEntry::SystemInfo(format!("Switched to model: {}", model_clone)));
-                            app.start_agent();
-                        }
-                    }
-                }
-                crate::app::MenuTab::Providers => {
-                    if let Some(cfg) = app.config.as_mut() {
-                        cfg.active_provider = app.menu_state.selection_idx;
-                        cfg.save().ok();
-                        app.mode = AppMode::Main;
-                        app.chat_entries.push(ChatEntry::SystemInfo(format!("Switched to provider: {}", cfg.current_provider().name)));
-                        app.start_agent();
-                    }
-                }
-                crate::app::MenuTab::Settings => {
-                    if let Some(cfg) = app.config.as_mut() {
-                        match app.menu_state.selection_idx {
-                            0 => {}
-                            1 => {
-                                cfg.agent.max_iterations = match cfg.agent.max_iterations {
-                                    15 => 30, 30 => 50, 50 => 100, 100 => 200, 200 => 500, 500 => 1000, _ => 15
-                                };
-                            }
-                            2 => { cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools; }
-                            4 => {
-                                cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
-                                app.show_reasoning = cfg.ui.show_reasoning;
-                            }
-                            _ => {}
-                        }
-                        cfg.save().ok();
-                    }
-                }
-                _ => {}
             }
-        }
+            crate::app::MenuTab::Models => {
+                if let Some(model) = app
+                    .session
+                    .available_models
+                    .get(app.menu_state.selection_idx)
+                {
+                    let model_clone = model.clone();
+                    if let Some(cfg) = app.config.as_mut() {
+                        cfg.current_provider_mut().model = model_clone.clone();
+                        cfg.save().ok();
+                        app.mode = AppMode::Main;
+                        app.chat_entries.push(ChatEntry::SystemInfo(format!(
+                            "Switched to model: {}",
+                            model_clone
+                        )));
+                        app.start_agent();
+                    }
+                }
+            }
+            crate::app::MenuTab::Providers => {
+                if let Some(cfg) = app.config.as_mut() {
+                    cfg.active_provider = app.menu_state.selection_idx;
+                    cfg.save().ok();
+                    app.mode = AppMode::Main;
+                    app.chat_entries.push(ChatEntry::SystemInfo(format!(
+                        "Switched to provider: {}",
+                        cfg.current_provider().name
+                    )));
+                    app.start_agent();
+                }
+            }
+            crate::app::MenuTab::Settings => {
+                if let Some(cfg) = app.config.as_mut() {
+                    match app.menu_state.selection_idx {
+                        0 => {}
+                        1 => {
+                            cfg.agent.max_iterations = match cfg.agent.max_iterations {
+                                15 => 30,
+                                30 => 50,
+                                50 => 100,
+                                100 => 200,
+                                200 => 500,
+                                500 => 1000,
+                                _ => 15,
+                            };
+                        }
+                        2 => {
+                            cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools;
+                        }
+                        4 => {
+                            cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
+                            app.ui.show_reasoning = cfg.ui.show_reasoning;
+                        }
+                        _ => {}
+                    }
+                    cfg.save().ok();
+                }
+            }
+            _ => {}
+        },
         KeyCode::Char('d') | KeyCode::Delete => {
             if app.menu_state.active_tab == crate::app::MenuTab::Sessions {
                 app.delete_session_at(app.menu_state.selection_idx).await;

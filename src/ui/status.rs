@@ -27,15 +27,17 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
     let separator = Span::styled(" • ", Style::default().fg(Color::Rgb(80, 80, 80)));
 
     let provider = Span::styled(
-        format!("{}", info.provider),
+        info.provider.to_string(),
         Style::default()
             .fg(Color::Rgb(100, 149, 237)) // CornflowerBlue
             .add_modifier(Modifier::BOLD),
     );
 
     let model = Span::styled(
-        format!("{}", info.model),
-        Style::default().fg(Color::Rgb(0, 255, 255)).add_modifier(Modifier::BOLD),
+        info.model.to_string(),
+        Style::default()
+            .fg(Color::Rgb(0, 255, 255))
+            .add_modifier(Modifier::BOLD),
     );
 
     let tokens = Span::styled(
@@ -50,7 +52,9 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
 
     let session = Span::styled(
         format!("ID: {}", info.session_id),
-        Style::default().fg(Color::Rgb(180, 180, 180)).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::Rgb(180, 180, 180))
+            .add_modifier(Modifier::BOLD),
     );
 
     let thinking = if info.is_thinking {
@@ -81,8 +85,8 @@ pub fn render_status(frame: &mut Frame, area: Rect, info: &StatusInfo) {
         thinking,
     ]);
 
-    let paragraph = Paragraph::new(line)
-        .style(Style::default().bg(Color::Rgb(20, 20, 20)).fg(Color::White));
+    let paragraph =
+        Paragraph::new(line).style(Style::default().bg(Color::Rgb(20, 20, 20)).fg(Color::White));
 
     frame.render_widget(paragraph, area);
 }

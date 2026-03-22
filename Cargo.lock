@@ -1033,6 +1033,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyring"
+version = "3.6.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eebcc3aff044e5944a8fbaf69eb277d11986064cba30c468730e8b9909fb551c"
+dependencies = [
+ "log",
+ "zeroize",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1853,7 +1863,7 @@ dependencies = [
 
 [[package]]
 name = "seekr"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1863,9 +1873,11 @@ dependencies = [
  "crossterm",
  "dirs",
  "futures",
+ "keyring",
  "ratatui",
  "reqwest",
  "scraper",
+ "semver",
  "serde",
  "serde_json",
  "shellexpand",
@@ -1877,6 +1889,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

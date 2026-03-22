@@ -1,12 +1,12 @@
+use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{Style as SyntectStyle, Theme, ThemeSet};
 use syntect::parsing::SyntaxSet;
-use std::sync::OnceLock;
 
 /// Global syntax set (language definitions) loaded once.
 fn syntax_set() -> &'static SyntaxSet {
     static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
-    SYNTAX_SET.get_or_init(|| SyntaxSet::load_defaults_newlines())
+    SYNTAX_SET.get_or_init(SyntaxSet::load_defaults_newlines)
 }
 
 /// Global theme set loaded once, using a built-in dark theme.
@@ -36,15 +36,15 @@ pub fn highlight_line(line: &str, language: Option<&str>) -> Vec<(ratatui::style
     let lang = language.unwrap_or("txt");
     let syntax_set = syntax_set();
     let theme = theme();
-    
+
     // Find syntax definition for language
     let syntax = syntax_set
         .find_syntax_by_token(lang)
         .or_else(|| syntax_set.find_syntax_by_extension(lang))
         .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-    
+
     let mut highlighter = HighlightLines::new(syntax, theme);
-    
+
     match highlighter.highlight_line(line, syntax_set) {
         Ok(ranges) => ranges
             .into_iter()

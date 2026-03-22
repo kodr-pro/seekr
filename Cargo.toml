@@ -1,6 +1,6 @@
 [package]
 name = "seekr"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "AI Agent Manager - Terminal UI powered by DeepSeek"
 license = "Polyform-Prosperity-1.0.0"
@@ -63,6 +63,9 @@ colored = "3"
 shellexpand = "3"
 arboard = "3.4.1"
 syntect = "5.3.0"
+keyring = "3.6.3"
+url = "2.5.8"
+semver = "1.0.27"
 
 [dev-dependencies]
 tempfile = "3"

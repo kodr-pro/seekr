@@ -71,11 +71,11 @@ The fastest way to get started is to download the pre-compiled binary from our [
 
 ```bash
 # Download the binary
-curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.2.0/seekr-v0.2.0-linux-x86_64
+curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.2.1/seekr-v0.2.1-linux-x86_64
 
 # Make it executable and move to path
-chmod +x seekr-v0.2.0-linux-x86_64
-sudo mv seekr-v0.2.0-linux-x86_64 /usr/local/bin/seekr
+chmod +x seekr-v0.2.1-linux-x86_64
+sudo mv seekr-v0.2.1-linux-x86_64 /usr/local/bin/seekr
 ```
 
 #### Build from Source
