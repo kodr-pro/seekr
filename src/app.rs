@@ -1,4 +1,5 @@
 use crate::agent::{AgentCommand, AgentEvent};
+use crate::agent::loop_mod::AgentLoop;
 use crate::api::client::ApiClient;
 use crate::app_state::{AgentState, SessionState, UiState};
 use crate::config::AppConfig;
@@ -279,7 +280,7 @@ impl App {
                     return;
                 }
             };
-            crate::agent::loop_mod::AgentLoop::resume(
+            AgentLoop::resume(
                 config.clone(),
                 sid,
                 evt_tx,
@@ -296,7 +297,7 @@ impl App {
                     return;
                 }
             };
-            Ok(crate::agent::loop_mod::AgentLoop::new(
+            Ok(AgentLoop::new(
                 config.clone(),
                 evt_tx,
                 cmd_rx,
@@ -587,7 +588,7 @@ impl App {
 
     fn update_streaming_entry(&mut self) {
         let last_idx = self.chat_entries.len().saturating_sub(1);
-        if let Some(ChatEntry::AssistantStreaming(ref mut content)) = self.chat_entries.last_mut() {
+        if let Some(ChatEntry::AssistantStreaming(content)) = self.chat_entries.last_mut() {
             *content = self.agent.streaming_content.clone();
             self.update_vlines_for_entry(last_idx, self.ui.last_chat_width);
             return;
@@ -762,17 +763,17 @@ impl App {
                         let current = env!("CARGO_PKG_VERSION");
                         let version = tag.trim_start_matches('v');
 
-                        if let (Ok(current_v), Ok(latest_v)) = (
+                        match (
                             semver::Version::parse(current),
                             semver::Version::parse(version),
-                        ) {
+                        ) { (Ok(current_v), Ok(latest_v)) => {
                             if latest_v > current_v {
                                 let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
                             }
-                        } else if version != current {
+                        } _ => if version != current {
                             // Fallback to basic string comparison if semver fails
                             let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
-                        }
+                        }}
                     }
                 }
             }

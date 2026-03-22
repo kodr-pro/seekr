@@ -276,9 +276,7 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, p)| {
             let is_active = i == active_idx;
             let prefix = if is_active { "✔ " } else { "  " };
-            let storage = if p.key_is_plaintext {
-                "[Plaintext]"
-            } else if !p.key.is_empty() {
+            let storage = if !p.key.is_empty() {
                 "[Secure]"
             } else {
                 "[Empty]"
@@ -325,8 +323,6 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(" URL  "),
             Span::styled(" [m]", Style::default().fg(Color::Yellow)),
             Span::raw(" Model  "),
-            Span::styled(" [p]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Toggle Storage "),
         ]),
     ];
     let help_para = Paragraph::new(help_text).block(

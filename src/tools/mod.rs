@@ -285,9 +285,9 @@ pub async fn execute_tool(
 ) -> (String, ActivityEntry) {
     let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
 
-    let tool = if let Some(t) = registry.get_tool(name) {
+    let tool = match registry.get_tool(name) { Some(t) => {
         t
-    } else {
+    } _ => {
         task_manager.log_activity(
             name,
             &format!("Error: Unknown tool {}", name),
@@ -306,7 +306,7 @@ pub async fn execute_tool(
                 total_threads,
             },
         );
-    };
+    }};
 
     match tool
         .execute(&args, task_manager, thread_id, total_threads)

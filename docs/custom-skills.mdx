@@ -1,0 +1,73 @@
+# Custom Skills Guide
+
+Seekr allows you to extend its capabilities by adding your own tools (skills). A skill is simply a directory containing a metadata file and executable scripts.
+
+## Directory Structure
+
+Seekr searches for skills in these locations:
+1. **Global:** `~/.config/seekr/skills/`
+2. **Local:** `./.seekr/skills/` (project-specific)
+
+A skill directory should look like this:
+```
+my_new_skill/
+├── skill.json    # Metadata and tool definition
+└── script.py     # (Optional) The logic for your skill
+```
+
+## `skill.json` Schema
+
+The `skill.json` file defines how the AI interacts with your tool.
+
+```json
+{
+  "name": "my_tool_name",
+  "description": "What this tool does (be descriptive for the AI)",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "input_arg": {
+        "type": "string",
+        "description": "Description of the argument"
+      }
+    },
+    "required": ["input_arg"]
+  },
+  "command": "python3 {{SKILL_DIR}}/script.py --input {{input_arg}}"
+}
+```
+
+### Variables
+- `{{SKILL_DIR}}`: Absolute path to the directory containing the `skill.json`. Use this to reference your scripts reliably.
+- `{{arg_name}}`: Injects the value of the parameter provided by the AI.
+
+## Script Examples
+
+### Python Example (`script.py`)
+```python
+import sys
+import json
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--input", required=True)
+args = parser.parse_args()
+
+# Perform logic
+result = f"Hello, I processed: {args.input}"
+
+# Print to stdout for the AI to read
+print(result)
+```
+
+### Bash Example
+```bash
+#!/bin/bash
+echo "Current directory: $(pwd)"
+echo "Input provided: $1"
+```
+
+## Tips for Great Skills
+- **Concise Output:** AI models perform better with clear, concise tool results.
+- **Error Handling:** If your script fails (non-zero exit code), Seekr will report the stderr to the AI so it can self-correct.
+- **Sandboxing:** Seekr runs these commands with the same permissions as your user. Be careful with tools that modify files.

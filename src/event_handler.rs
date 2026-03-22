@@ -169,7 +169,6 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     base_url: base_url.clone(),
                                     model: model_id.to_string(),
                                     timeout: None,
-                                    key_is_plaintext: false,
                                 }],
                                 active_provider: 0,
                                 agent: crate::config::AgentConfig {
@@ -184,16 +183,16 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                 },
                             };
 
-                            if let Err(e) = config.save() {
+                            match config.save() { Err(e) => {
                                 app.setup_state.error_message =
                                     Some(format!("Failed to save config: {e}"));
-                            } else {
+                            } _ => {
                                 app.manager = Some(std::sync::Arc::new(
                                     crate::manager::SeekrManager::new(config.clone()),
                                 ));
                                 app.config = Some(config);
                                 app.setup_state.current_step = 7;
-                            }
+                            }}
                         }
                         Ok(false) => {
                             app.setup_state.error_message = Some("Invalid API key.".to_string());
@@ -601,17 +600,6 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                         app.cursor_pos = app.input.len();
                         app.input_mode =
                             crate::app::InputMode::EditingProviderModel { provider_idx: idx };
-                    }
-                }
-            }
-        }
-        KeyCode::Char('p') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_mut() {
-                    let idx = app.menu_state.selection_idx;
-                    if let Some(p) = cfg.providers.get_mut(idx) {
-                        p.key_is_plaintext = !p.key_is_plaintext;
-                        cfg.save().ok();
                     }
                 }
             }

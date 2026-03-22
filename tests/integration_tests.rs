@@ -321,3 +321,24 @@ async fn test_keyring_debug() {
     println!("'{}' normalized is '{}'", p_name, normalized);
     println!("---------------------");
 }
+#[tokio::test]
+async fn test_invalid_api_key_handling() {
+    use seekr::api::client::ApiClient;
+    let result = ApiClient::validate_key("invalid_key", "https://api.openai.com/v1", "gpt-4o").await;
+    assert!(result.is_err() || !result.unwrap());
+}
+
+#[tokio::test]
+async fn test_empty_provider_list_behavior() {
+    use seekr::config::AppConfig;
+    let mut config = AppConfig::default();
+    config.providers.clear();
+    
+    // Test current_provider fallback
+    // Note: AppConfig::current_provider() currently expects at least one provider
+    // or it returns the default. Let's see how it behaves.
+    
+    let provider = config.current_provider_mut();
+    assert_eq!(provider.name, "Seekr AI"); // Should have pushed a default
+    assert_eq!(config.providers.len(), 1);
+}
