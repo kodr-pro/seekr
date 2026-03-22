@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
+use crate::errors::ConfigError;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -110,8 +111,8 @@ impl AppConfig {
         &mut self.providers[self.active_provider]
     }
 
-    pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+    pub fn config_path() -> Result<PathBuf, ConfigError> {
+        let config_dir = dirs::config_dir().ok_or_else(|| ConfigError::Path("Could not determine config directory".to_string()))?;
         Ok(config_dir.join("seekr").join("config.toml"))
     } // config_path
 
@@ -120,9 +121,9 @@ impl AppConfig {
     } // exists
 
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
+        let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
         let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            .map_err(|e| ConfigError::Io(e))?;
 
         let mut config: AppConfig = if let Ok(config) = toml::from_str(&contents) {
             config
@@ -159,7 +160,7 @@ impl AppConfig {
                 let _ = config.save();
                 config
             } else {
-                anyhow::bail!("Failed to parse config.toml - format may be corrupted");
+                return Err(ConfigError::MigrationFailed("Failed to parse config.toml - format may be corrupted".to_string()).into());
             }
         };
 
@@ -207,11 +208,9 @@ impl AppConfig {
     } // load
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path()?;
+        let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create config directory: {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io(e))?;
         }
 
         let mut keyring_errors = Vec::new();
@@ -245,16 +244,13 @@ impl AppConfig {
         }
 
         if !keyring_errors.is_empty() {
-            anyhow::bail!(
-                "Keyring issues, could not securely save keys: {}",
-                keyring_errors.join(", ")
-            );
+            return Err(ConfigError::Keyring(keyring_errors.join(", ")).into());
         }
 
         let contents =
-            toml::to_string_pretty(&saveable_config).context("Failed to serialize config")?;
+            toml::to_string_pretty(&saveable_config).map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
         std::fs::write(&path, contents)
-            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+            .map_err(|e| ConfigError::Io(e))?;
         Ok(())
     } // save
 

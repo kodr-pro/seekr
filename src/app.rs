@@ -3,6 +3,7 @@ use crate::agent::loop_mod::AgentLoop;
 use crate::api::client::ApiClient;
 use crate::app_state::{AgentState, SessionState, UiState};
 use crate::config::AppConfig;
+use crate::errors::ApiError;
 use crate::event_handler::handle_event;
 use crate::tools::task::Task;
 use crate::ui::render::render;
@@ -146,7 +147,7 @@ pub enum MenuTab {
 
 #[derive(Debug)]
 pub enum BgEvent {
-    ModelsFetched(Result<Vec<String>, String>),
+    ModelsFetched(Result<Vec<String>, ApiError>),
     UpdateAvailable(String),
 }
 
@@ -497,7 +498,7 @@ impl App {
                 AgentEvent::Error(msg) => {
                     self.finalize_streaming();
                     self.agent.is_streaming = false;
-                    self.chat_entries.push(ChatEntry::Error(msg));
+                    self.chat_entries.push(ChatEntry::Error(msg.to_string()));
                 }
                 AgentEvent::ToolApprovalRequest {
                     name, arguments, ..
@@ -739,7 +740,7 @@ impl App {
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
             let client = ApiClient::new(&config);
-            let res = client.list_models().await.map_err(|e| e.to_string());
+            let res = client.list_models().await;
             let _ = tx.send(BgEvent::ModelsFetched(res));
         });
     } // fetch_available_models

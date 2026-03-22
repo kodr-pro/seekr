@@ -7,11 +7,12 @@ use crate::session::Session;
 use crate::tools;
 use crate::tools::task::TaskManager;
 use crate::tools::SkillRegistry;
+use crate::errors::AppError;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum AgentEvent {
     ContentDelta(String),
     ReasoningDelta(String),
@@ -32,7 +33,7 @@ pub enum AgentEvent {
     IterationUpdate(u32),
     TurnComplete,
     MaxIterationsReached,
-    Error(String),
+    Error(AppError),
     ToolApprovalRequest {
         call_index: usize,
         name: String,
@@ -236,9 +237,7 @@ impl AgentLoop {
                 Some(reg) => reg,
                 None => {
                     self.event_tx
-                        .send(AgentEvent::Error(
-                            "Tool registry not initialized".to_string(),
-                        ))
+                        .send(AgentEvent::Error(AppError::Internal("Tool registry not initialized".to_string())))
                         .ok();
                     break;
                 }
@@ -257,7 +256,7 @@ impl AgentLoop {
                 Ok(rx) => rx,
                 Err(e) => {
                     self.event_tx
-                        .send(AgentEvent::Error(format!("API error: {e}")))
+                        .send(AgentEvent::Error(e.into()))
                         .ok();
                     break;
                 }
@@ -287,7 +286,7 @@ impl AgentLoop {
                             }
                             StreamEvent::Done => break,
                             StreamEvent::Error(e) => {
-                                self.event_tx.send(AgentEvent::Error(format!("Stream error: {e}"))).ok();
+                                self.event_tx.send(AgentEvent::Error(AppError::Stream(e))).ok();
                                 break;
                             }
                         }
@@ -384,7 +383,7 @@ impl AgentLoop {
                         None => {
                             // This should not happen since we checked earlier, but handle gracefully
                             self.event_tx
-                                .send(AgentEvent::Error("Tool registry not available".to_string()))
+                                .send(AgentEvent::Error(AppError::Internal("Tool registry not available".to_string())))
                                 .ok();
                             continue;
                         }
@@ -485,7 +484,7 @@ impl AgentLoop {
             Ok(rx) => rx,
             Err(e) => {
                 self.event_tx
-                    .send(AgentEvent::Error(format!("API error: {e}")))
+                    .send(AgentEvent::Error(e.into()))
                     .ok();
                 self.event_tx.send(AgentEvent::TurnComplete).ok();
                 return;
@@ -515,7 +514,7 @@ impl AgentLoop {
                 crate::api::stream::StreamEvent::Done => break,
                 crate::api::stream::StreamEvent::Error(e) => {
                     self.event_tx
-                        .send(AgentEvent::Error(format!("Stream error: {e}")))
+                        .send(AgentEvent::Error(AppError::Stream(e)))
                         .ok();
                     break;
                 }

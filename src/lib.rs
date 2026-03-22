@@ -4,6 +4,7 @@ pub mod app;
 pub mod app_state;
 pub mod config;
 pub mod doctor;
+pub mod errors;
 pub mod event_handler;
 pub mod manager;
 pub mod session;

@@ -1,5 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{short_path, task::TaskManager, Tool};
+use crate::errors::ToolError;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use serde_json::json;
@@ -33,10 +34,10 @@ fn resolve_and_verify_path(requested: &str, task_manager: &TaskManager) -> Resul
         && working_dir.to_string_lossy() != "."
         && working_dir.to_string_lossy() != "./"
     {
-        return Err(anyhow!(
-            "Security Error: Access denied. Path '{}' is outside the permitted working directory.",
+        return Err(ToolError::SecurityError(format!(
+            "Access denied. Path '{}' is outside the permitted working directory.",
             requested
-        ));
+        )).into());
     }
 
     Ok(cleaned_requested)
@@ -90,10 +91,10 @@ pub async fn edit_file(path: &PathBuf, old_string: &str, new_string: &str) -> Re
         .with_context(|| format!("Failed to read file for editing: {}", path.display()))?;
 
     if !contents.contains(old_string) {
-        anyhow::bail!(
+        return Err(ToolError::EditFailed(format!(
             "The string to replace was not found in {}. Make sure the old_string matches exactly.",
             path.display()
-        );
+        )).into());
     }
 
     let new_contents = contents.replacen(old_string, new_string, 1);

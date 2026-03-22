@@ -1,5 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::tools::{task::TaskManager, truncate, Tool};
+use crate::errors::ToolError;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -38,10 +39,10 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
         };
 
         if is_private {
-            return Err(anyhow!(
-                "Security Error: Access to private IP {} is blocked (SSRF protection)",
+            return Err(ToolError::SecurityError(format!(
+                "Access to private IP {} is blocked (SSRF protection)",
                 ip
-            ));
+            )).into());
         }
     }
 
@@ -61,7 +62,7 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
         .with_context(|| format!("Failed to fetch URL: {}", url))?;
 
     if !response.status().is_success() {
-        anyhow::bail!("HTTP {} fetching {}", response.status(), url);
+        return Err(ToolError::WebError(format!("HTTP {} fetching {}", response.status(), url)).into());
     }
 
     let body = response
@@ -85,7 +86,7 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
                 }
             }
             Err(_) => {
-                anyhow::bail!("Invalid CSS selector: {}", sel_str);
+                return Err(ToolError::InvalidSelector(sel_str.to_string()).into());
             }
         }
     } else {
