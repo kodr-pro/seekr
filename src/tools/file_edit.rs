@@ -69,12 +69,12 @@ pub async fn read_file(path: &PathBuf) -> Result<String> {
 } // read_file
 
 pub async fn write_file(path: &PathBuf, content: &str) -> Result<String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
     tokio::fs::write(path, content)
         .await

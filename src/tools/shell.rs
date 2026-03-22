@@ -170,10 +170,10 @@ pub async fn shell_command(
                                 line.clear();
                             }
                         }
-                        if !line.is_empty() {
-                            if let Some(prompt) = detect_prompt(&line) {
-                                tx_out.send(prompt).ok();
-                            }
+                        if !line.is_empty()
+                            && let Some(prompt) = detect_prompt(&line)
+                        {
+                            tx_out.send(prompt).ok();
                         }
                         buffer.drain(..valid_up_to);
                     }
@@ -225,10 +225,10 @@ pub async fn shell_command(
                                 line.clear();
                             }
                         }
-                        if !line.is_empty() {
-                            if let Some(prompt) = detect_prompt(&line) {
-                                tx_err.send(prompt).ok();
-                            }
+                        if !line.is_empty()
+                            && let Some(prompt) = detect_prompt(&line)
+                        {
+                            tx_err.send(prompt).ok();
                         }
                         buffer.drain(..valid_up_to);
                     }

@@ -201,7 +201,7 @@ impl ApiClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Failed to read error body".to_string());
-            return Err(ApiError::HttpStatus(status, body).into());
+            return Err(ApiError::HttpStatus(status, body));
         }
 
         let result: serde_json::Value = response.json().await?;
@@ -209,19 +209,23 @@ impl ApiClient {
         if is_anthropic {
             if let Some(content_array) = result["content"].as_array() {
                 for content_block in content_array {
-                    if content_block["type"] == "text" {
-                        if let Some(text) = content_block["text"].as_str() {
-                            return Ok(text.to_string());
-                        }
+                    if content_block["type"] == "text"
+                        && let Some(text) = content_block["text"].as_str()
+                    {
+                        return Ok(text.to_string());
                     }
                 }
             }
-            return Err(ApiError::MissingContent("Anthropic response content".to_string()).into());
+            Err(ApiError::MissingContent(
+                "Anthropic response content".to_string(),
+            ))
         } else {
             if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
                 Ok(content.to_string())
             } else {
-                return Err(ApiError::MissingContent("OpenAI message content".to_string()).into());
+                Err(ApiError::MissingContent(
+                    "OpenAI message content".to_string(),
+                ))
             }
         }
     } // chat_completion
@@ -250,8 +254,7 @@ impl ApiClient {
                 return Err(ApiError::HttpStatus(
                     response.status(),
                     "Failed to list models".to_string(),
-                )
-                .into());
+                ));
             }
 
             let list: ModelList = response.json().await?;

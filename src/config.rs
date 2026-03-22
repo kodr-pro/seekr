@@ -123,7 +123,7 @@ impl AppConfig {
 
     pub fn load() -> Result<Self> {
         let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
-        let contents = std::fs::read_to_string(&path).map_err(|e| ConfigError::Io(e))?;
+        let contents = std::fs::read_to_string(&path).map_err(ConfigError::Io)?;
 
         let mut config: AppConfig = if let Ok(config) = toml::from_str(&contents) {
             config
@@ -213,7 +213,7 @@ impl AppConfig {
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ConfigError::Io(e))?;
+            std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
         }
 
         let mut keyring_errors = Vec::new();
@@ -252,7 +252,7 @@ impl AppConfig {
 
         let contents = toml::to_string_pretty(&saveable_config)
             .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
-        std::fs::write(&path, contents).map_err(|e| ConfigError::Io(e))?;
+        std::fs::write(&path, contents).map_err(ConfigError::Io)?;
         Ok(())
     } // save
 

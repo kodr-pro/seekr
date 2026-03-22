@@ -149,16 +149,16 @@ fn process_chunk(
     for choice in &chunk.choices {
         let delta = &choice.delta;
 
-        if let Some(ref content) = delta.content {
-            if !content.is_empty() {
-                let _ = event_tx.send(StreamEvent::ContentDelta(content.clone()));
-            }
+        if let Some(ref content) = delta.content
+            && !content.is_empty()
+        {
+            let _ = event_tx.send(StreamEvent::ContentDelta(content.clone()));
         }
 
-        if let Some(ref reasoning) = delta.reasoning_content {
-            if !reasoning.is_empty() {
-                let _ = event_tx.send(StreamEvent::ReasoningDelta(reasoning.clone()));
-            }
+        if let Some(ref reasoning) = delta.reasoning_content
+            && !reasoning.is_empty()
+        {
+            let _ = event_tx.send(StreamEvent::ReasoningDelta(reasoning.clone()));
         }
 
         if let Some(ref tool_calls) = delta.tool_calls {
@@ -230,18 +230,17 @@ pub async fn parse_anthropic_sse_stream(
                             if let Some(cb_type) = value
                                 .pointer("/content_block/type")
                                 .and_then(|v| v.as_str())
+                                && cb_type == "tool_use"
                             {
-                                if cb_type == "tool_use" {
-                                    current_tool_id = value
-                                        .pointer("/content_block/id")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    current_tool_name = value
-                                        .pointer("/content_block/name")
-                                        .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    current_tool_args.clear();
-                                }
+                                current_tool_id = value
+                                    .pointer("/content_block/id")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                current_tool_name = value
+                                    .pointer("/content_block/name")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+                                current_tool_args.clear();
                             }
                         }
                         "content_block_delta" => {
@@ -255,13 +254,12 @@ pub async fn parse_anthropic_sse_stream(
                                         let _ = event_tx
                                             .send(StreamEvent::ContentDelta(text.to_string()));
                                     }
-                                } else if delta_type == "input_json_delta" {
-                                    if let Some(text) = value
+                                } else if delta_type == "input_json_delta"
+                                    && let Some(text) = value
                                         .pointer("/delta/partial_json")
                                         .and_then(|v| v.as_str())
-                                    {
-                                        current_tool_args.push_str(text);
-                                    }
+                                {
+                                    current_tool_args.push_str(text);
                                 }
                             }
                         }

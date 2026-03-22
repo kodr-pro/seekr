@@ -87,57 +87,46 @@ impl SkillRegistry {
                 let skill_path = entry.path();
                 if skill_path.is_dir() {
                     let config_path = skill_path.join("skill.json");
-                    if config_path.exists() {
-                        if let Ok(content) = std::fs::read_to_string(&config_path) {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                                let metadata = Metadata {
-                                    name: json["name"].as_str().unwrap_or("unknown").to_string(),
-                                    description: json["description"]
-                                        .as_str()
-                                        .unwrap_or("")
-                                        .to_string(),
-                                    version: json["version"]
-                                        .as_str()
-                                        .unwrap_or("1.0.0")
-                                        .to_string(),
-                                };
+                    if config_path.exists()
+                        && let Ok(content) = std::fs::read_to_string(&config_path)
+                        && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
+                    {
+                        let metadata = Metadata {
+                            name: json["name"].as_str().unwrap_or("unknown").to_string(),
+                            description: json["description"].as_str().unwrap_or("").to_string(),
+                            version: json["version"].as_str().unwrap_or("1.0.0").to_string(),
+                        };
 
-                                let mut tools = Vec::new();
-                                if let Some(tools_arr) = json["tools"].as_array() {
-                                    for t in tools_arr {
-                                        let name = t["name"].as_str().unwrap_or("").to_string();
-                                        if name.is_empty() {
-                                            continue;
-                                        }
-
-                                        let tool_def = ToolDefinition {
-                                            tool_type: "function".to_string(),
-                                            function: crate::api::types::FunctionDefinition {
-                                                name: name.clone(),
-                                                description: t["description"]
-                                                    .as_str()
-                                                    .unwrap_or("")
-                                                    .to_string(),
-                                                parameters: t["parameters"].clone(),
-                                            },
-                                        };
-
-                                        tools.push(Arc::new(ScriptTool {
-                                            name,
-                                            definition: tool_def,
-                                            command: t["command"]
-                                                .as_str()
-                                                .unwrap_or("")
-                                                .to_string(),
-                                            working_dir: skill_path.to_string_lossy().to_string(),
-                                        })
-                                            as Arc<dyn Tool>);
-                                    }
+                        let mut tools = Vec::new();
+                        if let Some(tools_arr) = json["tools"].as_array() {
+                            for t in tools_arr {
+                                let name = t["name"].as_str().unwrap_or("").to_string();
+                                if name.is_empty() {
+                                    continue;
                                 }
 
-                                self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
+                                let tool_def = ToolDefinition {
+                                    tool_type: "function".to_string(),
+                                    function: crate::api::types::FunctionDefinition {
+                                        name: name.clone(),
+                                        description: t["description"]
+                                            .as_str()
+                                            .unwrap_or("")
+                                            .to_string(),
+                                        parameters: t["parameters"].clone(),
+                                    },
+                                };
+
+                                tools.push(Arc::new(ScriptTool {
+                                    name,
+                                    definition: tool_def,
+                                    command: t["command"].as_str().unwrap_or("").to_string(),
+                                    working_dir: skill_path.to_string_lossy().to_string(),
+                                }) as Arc<dyn Tool>);
                             }
                         }
+
+                        self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
                     }
                 }
             }

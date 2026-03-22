@@ -758,27 +758,26 @@ impl App {
                 .send()
                 .await;
 
-            if let Ok(response) = res {
-                if let Ok(json) = response.json::<serde_json::Value>().await {
-                    if let Some(tag) = json["tag_name"].as_str() {
-                        let current = env!("CARGO_PKG_VERSION");
-                        let version = tag.trim_start_matches('v');
+            if let Ok(response) = res
+                && let Ok(json) = response.json::<serde_json::Value>().await
+                && let Some(tag) = json["tag_name"].as_str()
+            {
+                let current = env!("CARGO_PKG_VERSION");
+                let version = tag.trim_start_matches('v');
 
-                        match (
-                            semver::Version::parse(current),
-                            semver::Version::parse(version),
-                        ) {
-                            (Ok(current_v), Ok(latest_v)) => {
-                                if latest_v > current_v {
-                                    let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
-                                }
-                            }
-                            _ => {
-                                if version != current {
-                                    // Fallback to basic string comparison if semver fails
-                                    let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
-                                }
-                            }
+                match (
+                    semver::Version::parse(current),
+                    semver::Version::parse(version),
+                ) {
+                    (Ok(current_v), Ok(latest_v)) => {
+                        if latest_v > current_v {
+                            let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
+                        }
+                    }
+                    _ => {
+                        if version != current {
+                            // Fallback to basic string comparison if semver fails
+                            let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
                         }
                     }
                 }
@@ -1072,10 +1071,10 @@ async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()>
                 }
             }
             maybe_ev = reader.next() => {
-                if let Some(Ok(ev)) = maybe_ev {
-                    if handle_event(app, &ev).await? {
-                        return Ok(());
-                    }
+                if let Some(Ok(ev)) = maybe_ev
+                    && handle_event(app, &ev).await?
+                {
+                    return Ok(());
                 }
                 // Also poll agent events on any user interaction for maximum responsiveness
                 app.poll_bg_events();

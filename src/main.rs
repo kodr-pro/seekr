@@ -30,10 +30,10 @@ async fn main() -> Result<()> {
         app::App::new_setup()
     };
 
-    if let Some(sid) = resume_id {
-        if app.mode == app::AppMode::Main {
-            app.resume_session(sid);
-        }
+    if let Some(sid) = resume_id
+        && app.mode == app::AppMode::Main
+    {
+        app.resume_session(sid);
     }
 
     app::run_app(app).await
