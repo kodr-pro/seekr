@@ -176,7 +176,7 @@ fn render_input_overlay(frame: &mut Frame, area: Rect, app: &App) {
     ];
 
     frame.render_widget(Paragraph::new(text), inner);
-    
+
     // Set cursor
     frame.set_cursor_position((
         inner.x + prompt.len() as u16 + app.cursor_pos as u16,
@@ -283,7 +283,10 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
             } else {
                 "[Empty]"
             };
-            let content = format!("{}{} ({}) - {} {}", prefix, p.name, p.model, p.base_url, storage);
+            let content = format!(
+                "{}{} ({}) - {} {}",
+                prefix, p.name, p.model, p.base_url, storage
+            );
             ListItem::new(content)
         })
         .collect();
@@ -298,7 +301,7 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
         .highlight_symbol(">> ");
 
     let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(2)])
@@ -326,7 +329,11 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
             Span::raw(" Toggle Storage "),
         ]),
     ];
-    let help_para = Paragraph::new(help_text).block(Block::default().borders(Borders::TOP).border_style(Style::default().fg(Color::DarkGray)));
+    let help_para = Paragraph::new(help_text).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
     frame.render_widget(help_para, chunks[1]);
 } // render_providers
 

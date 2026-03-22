@@ -188,14 +188,20 @@ impl AppConfig {
                             }
                             Err(e) => {
                                 // Only log error if it's not "No password found"
-                                if !format!("{:?}", e).contains("NoEntry") && !format!("{:?}", e).contains("NotFound") {
+                                if !format!("{:?}", e).contains("NoEntry")
+                                    && !format!("{:?}", e).contains("NotFound")
+                                {
                                     tracing::warn!("Keyring error for {}: {}", entry_name, e);
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        tracing::error!("Failed to initialize keyring entry for {}: {}", entry_name, e);
+                        tracing::error!(
+                            "Failed to initialize keyring entry for {}: {}",
+                            entry_name,
+                            e
+                        );
                     }
                 }
             }
@@ -221,19 +227,17 @@ impl AppConfig {
 
             if !provider.key_is_plaintext && !provider.key.is_empty() {
                 match keyring::Entry::new("seekr", &entry_name) {
-                    Ok(entry) => {
-                        match entry.set_password(&provider.key) {
-                            Ok(_) => {
-                                saveable_config.providers[i].key = String::new();
-                                saveable_config.providers[i].key_is_plaintext = false;
-                            }
-                            Err(e) => {
-                                keyring_errors.push(format!("{}: {}", entry_name, e));
-                                saveable_config.providers[i].key = provider.key.clone();
-                                saveable_config.providers[i].key_is_plaintext = true;
-                            }
+                    Ok(entry) => match entry.set_password(&provider.key) {
+                        Ok(_) => {
+                            saveable_config.providers[i].key = String::new();
+                            saveable_config.providers[i].key_is_plaintext = false;
                         }
-                    }
+                        Err(e) => {
+                            keyring_errors.push(format!("{}: {}", entry_name, e));
+                            saveable_config.providers[i].key = provider.key.clone();
+                            saveable_config.providers[i].key_is_plaintext = true;
+                        }
+                    },
                     Err(e) => {
                         keyring_errors.push(format!("{}: {}", entry_name, e));
                         saveable_config.providers[i].key = provider.key.clone();
@@ -251,7 +255,10 @@ impl AppConfig {
         }
 
         if !keyring_errors.is_empty() {
-            tracing::error!("Keyring issues, some keys saved in plaintext: {}", keyring_errors.join(", "));
+            tracing::error!(
+                "Keyring issues, some keys saved in plaintext: {}",
+                keyring_errors.join(", ")
+            );
         }
 
         let contents =

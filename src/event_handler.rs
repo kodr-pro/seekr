@@ -560,9 +560,8 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                     if let Some(p) = cfg.providers.get(idx) {
                         app.input = p.key.clone();
                         app.cursor_pos = app.input.len();
-                        app.input_mode = crate::app::InputMode::EditingProviderKey {
-                            provider_idx: idx,
-                        };
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderKey { provider_idx: idx };
                     }
                 }
             }
@@ -574,9 +573,8 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                     if let Some(p) = cfg.providers.get(idx) {
                         app.input = p.name.clone();
                         app.cursor_pos = app.input.len();
-                        app.input_mode = crate::app::InputMode::EditingProviderName {
-                            provider_idx: idx,
-                        };
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderName { provider_idx: idx };
                     }
                 }
             }
@@ -588,9 +586,8 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                     if let Some(p) = cfg.providers.get(idx) {
                         app.input = p.base_url.clone();
                         app.cursor_pos = app.input.len();
-                        app.input_mode = crate::app::InputMode::EditingProviderUrl {
-                            provider_idx: idx,
-                        };
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderUrl { provider_idx: idx };
                     }
                 }
             }
@@ -602,9 +599,8 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                     if let Some(p) = cfg.providers.get(idx) {
                         app.input = p.model.clone();
                         app.cursor_pos = app.input.len();
-                        app.input_mode = crate::app::InputMode::EditingProviderModel {
-                            provider_idx: idx,
-                        };
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderModel { provider_idx: idx };
                     }
                 }
             }

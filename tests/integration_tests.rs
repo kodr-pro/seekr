@@ -296,7 +296,14 @@ async fn test_streaming_content_preservation() {
 #[tokio::test]
 async fn test_keyring_debug() {
     use keyring::Entry;
-    let providers = vec!["deepseek", "DeepSeek", "openai", "OpenAI", "anthropic", "Anthropic"];
+    let providers = vec![
+        "deepseek",
+        "DeepSeek",
+        "openai",
+        "OpenAI",
+        "anthropic",
+        "Anthropic",
+    ];
     println!("--- KEYRING DEBUG ---");
     for p in providers {
         let entry_name = format!("seekr_api_key_{}", p);
@@ -307,7 +314,7 @@ async fn test_keyring_debug() {
             }
         }
     }
-    
+
     // Test normalization match
     let p_name = "DeepSeek";
     let normalized = p_name.to_lowercase().replace(" ", "_");

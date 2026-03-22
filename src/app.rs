@@ -56,10 +56,22 @@ impl PartialEq for InputMode {
             (self, other),
             (InputMode::Normal, InputMode::Normal)
                 | (InputMode::ShellStdin { .. }, InputMode::ShellStdin { .. })
-                | (InputMode::EditingProviderKey { .. }, InputMode::EditingProviderKey { .. })
-                | (InputMode::EditingProviderName { .. }, InputMode::EditingProviderName { .. })
-                | (InputMode::EditingProviderUrl { .. }, InputMode::EditingProviderUrl { .. })
-                | (InputMode::EditingProviderModel { .. }, InputMode::EditingProviderModel { .. })
+                | (
+                    InputMode::EditingProviderKey { .. },
+                    InputMode::EditingProviderKey { .. }
+                )
+                | (
+                    InputMode::EditingProviderName { .. },
+                    InputMode::EditingProviderName { .. }
+                )
+                | (
+                    InputMode::EditingProviderUrl { .. },
+                    InputMode::EditingProviderUrl { .. }
+                )
+                | (
+                    InputMode::EditingProviderModel { .. },
+                    InputMode::EditingProviderModel { .. }
+                )
         )
     }
 } // eq
