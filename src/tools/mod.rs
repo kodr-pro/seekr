@@ -285,28 +285,29 @@ pub async fn execute_tool(
 ) -> (String, ActivityEntry) {
     let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
 
-    let tool = match registry.get_tool(name) { Some(t) => {
-        t
-    } _ => {
-        task_manager.log_activity(
-            name,
-            &format!("Error: Unknown tool {}", name),
-            ActivityStatus::Failure,
-            thread_id,
-            total_threads,
-        );
-        return (
-            format!("Error: Unknown tool '{}'", name),
-            ActivityEntry {
-                tool_name: name.to_string(),
-                summary: format!("Unknown tool: {}", name),
-                status: ActivityStatus::Failure,
-                timestamp: chrono::Utc::now(),
+    let tool = match registry.get_tool(name) {
+        Some(t) => t,
+        _ => {
+            task_manager.log_activity(
+                name,
+                &format!("Error: Unknown tool {}", name),
+                ActivityStatus::Failure,
                 thread_id,
                 total_threads,
-            },
-        );
-    }};
+            );
+            return (
+                format!("Error: Unknown tool '{}'", name),
+                ActivityEntry {
+                    tool_name: name.to_string(),
+                    summary: format!("Unknown tool: {}", name),
+                    status: ActivityStatus::Failure,
+                    timestamp: chrono::Utc::now(),
+                    thread_id,
+                    total_threads,
+                },
+            );
+        }
+    };
 
     match tool
         .execute(&args, task_manager, thread_id, total_threads)

@@ -1,11 +1,11 @@
 use crate::app::{LineType, VisualLine};
 use crate::ui::syntax;
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
-    Frame,
 };
 
 /// Get per‑character styles for a visual line, taking syntax highlighting into account.

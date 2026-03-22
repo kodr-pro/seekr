@@ -1,7 +1,7 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{task::TaskManager, truncate, Tool};
 use crate::errors::ToolError;
-use anyhow::{anyhow, Context, Result};
+use crate::tools::{Tool, task::TaskManager, truncate};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::Client;
 use scraper::{Html, Selector};
@@ -42,7 +42,8 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
             return Err(ToolError::SecurityError(format!(
                 "Access to private IP {} is blocked (SSRF protection)",
                 ip
-            )).into());
+            ))
+            .into());
         }
     }
 
@@ -62,7 +63,9 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
         .with_context(|| format!("Failed to fetch URL: {}", url))?;
 
     if !response.status().is_success() {
-        return Err(ToolError::WebError(format!("HTTP {} fetching {}", response.status(), url)).into());
+        return Err(
+            ToolError::WebError(format!("HTTP {} fetching {}", response.status(), url)).into(),
+        );
     }
 
     let body = response

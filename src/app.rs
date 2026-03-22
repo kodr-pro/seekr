@@ -1,5 +1,5 @@
-use crate::agent::{AgentCommand, AgentEvent};
 use crate::agent::loop_mod::AgentLoop;
+use crate::agent::{AgentCommand, AgentEvent};
 use crate::api::client::ApiClient;
 use crate::app_state::{AgentState, SessionState, UiState};
 use crate::config::AppConfig;
@@ -767,14 +767,19 @@ impl App {
                         match (
                             semver::Version::parse(current),
                             semver::Version::parse(version),
-                        ) { (Ok(current_v), Ok(latest_v)) => {
-                            if latest_v > current_v {
-                                let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
+                        ) {
+                            (Ok(current_v), Ok(latest_v)) => {
+                                if latest_v > current_v {
+                                    let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
+                                }
                             }
-                        } _ => if version != current {
-                            // Fallback to basic string comparison if semver fails
-                            let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
-                        }}
+                            _ => {
+                                if version != current {
+                                    // Fallback to basic string comparison if semver fails
+                                    let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
+                                }
+                            }
+                        }
                     }
                 }
             }

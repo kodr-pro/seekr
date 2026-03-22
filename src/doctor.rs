@@ -110,7 +110,7 @@ fn check_working_dir() -> CheckResult {
     let cfg = match AppConfig::load() {
         Ok(cfg) => cfg,
         Err(_) => {
-            return CheckResult::Error("Cannot check directory without valid config.".to_string())
+            return CheckResult::Error("Cannot check directory without valid config.".to_string());
         }
     };
 
@@ -149,18 +149,16 @@ fn check_working_dir() -> CheckResult {
 fn check_keyring() -> CheckResult {
     let test_entry = "seekr_doctor_test";
     match keyring::Entry::new("seekr", test_entry) {
-        Ok(entry) => {
-            match entry.set_password("test_password") {
-                Ok(_) => {
-                    let _ = entry.delete_credential();
-                    CheckResult::Ok("OS Keyring is accessible and working correctly.".to_string())
-                }
-                Err(e) => CheckResult::Error(format!(
-                    "Keyring found but cannot set password: {}. Your system might need a running secret service (e.g. gnome-keyring or kwallet).",
-                    e
-                )),
+        Ok(entry) => match entry.set_password("test_password") {
+            Ok(_) => {
+                let _ = entry.delete_credential();
+                CheckResult::Ok("OS Keyring is accessible and working correctly.".to_string())
             }
-        }
+            Err(e) => CheckResult::Error(format!(
+                "Keyring found but cannot set password: {}. Your system might need a running secret service (e.g. gnome-keyring or kwallet).",
+                e
+            )),
+        },
         Err(e) => CheckResult::Error(format!("Failed to initialize keyring: {}", e)),
     }
 } // check_keyring

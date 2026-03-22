@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{task::TaskManager, truncate, Tool};
-use anyhow::{anyhow, Context, Result};
+use crate::tools::{Tool, task::TaskManager, truncate};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 use std::process::Stdio;

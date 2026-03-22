@@ -1,7 +1,7 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::Tool;
 use crate::errors::ToolError;
-use anyhow::{anyhow, Result};
+use crate::tools::Tool;
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -228,7 +228,10 @@ impl TaskManager {
     } // create_task
 
     pub fn update_task(&self, task_id: usize, status: &str) -> Result<String, ToolError> {
-        let mut state = self.state.lock().map_err(|_| ToolError::ShellExecution("Lock poisoned".to_string()))?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| ToolError::ShellExecution("Lock poisoned".to_string()))?;
         if let Some(task) = state.tasks.iter_mut().find(|t| t.id == task_id) {
             task.status = TaskStatus::from_str_loose(status);
             let updated_task = task.clone();

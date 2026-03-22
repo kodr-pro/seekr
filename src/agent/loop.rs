@@ -3,11 +3,11 @@ use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
+use crate::errors::AppError;
 use crate::session::Session;
 use crate::tools;
-use crate::tools::task::TaskManager;
 use crate::tools::SkillRegistry;
-use crate::errors::AppError;
+use crate::tools::task::TaskManager;
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -237,7 +237,9 @@ impl AgentLoop {
                 Some(reg) => reg,
                 None => {
                     self.event_tx
-                        .send(AgentEvent::Error(AppError::Internal("Tool registry not initialized".to_string())))
+                        .send(AgentEvent::Error(AppError::Internal(
+                            "Tool registry not initialized".to_string(),
+                        )))
                         .ok();
                     break;
                 }
@@ -255,9 +257,7 @@ impl AgentLoop {
             let mut stream_rx = match stream_result {
                 Ok(rx) => rx,
                 Err(e) => {
-                    self.event_tx
-                        .send(AgentEvent::Error(e.into()))
-                        .ok();
+                    self.event_tx.send(AgentEvent::Error(e.into())).ok();
                     break;
                 }
             };
@@ -383,7 +383,9 @@ impl AgentLoop {
                         None => {
                             // This should not happen since we checked earlier, but handle gracefully
                             self.event_tx
-                                .send(AgentEvent::Error(AppError::Internal("Tool registry not available".to_string())))
+                                .send(AgentEvent::Error(AppError::Internal(
+                                    "Tool registry not available".to_string(),
+                                )))
                                 .ok();
                             continue;
                         }
@@ -483,9 +485,7 @@ impl AgentLoop {
         let mut stream_rx = match stream_result {
             Ok(rx) => rx,
             Err(e) => {
-                self.event_tx
-                    .send(AgentEvent::Error(e.into()))
-                    .ok();
+                self.event_tx.send(AgentEvent::Error(e.into())).ok();
                 self.event_tx.send(AgentEvent::TurnComplete).ok();
                 return;
             }

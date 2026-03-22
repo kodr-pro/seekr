@@ -48,7 +48,10 @@ impl ApiClient {
         }
     }
 
-    async fn send_request_with_retry<F>(&self, mut request_builder: F) -> Result<reqwest::Response, ApiError>
+    async fn send_request_with_retry<F>(
+        &self,
+        mut request_builder: F,
+    ) -> Result<reqwest::Response, ApiError>
     where
         F: FnMut() -> reqwest::RequestBuilder,
     {
@@ -153,7 +156,11 @@ impl ApiClient {
     } // chat_completion_stream
 
     /// Sends a non-streaming chat completion request and returns the full response content.
-    pub async fn chat_completion(&self, messages: Vec<ChatMessage>, model: &str) -> Result<String, ApiError> {
+    pub async fn chat_completion(
+        &self,
+        messages: Vec<ChatMessage>,
+        model: &str,
+    ) -> Result<String, ApiError> {
         let is_anthropic = self.provider.name() == "Anthropic";
 
         let request = ChatCompletionRequest {
@@ -197,9 +204,7 @@ impl ApiClient {
             return Err(ApiError::HttpStatus(status, body).into());
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await?;
+        let result: serde_json::Value = response.json().await?;
 
         if is_anthropic {
             if let Some(content_array) = result["content"].as_array() {
@@ -239,20 +244,17 @@ impl ApiClient {
         } else {
             let url = format!("{}/models", self.base_url);
             let headers = self.provider.auth_headers(&self.api_key);
-            let response = self
-                .http
-                .get(&url)
-                .headers(headers)
-                .send()
-                .await?;
+            let response = self.http.get(&url).headers(headers).send().await?;
 
             if !response.status().is_success() {
-                return Err(ApiError::HttpStatus(response.status(), "Failed to list models".to_string()).into());
+                return Err(ApiError::HttpStatus(
+                    response.status(),
+                    "Failed to list models".to_string(),
+                )
+                .into());
             }
 
-            let list: ModelList = response
-                .json()
-                .await?;
+            let list: ModelList = response.json().await?;
             Ok(list.data.into_iter().map(|m| m.id).collect())
         }
     } // list_models

@@ -1,11 +1,11 @@
 use crate::app::{App, AppMode, Focus, InputMode};
 use crate::ui;
 use ratatui::{
+    Frame,
     layout::{Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 pub fn render(frame: &mut Frame, app: &mut App) {

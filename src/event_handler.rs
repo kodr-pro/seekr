@@ -183,16 +183,19 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                 },
                             };
 
-                            match config.save() { Err(e) => {
-                                app.setup_state.error_message =
-                                    Some(format!("Failed to save config: {e}"));
-                            } _ => {
-                                app.manager = Some(std::sync::Arc::new(
-                                    crate::manager::SeekrManager::new(config.clone()),
-                                ));
-                                app.config = Some(config);
-                                app.setup_state.current_step = 7;
-                            }}
+                            match config.save() {
+                                Err(e) => {
+                                    app.setup_state.error_message =
+                                        Some(format!("Failed to save config: {e}"));
+                                }
+                                _ => {
+                                    app.manager = Some(std::sync::Arc::new(
+                                        crate::manager::SeekrManager::new(config.clone()),
+                                    ));
+                                    app.config = Some(config);
+                                    app.setup_state.current_step = 7;
+                                }
+                            }
                         }
                         Ok(false) => {
                             app.setup_state.error_message = Some("Invalid API key.".to_string());

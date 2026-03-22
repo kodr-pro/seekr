@@ -1,7 +1,7 @@
 use crate::api::provider::Provider;
 use crate::api::types::ChatCompletionRequest;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use serde_json::{Value, json};
 
 pub struct OpenAiProvider;
 

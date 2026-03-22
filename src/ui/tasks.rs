@@ -1,13 +1,13 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, Paragraph, Wrap},
-    Frame,
 };
 
-use crate::tools::task::{Task, TaskStatus};
 use crate::tools::ActivityEntry;
+use crate::tools::task::{Task, TaskStatus};
 
 pub fn render_tasks(
     frame: &mut Frame,
