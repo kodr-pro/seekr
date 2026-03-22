@@ -169,6 +169,7 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     base_url: base_url.clone(),
                                     model: model_id.to_string(),
                                     timeout: None,
+                                    key_is_plaintext: false,
                                 }],
                                 active_provider: 0,
                                 agent: crate::config::AgentConfig {
@@ -298,6 +299,58 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
     false
 }
 
+fn handle_editing_provider_keys(app: &mut App, code: &KeyCode) {
+    let (idx, field) = match app.input_mode {
+        crate::app::InputMode::EditingProviderKey { provider_idx } => (provider_idx, "key"),
+        crate::app::InputMode::EditingProviderName { provider_idx } => (provider_idx, "name"),
+        crate::app::InputMode::EditingProviderUrl { provider_idx } => (provider_idx, "url"),
+        crate::app::InputMode::EditingProviderModel { provider_idx } => (provider_idx, "model"),
+        _ => return,
+    };
+
+    match code {
+        KeyCode::Enter | KeyCode::Esc => {
+            if let Some(cfg) = app.config.as_mut() {
+                if let Some(p) = cfg.providers.get_mut(idx) {
+                    match field {
+                        "key" => p.key = app.input.clone(),
+                        "name" => p.name = app.input.clone(),
+                        "url" => p.base_url = app.input.clone(),
+                        "model" => p.model = app.input.clone(),
+                        _ => {}
+                    }
+                    cfg.save().ok();
+                }
+            }
+            app.input.clear();
+            app.cursor_pos = 0;
+            app.input_mode = crate::app::InputMode::Normal;
+        }
+        KeyCode::Char(c) => {
+            app.input.insert(app.cursor_pos, *c);
+            app.cursor_pos += 1;
+        }
+        KeyCode::Backspace => {
+            if app.cursor_pos > 0 {
+                app.input.remove(app.cursor_pos - 1);
+                app.cursor_pos -= 1;
+            }
+        }
+        KeyCode::Delete => {
+            if app.cursor_pos < app.input.len() {
+                app.input.remove(app.cursor_pos);
+            }
+        }
+        KeyCode::Left => app.cursor_pos = app.cursor_pos.saturating_sub(1),
+        KeyCode::Right => {
+            if app.cursor_pos < app.input.len() {
+                app.cursor_pos += 1;
+            }
+        }
+        _ => {}
+    }
+}
+
 fn handle_input_focus_keys(app: &mut App, code: &KeyCode, modifiers: &KeyModifiers) {
     match code {
         KeyCode::Char('k') if modifiers.contains(KeyModifiers::CONTROL) => app.focus = Focus::Chat,
@@ -352,6 +405,11 @@ fn handle_tasks_focus_keys(app: &mut App, code: &KeyCode, _modifiers: &KeyModifi
 }
 
 pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
+    if !matches!(app.input_mode, crate::app::InputMode::Normal) {
+        handle_editing_provider_keys(app, &key.code);
+        return;
+    }
+
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => app.mode = AppMode::Main,
         KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
@@ -466,6 +524,96 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
         KeyCode::Char('d') | KeyCode::Delete => {
             if app.menu_state.active_tab == crate::app::MenuTab::Sessions {
                 app.delete_session_at(app.menu_state.selection_idx).await;
+            } else if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_mut() {
+                    if cfg.providers.len() > 1 {
+                        cfg.providers.remove(app.menu_state.selection_idx);
+                        if cfg.active_provider >= cfg.providers.len() {
+                            cfg.active_provider = cfg.providers.len() - 1;
+                        }
+                        cfg.save().ok();
+                    }
+                }
+            }
+        }
+        KeyCode::Char('a') => {
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_mut() {
+                    let new_idx = cfg.providers.len();
+                    cfg.providers.push(crate::config::ProviderConfig {
+                        name: format!("New Provider {}", new_idx + 1),
+                        ..Default::default()
+                    });
+                    app.menu_state.selection_idx = new_idx;
+                    app.input = cfg.providers[new_idx].name.clone();
+                    app.cursor_pos = app.input.len();
+                    app.input_mode = crate::app::InputMode::EditingProviderName {
+                        provider_idx: new_idx,
+                    };
+                }
+            }
+        }
+        KeyCode::Char('e') => {
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_ref() {
+                    let idx = app.menu_state.selection_idx;
+                    if let Some(p) = cfg.providers.get(idx) {
+                        app.input = p.key.clone();
+                        app.cursor_pos = app.input.len();
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderKey { provider_idx: idx };
+                    }
+                }
+            }
+        }
+        KeyCode::Char('n') => {
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_ref() {
+                    let idx = app.menu_state.selection_idx;
+                    if let Some(p) = cfg.providers.get(idx) {
+                        app.input = p.name.clone();
+                        app.cursor_pos = app.input.len();
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderName { provider_idx: idx };
+                    }
+                }
+            }
+        }
+        KeyCode::Char('u') => {
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_ref() {
+                    let idx = app.menu_state.selection_idx;
+                    if let Some(p) = cfg.providers.get(idx) {
+                        app.input = p.base_url.clone();
+                        app.cursor_pos = app.input.len();
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderUrl { provider_idx: idx };
+                    }
+                }
+            }
+        }
+        KeyCode::Char('m') => {
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_ref() {
+                    let idx = app.menu_state.selection_idx;
+                    if let Some(p) = cfg.providers.get(idx) {
+                        app.input = p.model.clone();
+                        app.cursor_pos = app.input.len();
+                        app.input_mode =
+                            crate::app::InputMode::EditingProviderModel { provider_idx: idx };
+                    }
+                }
+            }
+        }
+        KeyCode::Char('p') => {
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
+                if let Some(cfg) = app.config.as_mut() {
+                    let idx = app.menu_state.selection_idx;
+                    if let Some(p) = cfg.providers.get_mut(idx) {
+                        p.key_is_plaintext = !p.key_is_plaintext;
+                        cfg.save().ok();
+                    }
+                }
             }
         }
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {

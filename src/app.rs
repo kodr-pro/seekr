@@ -36,6 +36,18 @@ pub enum InputMode {
         context: String,
         input_tx: tokio::sync::mpsc::UnboundedSender<String>,
     },
+    EditingProviderKey {
+        provider_idx: usize,
+    },
+    EditingProviderName {
+        provider_idx: usize,
+    },
+    EditingProviderUrl {
+        provider_idx: usize,
+    },
+    EditingProviderModel {
+        provider_idx: usize,
+    },
 }
 
 impl PartialEq for InputMode {
@@ -44,6 +56,22 @@ impl PartialEq for InputMode {
             (self, other),
             (InputMode::Normal, InputMode::Normal)
                 | (InputMode::ShellStdin { .. }, InputMode::ShellStdin { .. })
+                | (
+                    InputMode::EditingProviderKey { .. },
+                    InputMode::EditingProviderKey { .. }
+                )
+                | (
+                    InputMode::EditingProviderName { .. },
+                    InputMode::EditingProviderName { .. }
+                )
+                | (
+                    InputMode::EditingProviderUrl { .. },
+                    InputMode::EditingProviderUrl { .. }
+                )
+                | (
+                    InputMode::EditingProviderModel { .. },
+                    InputMode::EditingProviderModel { .. }
+                )
         )
     }
 } // eq

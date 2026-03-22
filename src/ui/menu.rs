@@ -128,6 +128,11 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
 } // render_tabs
 
 fn render_content(frame: &mut Frame, area: Rect, app: &App) {
+    if !matches!(app.input_mode, crate::app::InputMode::Normal) {
+        render_input_overlay(frame, area, app);
+        return;
+    }
+
     match app.menu_state.active_tab {
         MenuTab::Sessions => render_sessions(frame, area, app),
         MenuTab::Models => render_models(frame, area, app),
@@ -136,6 +141,68 @@ fn render_content(frame: &mut Frame, area: Rect, app: &App) {
         MenuTab::Help => render_help(frame, area, app),
     }
 } // render_content
+
+fn render_input_overlay(frame: &mut Frame, area: Rect, app: &App) {
+    let (title, prompt) = match app.input_mode {
+        crate::app::InputMode::EditingProviderKey { .. } => (" Edit API Key ", "Key: "),
+        crate::app::InputMode::EditingProviderName { .. } => (" Edit Provider Name ", "Name: "),
+        crate::app::InputMode::EditingProviderUrl { .. } => (" Edit Base URL ", "URL: "),
+        crate::app::InputMode::EditingProviderModel { .. } => (" Edit Default Model ", "Model: "),
+        _ => (" Edit Field ", "Value: "),
+    };
+
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow));
+
+    let overlay_area = centered_rect(60, 20, area);
+    frame.render_widget(Clear, overlay_area);
+
+    let inner = block.inner(overlay_area);
+    frame.render_widget(block, overlay_area);
+
+    let text = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled(prompt, Style::default().fg(Color::Gray)),
+            Span::styled(&app.input, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            " [Enter] Save  [Esc] Cancel",
+            Style::default().fg(Color::DarkGray),
+        )]),
+    ];
+
+    frame.render_widget(Paragraph::new(text), inner);
+
+    // Set cursor
+    frame.set_cursor_position((
+        inner.x + prompt.len() as u16 + app.cursor_pos as u16,
+        inner.y + 1,
+    ));
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
 
 fn render_sessions(frame: &mut Frame, area: Rect, app: &App) {
     let items: Vec<ListItem> = if app.session.sessions.is_empty() {
@@ -209,7 +276,17 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
         .map(|(i, p)| {
             let is_active = i == active_idx;
             let prefix = if is_active { "✔ " } else { "  " };
-            let content = format!("{}{} ({})", prefix, p.name, p.base_url);
+            let storage = if p.key_is_plaintext {
+                "[Plaintext]"
+            } else if !p.key.is_empty() {
+                "[Secure]"
+            } else {
+                "[Empty]"
+            };
+            let content = format!(
+                "{}{} ({}) - {} {}",
+                prefix, p.name, p.model, p.base_url, storage
+            );
             ListItem::new(content)
         })
         .collect();
@@ -224,7 +301,40 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
         .highlight_symbol(">> ");
 
     let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    frame.render_stateful_widget(list, area, &mut state);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(2)])
+        .split(area);
+
+    frame.render_stateful_widget(list, chunks[0], &mut state);
+
+    let help_text = vec![
+        Line::from(vec![
+            Span::styled(" [a]", Style::default().fg(Color::Yellow)),
+            Span::raw(" Add  "),
+            Span::styled(" [d]", Style::default().fg(Color::Yellow)),
+            Span::raw(" Delete  "),
+            Span::styled(" [e]", Style::default().fg(Color::Yellow)),
+            Span::raw(" Edit Key  "),
+        ]),
+        Line::from(vec![
+            Span::styled(" [n]", Style::default().fg(Color::Yellow)),
+            Span::raw(" Rename  "),
+            Span::styled(" [u]", Style::default().fg(Color::Yellow)),
+            Span::raw(" URL  "),
+            Span::styled(" [m]", Style::default().fg(Color::Yellow)),
+            Span::raw(" Model  "),
+            Span::styled(" [p]", Style::default().fg(Color::Yellow)),
+            Span::raw(" Toggle Storage "),
+        ]),
+    ];
+    let help_para = Paragraph::new(help_text).block(
+        Block::default()
+            .borders(Borders::TOP)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+    frame.render_widget(help_para, chunks[1]);
 } // render_providers
 
 fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
