@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use chrono::{DateTime, Utc};
 
 use crate::api::types::ChatMessage;
 use crate::tools::task::TaskManager;
@@ -17,7 +17,7 @@ pub struct Session {
     pub updated_at: DateTime<Utc>,
     pub messages: Vec<ChatMessage>,
     pub task_manager: TaskManager,
-    
+
     #[serde(skip)]
     pub tool_registry: Option<Arc<SkillRegistry>>,
 }
@@ -36,8 +36,7 @@ impl Session {
     } // new
 
     pub fn sessions_dir() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .context("Could not determine config directory")?;
+        let config_dir = dirs::config_dir().context("Could not determine config directory")?;
         Ok(config_dir.join("seekr").join("sessions"))
     } // sessions_dir
 
@@ -48,19 +47,17 @@ impl Session {
     pub fn save(&mut self) -> Result<()> {
         self.updated_at = Utc::now();
         let path = self.file_path()?;
-        
+
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).with_context(|| {
                 format!("Failed to create sessions directory: {}", parent.display())
             })?;
         }
 
-        let contents = serde_json::to_string_pretty(self)
-            .context("Failed to serialize session")?;
-        fs::write(&path, contents).with_context(|| {
-            format!("Failed to write session to {}", path.display())
-        })?;
-        
+        let contents = serde_json::to_string_pretty(self).context("Failed to serialize session")?;
+        fs::write(&path, contents)
+            .with_context(|| format!("Failed to write session to {}", path.display()))?;
+
         Ok(())
     } // save
 
@@ -69,8 +66,8 @@ impl Session {
         let path = dir.join(format!("{}.json", id));
         let contents = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read session file: {}", path.display()))?;
-        let mut session: Session = serde_json::from_str(&contents)
-            .with_context(|| "Failed to parse session JSON")?;
+        let mut session: Session =
+            serde_json::from_str(&contents).with_context(|| "Failed to parse session JSON")?;
         session.tool_registry = None;
         Ok(session)
     } // load

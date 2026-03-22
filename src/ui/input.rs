@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
+    Frame,
 };
 
 pub fn render_input(
@@ -22,10 +22,7 @@ pub fn render_input(
         let context_height = (context_lines + 2).min(area.height.saturating_sub(4));
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(context_height),
-                Constraint::Min(3),
-            ])
+            .constraints([Constraint::Length(context_height), Constraint::Min(3)])
             .split(area);
         (Some(chunks[0]), chunks[1])
     } else {
@@ -66,21 +63,28 @@ pub fn render_input(
     let display_text = if input.is_empty() && !active && !is_shell {
         Line::from(Span::styled(
             "Type your message...",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+            Style::default()
+                .fg(Color::DarkGray)
+                .add_modifier(Modifier::DIM),
         ))
     } else {
         let chars: Vec<char> = input.chars().collect();
         let before: String = chars.iter().take(cursor_pos).collect();
-        let cursor_char = chars.get(cursor_pos).map(|c| c.to_string()).unwrap_or_else(|| " ".to_string());
+        let cursor_char = chars
+            .get(cursor_pos)
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| " ".to_string());
         let after: String = chars.iter().skip(cursor_pos + 1).collect();
 
         Line::from(vec![
             Span::styled(before, Style::default().fg(Color::White)),
             Span::styled(
                 cursor_char,
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(if is_shell { Color::Rgb(255, 165, 0) } else { Color::White }),
+                Style::default().fg(Color::Black).bg(if is_shell {
+                    Color::Rgb(255, 165, 0)
+                } else {
+                    Color::White
+                }),
             ),
             Span::styled(after, Style::default().fg(Color::White)),
         ])

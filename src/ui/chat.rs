@@ -1,18 +1,17 @@
+use crate::app::{LineType, VisualLine};
+use crate::ui::syntax;
 use ratatui::{
-    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    Frame,
 };
-use crate::app::{VisualLine, LineType};
-use crate::ui::syntax;
-use std::cmp::min;
 
 /// Get per‑character styles for a visual line, taking syntax highlighting into account.
 fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
     let mut styles = Vec::new();
-    
+
     // For code blocks, apply syntax highlighting
     if matches!(vline.line_type, LineType::CodeBlock) && !vline.text.is_empty() {
         let highlighted_spans = syntax::highlight_line(&vline.text, vline.language.as_deref());
@@ -26,13 +25,27 @@ fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
         // Default style (will be overlaid by selection/cursor later)
         let default_style = if vline.is_header {
             match vline.text.as_str() {
-                "[YOU]" => Style::default().fg(Color::Rgb(0, 255, 128)).add_modifier(Modifier::BOLD),
-                "[SEEKR]" => Style::default().fg(Color::Rgb(0, 191, 255)).add_modifier(Modifier::BOLD),
-                "[THINKING]" => Style::default().fg(Color::Rgb(255, 215, 0)).add_modifier(Modifier::ITALIC | Modifier::DIM),
-                "[ERROR]" => Style::default().fg(Color::Rgb(255, 69, 0)).add_modifier(Modifier::BOLD),
-                "[APPROVAL REQUIRED]" => Style::default().fg(Color::Rgb(255, 165, 0)).add_modifier(Modifier::BOLD),
-                "[INPUT REQUIRED]" => Style::default().fg(Color::Rgb(255, 255, 0)).add_modifier(Modifier::BOLD),
-                _ => Style::default().fg(Color::Rgb(200, 200, 200)).add_modifier(Modifier::BOLD),
+                "[YOU]" => Style::default()
+                    .fg(Color::Rgb(0, 255, 128))
+                    .add_modifier(Modifier::BOLD),
+                "[SEEKR]" => Style::default()
+                    .fg(Color::Rgb(0, 191, 255))
+                    .add_modifier(Modifier::BOLD),
+                "[THINKING]" => Style::default()
+                    .fg(Color::Rgb(255, 215, 0))
+                    .add_modifier(Modifier::ITALIC | Modifier::DIM),
+                "[ERROR]" => Style::default()
+                    .fg(Color::Rgb(255, 69, 0))
+                    .add_modifier(Modifier::BOLD),
+                "[APPROVAL REQUIRED]" => Style::default()
+                    .fg(Color::Rgb(255, 165, 0))
+                    .add_modifier(Modifier::BOLD),
+                "[INPUT REQUIRED]" => Style::default()
+                    .fg(Color::Rgb(255, 255, 0))
+                    .add_modifier(Modifier::BOLD),
+                _ => Style::default()
+                    .fg(Color::Rgb(200, 200, 200))
+                    .add_modifier(Modifier::BOLD),
             }
         } else {
             Style::default().fg(Color::Rgb(220, 220, 220))
@@ -41,23 +54,30 @@ fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
         let copy_icon = '⎘';
         for ch in vline.text.chars() {
             if vline.line_type == LineType::CodeBlockStart && ch == copy_icon {
-                styles.push(Style::default().fg(Color::Rgb(0, 255, 255)).add_modifier(Modifier::BOLD));
+                styles.push(
+                    Style::default()
+                        .fg(Color::Rgb(0, 255, 255))
+                        .add_modifier(Modifier::BOLD),
+                );
             } else {
                 styles.push(default_style);
             }
         }
     }
-    
+
     // Ensure we have exactly as many styles as characters
     // (highlight_line may produce fewer if there are zero‑width characters; we pad)
     let char_count = vline.text.chars().count();
     if styles.len() < char_count {
-        let last_style = styles.last().cloned().unwrap_or(Style::default().fg(Color::White));
+        let last_style = styles
+            .last()
+            .cloned()
+            .unwrap_or(Style::default().fg(Color::White));
         styles.resize(char_count, last_style);
     } else if styles.len() > char_count {
         styles.truncate(char_count);
     }
-    
+
     styles
 }
 
@@ -92,9 +112,11 @@ pub fn render_chat(
 
     let mut lines_to_render = Vec::new();
 
-    for vidx in effective_scroll..min(effective_scroll + visible_height as usize, total_lines) {
-        let vline = &visual_lines[vidx];
-        
+    for vline in visual_lines
+        .iter()
+        .skip(effective_scroll)
+        .take(visible_height as usize)
+    {
         if vline.text.is_empty() {
             lines_to_render.push(Line::from(""));
             continue;
@@ -103,7 +125,7 @@ pub fn render_chat(
         let char_styles = get_char_styles(vline);
         let chars: Vec<char> = vline.text.chars().collect();
         let mut spans = Vec::new();
-        
+
         for (&c, &style) in chars.iter().zip(char_styles.iter()) {
             spans.push(Span::styled(c.to_string(), style));
         }
@@ -111,8 +133,7 @@ pub fn render_chat(
         lines_to_render.push(Line::from(spans));
     }
 
-    let paragraph = Paragraph::new(lines_to_render)
-        .block(block);
+    let paragraph = Paragraph::new(lines_to_render).block(block);
 
     frame.render_widget(paragraph, area);
 
@@ -122,14 +143,17 @@ pub fn render_chat(
             .symbols(ratatui::symbols::scrollbar::VERTICAL)
             .begin_symbol(Some("▲"))
             .end_symbol(Some("▼"));
-        
-        let mut scrollbar_state = ScrollbarState::new(total_lines as usize)
-            .position(effective_scroll as usize)
+
+        let mut scrollbar_state = ScrollbarState::new(total_lines)
+            .position(effective_scroll)
             .viewport_content_length(visible_height as usize);
-            
+
         frame.render_stateful_widget(
             scrollbar,
-            area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 0 }),
+            area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
             &mut scrollbar_state,
         );
     }

@@ -1,6 +1,6 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct AppLayout {
     pub title_bar: Rect,
     pub chat_panel: Rect,
@@ -23,10 +23,7 @@ impl AppLayout {
 
         let horizontal = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(70),
-                Constraint::Percentage(30),
-            ])
+            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
             .split(vertical[1]);
 
         Self {

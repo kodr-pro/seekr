@@ -4,33 +4,50 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::sleep;
 
-use crate::config::AppConfig;
-use super::stream::{parse_sse_stream, StreamEvent};
+use super::anthropic::AnthropicProvider;
+use super::openai::OpenAiProvider;
+use super::provider::Provider;
+use super::stream::StreamEvent;
 use super::types::*;
+use crate::config::AppConfig;
 
+use std::sync::Arc;
+
+/// A client for communicating with various AI providers (OpenAI, Anthropic).
+/// Handles both streaming and non-streaming chat completions.
 #[derive(Clone)]
 pub struct ApiClient {
     http: Client,
     base_url: String,
     api_key: String,
+    provider: Arc<dyn Provider>,
 }
 
 impl ApiClient {
+    /// Creates a new `ApiClient` from the given application configuration.
     pub fn new(config: &AppConfig) -> Self {
-        let provider = config.current_provider();
+        let provider_cfg = config.current_provider();
         let mut client_builder = Client::builder();
-        if let Some(timeout_secs) = provider.timeout {
+        if let Some(timeout_secs) = provider_cfg.timeout {
             client_builder = client_builder.timeout(Duration::from_secs(timeout_secs));
         }
         let http = client_builder.build().unwrap_or_else(|_| Client::new());
+
+        // Determine provider implementation based on base_url or explicit config
+        let provider: Arc<dyn Provider> = if provider_cfg.base_url.contains("anthropic.com") {
+            Arc::new(AnthropicProvider)
+        } else {
+            Arc::new(OpenAiProvider)
+        };
+
         Self {
             http,
-            base_url: provider.base_url.clone(),
-            api_key: provider.key.clone(),
+            base_url: provider_cfg.base_url.clone(),
+            api_key: provider_cfg.key.clone(),
+            provider,
         }
-    } // new
+    }
 
-    /// Helper function to retry a request with exponential backoff
     async fn send_request_with_retry<F>(&self, mut request_builder: F) -> Result<reqwest::Response>
     where
         F: FnMut() -> reqwest::RequestBuilder,
@@ -50,7 +67,10 @@ impl ApiClient {
                         let error_body = response.text().await.unwrap_or_default();
                         last_error = Some(anyhow::anyhow!("HTTP {}: {}", status, error_body));
                     } else {
-                        let body = response.text().await.unwrap_or_else(|_| "Failed to read error body".to_string());
+                        let body = response
+                            .text()
+                            .await
+                            .unwrap_or_else(|_| "Failed to read error body".to_string());
                         anyhow::bail!("API request failed ({}): {}", status, body);
                     }
                 }
@@ -66,215 +86,122 @@ impl ApiClient {
         Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error after retries")))
     }
 
+    /// Sends a chat completion request and returns a receiver for the stream of events.
     pub async fn chat_completion_stream(
         &self,
         messages: Vec<ChatMessage>,
         model: &str,
         tools: Option<Vec<ToolDefinition>>,
     ) -> Result<mpsc::UnboundedReceiver<StreamEvent>> {
-        let is_anthropic = self.base_url.contains("anthropic.com");
-        
-        if is_anthropic {
-            // Anthropic doesn't support streaming in the same way, and tool support is different.
-            // We'll do a non‑streaming request and emit the result as a single delta.
-            let url = format!("{}/messages", self.base_url);
-            
-            // Separate system messages and convert messages
-            let mut system_prompt = String::new();
-            let mut anthropic_messages = Vec::new();
-            
-            for msg in messages {
-                if msg.role == "system" {
-                    if let Some(content) = msg.content {
-                        if !system_prompt.is_empty() {
-                            system_prompt.push('\n');
-                        }
-                        system_prompt.push_str(&content);
-                    }
-                } else if let Some(content) = msg.content {
-                    anthropic_messages.push(serde_json::json!({
-                        "role": msg.role,
-                        "content": content
-                    }));
-                } else {
-                    // Handle messages with null content (push empty string)
-                    anthropic_messages.push(serde_json::json!({
-                        "role": msg.role,
-                        "content": ""
-                    }));
-                }
-            }
-            
-            let mut request_body = serde_json::json!({
-                "model": model,
-                "max_tokens": 4096,
-                "messages": anthropic_messages,
-                "stream": false,
-                "temperature": 1.0,
-            });
-            
-            if !system_prompt.is_empty() {
-                request_body["system"] = serde_json::Value::String(system_prompt);
-            }
-            
-            let response = self
-                .http
-                .post(&url)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
-                .await
-                .context("Failed to send request to Anthropic API")?;
+        let is_anthropic = self.provider.name() == "Anthropic";
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Failed to read error body".to_string());
-                anyhow::bail!("API request failed ({}): {}", status, body);
-            }
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages,
+            temperature: Some(1.0),
+            max_tokens: Some(4096),
+            top_p: None,
+            stream: true,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop: None,
+            response_format: None,
+            tools,
+            tool_choice: None,
+        };
 
-            let result: serde_json::Value = response.json().await.context("Failed to parse Anthropic JSON response")?;
-            
-            let (tx, rx) = mpsc::unbounded_channel();
-            
-            tokio::spawn(async move {
-                // Extract text from Anthropic response
-                if let Some(content_array) = result["content"].as_array() {
-                    for content_block in content_array {
-                        if content_block["type"] == "text" {
-                            if let Some(text) = content_block["text"].as_str() {
-                                let _ = tx.send(StreamEvent::ContentDelta(text.to_string()));
-                                // Send a dummy usage event (we don't have token counts)
-                                let _ = tx.send(StreamEvent::Usage {
-                                    prompt_tokens: 0,
-                                    completion_tokens: 0,
-                                    total_tokens: 0,
-                                });
-                                let _ = tx.send(StreamEvent::Done);
-                                return;
-                            }
-                        }
-                    }
-                }
-                let _ = tx.send(StreamEvent::Error("No text content in Anthropic response".to_string()));
-            });
-            
-            Ok(rx)
+        let request_body = self.provider.format_request(&request);
+        let url = if is_anthropic {
+            format!("{}/messages", self.base_url)
         } else {
-            // Original OpenAI‑compatible streaming logic
-            let tool_choice = tools.as_ref().map(|_| serde_json::json!("auto"));
-            let request = ChatCompletionRequest {
-                model: model.to_string(),
-                messages,
-                temperature: Some(1.0),
-                max_tokens: Some(4096),
-                top_p: None,
-                stream: true,
-                frequency_penalty: None,
-                presence_penalty: None,
-                stop: None,
-                response_format: None,
-                tools,
-                tool_choice,
-            };
+            format!("{}/chat/completions", self.base_url)
+        };
+        let headers = self.provider.auth_headers(&self.api_key);
 
-            let url = format!("{}/chat/completions", self.base_url);
-            let response = self.send_request_with_retry(|| {
+        let response = self
+            .send_request_with_retry(|| {
                 self.http
                     .post(&url)
-                    .header("Authorization", format!("Bearer {}", self.api_key))
-                    .header("Content-Type", "application/json")
-                    .json(&request)
-            }).await?;
+                    .headers(headers.clone())
+                    .json(&request_body)
+            })
+            .await?;
 
-            let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel();
 
-            tokio::spawn(async move {
-                if let Err(e) = parse_sse_stream(response, tx.clone()).await {
-                    let _ = tx.send(StreamEvent::Error(format!("Stream parse error: {e}")));
+        tokio::spawn(async move {
+            if is_anthropic {
+                if let Err(e) =
+                    crate::api::stream::parse_anthropic_sse_stream(response, tx.clone()).await
+                {
+                    let _ = tx.send(StreamEvent::Error(format!(
+                        "Anthropic Stream parse error: {e}"
+                    )));
                 }
-            });
+            } else {
+                if let Err(e) = crate::api::stream::parse_sse_stream(response, tx.clone()).await {
+                    let _ = tx.send(StreamEvent::Error(format!(
+                        "OpenAI Stream parse error: {e}"
+                    )));
+                }
+            }
+        });
 
-            Ok(rx)
-        }
+        Ok(rx)
     } // chat_completion_stream
 
-    pub async fn chat_completion(
-        &self,
-        messages: Vec<ChatMessage>,
-        model: &str,
-    ) -> Result<String> {
-        let is_anthropic = self.base_url.contains("anthropic.com");
-        
-        if is_anthropic {
-            // Anthropic API format
-            let url = format!("{}/messages", self.base_url);
-            
-            // Separate system messages and convert messages
-            let mut system_prompt = String::new();
-            let mut anthropic_messages = Vec::new();
-            
-            for msg in messages {
-                if msg.role == "system" {
-                    if let Some(content) = msg.content {
-                        if !system_prompt.is_empty() {
-                            system_prompt.push('\n');
-                        }
-                        system_prompt.push_str(&content);
-                    }
-                } else if let Some(content) = msg.content {
-                    // Convert to Anthropic message format (content as string)
-                    anthropic_messages.push(serde_json::json!({
-                        "role": msg.role,
-                        "content": content
-                    }));
-                } else {
-                    // Handle messages with null content (push empty string)
-                    anthropic_messages.push(serde_json::json!({
-                        "role": msg.role,
-                        "content": ""
-                    }));
-                }
-            }
-            
-            let mut request_body = serde_json::json!({
-                "model": model,
-                "max_tokens": 4096,
-                "messages": anthropic_messages,
-                "stream": false
-            });
-            
-            if !system_prompt.is_empty() {
-                request_body["system"] = serde_json::Value::String(system_prompt);
-            }
-            
-            let response = self
-                .http
-                .post(&url)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
+    /// Sends a non-streaming chat completion request and returns the full response content.
+    pub async fn chat_completion(&self, messages: Vec<ChatMessage>, model: &str) -> Result<String> {
+        let is_anthropic = self.provider.name() == "Anthropic";
+
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages,
+            temperature: Some(0.7),
+            max_tokens: Some(4096),
+            top_p: None,
+            stream: false,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let request_body = self.provider.format_request(&request);
+        let headers = self.provider.auth_headers(&self.api_key);
+
+        let url = if is_anthropic {
+            format!("{}/messages", self.base_url)
+        } else {
+            format!("{}/chat/completions", self.base_url)
+        };
+
+        let response = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .json(&request_body)
+            .send()
+            .await
+            .context("Failed to send request to API")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
                 .await
-                .context("Failed to send request to Anthropic API")?;
+                .unwrap_or_else(|_| "Failed to read error body".to_string());
+            anyhow::bail!("API request failed ({}): {}", status, body);
+        }
 
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Failed to read error body".to_string());
-                anyhow::bail!("API request failed ({}): {}", status, body);
-            }
+        let result: serde_json::Value = response
+            .json()
+            .await
+            .context("Failed to parse JSON response")?;
 
-            let result: serde_json::Value = response.json().await.context("Failed to parse Anthropic JSON response")?;
-            
-            // Anthropic response format: {"content": [{"type": "text", "text": "..."}], ...}
+        if is_anthropic {
             if let Some(content_array) = result["content"].as_array() {
                 for content_block in content_array {
                     if content_block["type"] == "text" {
@@ -286,44 +213,6 @@ impl ApiClient {
             }
             anyhow::bail!("No text content in Anthropic API response")
         } else {
-            // OpenAI-compatible API format
-            let request = ChatCompletionRequest {
-                model: model.to_string(),
-                messages,
-                temperature: Some(0.7),
-                max_tokens: Some(4096),
-                top_p: None,
-                stream: false,
-                frequency_penalty: None,
-                presence_penalty: None,
-                stop: None,
-                response_format: None,
-                tools: None,
-                tool_choice: None,
-            };
-
-            let url = format!("{}/chat/completions", self.base_url);
-            let response = self
-                .http
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
-                .header("Content-Type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to send request to API")?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "Failed to read error body".to_string());
-                anyhow::bail!("API request failed ({}): {}", status, body);
-            }
-
-            let result: serde_json::Value = response.json().await.context("Failed to parse JSON response")?;
-            
             if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
                 Ok(content.to_string())
             } else {
@@ -332,11 +221,11 @@ impl ApiClient {
         }
     } // chat_completion
 
+    /// Retrieves a list of available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<String>> {
-        let is_anthropic = self.base_url.contains("anthropic.com");
-        
+        let is_anthropic = self.provider.name() == "Anthropic";
+
         if is_anthropic {
-            // Anthropic doesn't have a /models endpoint; return known Claude models
             Ok(vec![
                 "claude-3-5-sonnet-20241022".to_string(),
                 "claude-3-5-haiku-20241022".to_string(),
@@ -349,10 +238,11 @@ impl ApiClient {
             ])
         } else {
             let url = format!("{}/models", self.base_url);
+            let headers = self.provider.auth_headers(&self.api_key);
             let response = self
                 .http
                 .get(&url)
-                .header("Authorization", format!("Bearer {}", self.api_key))
+                .headers(headers)
                 .send()
                 .await
                 .context("Failed to fetch models from API")?;
@@ -361,73 +251,59 @@ impl ApiClient {
                 anyhow::bail!("Failed to fetch models: {}", response.status());
             }
 
-            let list: ModelList = response.json().await.context("Failed to parse model list")?;
+            let list: ModelList = response
+                .json()
+                .await
+                .context("Failed to parse model list")?;
             Ok(list.data.into_iter().map(|m| m.id).collect())
         }
     } // list_models
 
-
+    /// Tests the validity of an API key and base URL by sending a minimal test request.
     pub async fn validate_key(api_key: &str, base_url: &str, model: &str) -> Result<bool> {
         let client = Client::new();
-        
-        // Check if this is Anthropic API
         let is_anthropic = base_url.contains("anthropic.com");
-        
-        if is_anthropic {
-            // Anthropic API format
-            let url = format!("{}/messages", base_url);
-            let request_body = serde_json::json!({
-                "model": model,
-                "max_tokens": 8,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Hi"
-                    }
-                ],
-                "stream": false
-            });
-            
-            let response = client
-                .post(&url)
-                .header("x-api-key", api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("Content-Type", "application/json")
-                .json(&request_body)
-                .send()
-                .await
-                .context("Failed to connect to Anthropic API")?;
-                
-            Ok(response.status().is_success())
+
+        let provider: Arc<dyn Provider> = if is_anthropic {
+            Arc::new(AnthropicProvider)
         } else {
-            // OpenAI-compatible API format
-            let request = ChatCompletionRequest {
-                model: model.to_string(),
-                messages: vec![ChatMessage::user("Hi")],
-                temperature: Some(1.0),
-                max_tokens: Some(8),
-                top_p: None,
-                stream: false,
-                frequency_penalty: None,
-                presence_penalty: None,
-                stop: None,
-                response_format: None,
-                tools: None,
-                tool_choice: None,
-            };
+            Arc::new(OpenAiProvider)
+        };
 
-            let url = format!("{}/chat/completions", base_url);
-            let response = client
-                .post(&url)
-                .header("Authorization", format!("Bearer {}", api_key))
-                .header("Content-Type", "application/json")
-                .json(&request)
-                .send()
-                .await
-                .context("Failed to connect to API")?;
+        let headers = provider.auth_headers(api_key);
 
-            Ok(response.status().is_success())
-        }
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages: vec![ChatMessage::user("Hi")],
+            temperature: Some(1.0),
+            max_tokens: Some(8),
+            top_p: None,
+            stream: false,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let request_body = provider.format_request(&request);
+
+        let url = if is_anthropic {
+            format!("{}/messages", base_url)
+        } else {
+            format!("{}/chat/completions", base_url)
+        };
+
+        let response = client
+            .post(&url)
+            .headers(headers)
+            .json(&request_body)
+            .send()
+            .await
+            .context("Failed to connect to API")?;
+
+        Ok(response.status().is_success())
     } // validate_key
 } // impl ApiClient
 
@@ -445,7 +321,7 @@ mod tests {
             tool_calls: None,
             tool_call_id: None,
         };
-        
+
         // This should not panic when processing
         // We can't test the private conversion logic directly,
         // but we can at least ensure the struct works

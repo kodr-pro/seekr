@@ -1,14 +1,55 @@
-use anyhow::{Context, Result, anyhow};
+use crate::api::types::{FunctionDefinition, ToolDefinition};
+use crate::tools::{task::TaskManager, truncate, Tool};
+use anyhow::{anyhow, Context, Result};
+use async_trait::async_trait;
 use reqwest::Client;
 use scraper::{Html, Selector};
-use async_trait::async_trait;
-use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{Tool, task::TaskManager, truncate};
 use serde_json::json;
 
 pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
+    // SSRF Protection
+    let parsed_url = url::Url::parse(url).context("Failed to parse URL")?;
+    let host = parsed_url
+        .host_str()
+        .ok_or_else(|| anyhow!("URL has no host"))?;
+    let port = parsed_url.port_or_known_default().unwrap_or(80);
+
+    let addrs = tokio::net::lookup_host(format!("{}:{}", host, port))
+        .await
+        .map_err(|e| anyhow!("DNS lookup failed for {}: {}", host, e))?;
+
+    for addr in addrs {
+        let ip = addr.ip();
+        if ip.is_loopback() {
+            continue; // Allow localhost for local development/testing
+        }
+
+        let is_private = match ip {
+            std::net::IpAddr::V4(ipv4) => {
+                ipv4.is_private()
+                    || ipv4.is_link_local()
+                    || ipv4.is_broadcast()
+                    || ipv4.is_documentation()
+                    || ipv4.is_unspecified()
+            }
+            std::net::IpAddr::V6(ipv6) => {
+                ipv6.is_unspecified() || (ipv6.segments()[0] & 0xfe00) == 0xfc00
+            } // Unique local address
+        };
+
+        if is_private {
+            return Err(anyhow!(
+                "Security Error: Access to private IP {} is blocked (SSRF protection)",
+                ip
+            ));
+        }
+    }
+
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; Seekr/0.1)")
+        .user_agent(format!(
+            "Mozilla/5.0 (compatible; Seekr/{})",
+            env!("CARGO_PKG_VERSION")
+        ))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
@@ -49,13 +90,11 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
         }
     } else {
         match Selector::parse("body") {
-            Ok(body_sel) => {
-                document
-                    .select(&body_sel)
-                    .next()
-                    .map(|body| body.text().collect::<Vec<_>>().join(" "))
-                    .unwrap_or_else(|| "No body content found".to_string())
-            }
+            Ok(body_sel) => document
+                .select(&body_sel)
+                .next()
+                .map(|body| body.text().collect::<Vec<_>>().join(" "))
+                .unwrap_or_else(|| "No body content found".to_string()),
             Err(_) => "Failed to parse body selector".to_string(),
         }
     };
@@ -71,15 +110,15 @@ pub async fn web_fetch(url: &str, selector: Option<&str>) -> Result<String> {
 
 pub async fn web_search(query: &str) -> Result<String> {
     let client = Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; Seekr/0.1)")
+        .user_agent(format!(
+            "Mozilla/5.0 (compatible; Seekr/{})",
+            env!("CARGO_PKG_VERSION")
+        ))
         .timeout(std::time::Duration::from_secs(15))
         .build()
         .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
 
-    let url = format!(
-        "https://html.duckduckgo.com/html/?q={}",
-        urlencoding(query)
-    );
+    let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding(query));
 
     let response = client
         .get(&url)
@@ -171,9 +210,11 @@ pub struct WebFetchTool;
 
 #[async_trait]
 impl Tool for WebFetchTool {
-    fn name(&self) -> &str { "web_fetch" } // name
+    fn name(&self) -> &str {
+        "web_fetch"
+    } // name
     fn definition(&self) -> ToolDefinition {
-         ToolDefinition {
+        ToolDefinition {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
@@ -190,23 +231,29 @@ impl Tool for WebFetchTool {
         }
     } // definition
     async fn execute(
-        &self, 
-        args: &serde_json::Value, 
+        &self,
+        args: &serde_json::Value,
         task_manager: &TaskManager,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
         let url = args["url"].as_str().ok_or_else(|| anyhow!("Missing url"))?;
         let selector = args["selector"].as_str();
-        
+
         let mut short_url = url.to_string();
         if short_url.len() > 40 {
             short_url.truncate(37);
             short_url.push_str("...");
         }
         let summary = format!("web_fetch {}", short_url);
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
-        
+        task_manager.log_activity(
+            self.name(),
+            &summary,
+            crate::tools::task::ActivityStatus::Starting,
+            thread_id,
+            total_threads,
+        );
+
         let result = web_fetch(url, selector).await?;
         Ok((result, summary))
     } // execute
@@ -216,7 +263,9 @@ pub struct WebSearchTool;
 
 #[async_trait]
 impl Tool for WebSearchTool {
-    fn name(&self) -> &str { "web_search" } // name
+    fn name(&self) -> &str {
+        "web_search"
+    } // name
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             tool_type: "function".to_string(),
@@ -232,15 +281,23 @@ impl Tool for WebSearchTool {
         }
     } // definition
     async fn execute(
-        &self, 
-        args: &serde_json::Value, 
+        &self,
+        args: &serde_json::Value,
         task_manager: &TaskManager,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let query = args["query"].as_str().ok_or_else(|| anyhow!("Missing query"))?;
+        let query = args["query"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing query"))?;
         let summary = format!("web_search \"{}\"", truncate(query, 20));
-        task_manager.log_activity(self.name(), &summary, crate::tools::task::ActivityStatus::Starting, thread_id, total_threads);
+        task_manager.log_activity(
+            self.name(),
+            &summary,
+            crate::tools::task::ActivityStatus::Starting,
+            thread_id,
+            total_threads,
+        );
         let result = web_search(query).await?;
         Ok((result, summary))
     } // execute
