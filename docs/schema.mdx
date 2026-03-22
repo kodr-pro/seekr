@@ -32,6 +32,10 @@ Controls the behavior and constraints of the AI agent.
 | `max_iterations` | `25` | Maximum number of tool-use steps per task. |
 | `auto_approve_tools` | `false` | If true, the agent will run tools without asking for permission. |
 | `working_directory` | `"."` | The default directory where the agent operates. |
+| `context_window_threshold` | `40` | Sum of input+output messages before triggering pruning. |
+| `context_window_keep` | `10` | Number of most recent messages to keep after pruning. |
+| `shell_blocklist` | `[...]` | List of substrings to block in shell commands. |
+| `show_shell_warnings` | `true` | Show warnings when running potentially dangerous commands. |
 
 ### [ui]
 

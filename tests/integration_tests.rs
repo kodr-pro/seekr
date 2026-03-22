@@ -166,7 +166,7 @@ async fn test_skill_registry() {
 
 #[tokio::test]
 async fn test_execute_tool_mock() {
-    use seekr::tools::{execute_tool, SkillRegistry};
+    use seekr::tools::{SkillRegistry, execute_tool};
     let registry = SkillRegistry::new(None);
     let tm = TaskManager::new();
     let args = json!({ "command": "echo 'execute_tool test'" }).to_string();
@@ -193,7 +193,7 @@ async fn test_execute_tool_mock() {
 
 #[tokio::test]
 async fn test_parallel_file_reads() {
-    use seekr::tools::{execute_tool, SkillRegistry};
+    use seekr::tools::{SkillRegistry, execute_tool};
     let registry = SkillRegistry::new(None);
     let tm = TaskManager::new();
 
@@ -320,4 +320,26 @@ async fn test_keyring_debug() {
     let normalized = p_name.to_lowercase().replace(" ", "_");
     println!("'{}' normalized is '{}'", p_name, normalized);
     println!("---------------------");
+}
+#[tokio::test]
+async fn test_invalid_api_key_handling() {
+    use seekr::api::client::ApiClient;
+    let result =
+        ApiClient::validate_key("invalid_key", "https://api.openai.com/v1", "gpt-4o").await;
+    assert!(result.is_err() || !result.unwrap());
+}
+
+#[tokio::test]
+async fn test_empty_provider_list_behavior() {
+    use seekr::config::AppConfig;
+    let mut config = AppConfig::default();
+    config.providers.clear();
+
+    // Test current_provider fallback
+    // Note: AppConfig::current_provider() currently expects at least one provider
+    // or it returns the default. Let's see how it behaves.
+
+    let provider = config.current_provider_mut();
+    assert_eq!(provider.name, "Seekr AI"); // Should have pushed a default
+    assert_eq!(config.providers.len(), 1);
 }

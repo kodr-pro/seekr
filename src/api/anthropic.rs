@@ -1,7 +1,7 @@
 use crate::api::provider::Provider;
 use crate::api::types::ChatCompletionRequest;
-use reqwest::header::{HeaderMap, HeaderValue, CONTENT_TYPE};
-use serde_json::{json, Value};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+use serde_json::{Value, json};
 
 pub struct AnthropicProvider;
 
@@ -42,13 +42,13 @@ impl Provider for AnthropicProvider {
             {
                 // Formatting assistant tool calls for Anthropic
                 let mut content_blocks = Vec::new();
-                if let Some(content) = &msg.content {
-                    if !content.is_empty() {
-                        content_blocks.push(json!({
-                            "type": "text",
-                            "text": content
-                        }));
-                    }
+                if let Some(content) = &msg.content
+                    && !content.is_empty()
+                {
+                    content_blocks.push(json!({
+                        "type": "text",
+                        "text": content
+                    }));
                 }
                 if let Some(tool_calls) = &msg.tool_calls {
                     for tc in tool_calls {
@@ -76,13 +76,12 @@ impl Provider for AnthropicProvider {
                 });
 
                 let mut merge_with_previous = false;
-                if let Some(last_msg) = anthropic_messages.last_mut() {
-                    if last_msg["role"] == "user" {
-                        if let Some(content_array) = last_msg["content"].as_array_mut() {
-                            content_array.push(tool_result_block.clone());
-                            merge_with_previous = true;
-                        }
-                    }
+                if let Some(last_msg) = anthropic_messages.last_mut()
+                    && last_msg["role"] == "user"
+                    && let Some(content_array) = last_msg["content"].as_array_mut()
+                {
+                    content_array.push(tool_result_block.clone());
+                    merge_with_previous = true;
                 }
 
                 if !merge_with_previous {
@@ -110,18 +109,18 @@ impl Provider for AnthropicProvider {
             body["system"] = json!(system_prompt);
         }
 
-        if let Some(tools) = &request.tools {
-            if !tools.is_empty() {
-                let mut anthropic_tools = Vec::new();
-                for t in tools {
-                    anthropic_tools.push(json!({
-                        "name": t.function.name,
-                        "description": t.function.description,
-                        "input_schema": t.function.parameters
-                    }));
-                }
-                body["tools"] = json!(anthropic_tools);
+        if let Some(tools) = &request.tools
+            && !tools.is_empty()
+        {
+            let mut anthropic_tools = Vec::new();
+            for t in tools {
+                anthropic_tools.push(json!({
+                    "name": t.function.name,
+                    "description": t.function.description,
+                    "input_schema": t.function.parameters
+                }));
             }
+            body["tools"] = json!(anthropic_tools);
         }
 
         body

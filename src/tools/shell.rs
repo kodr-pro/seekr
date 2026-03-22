@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{task::TaskManager, truncate, Tool};
-use anyhow::{anyhow, Context, Result};
+use crate::tools::{Tool, task::TaskManager, truncate};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 use std::process::Stdio;
@@ -170,10 +170,10 @@ pub async fn shell_command(
                                 line.clear();
                             }
                         }
-                        if !line.is_empty() {
-                            if let Some(prompt) = detect_prompt(&line) {
-                                tx_out.send(prompt).ok();
-                            }
+                        if !line.is_empty()
+                            && let Some(prompt) = detect_prompt(&line)
+                        {
+                            tx_out.send(prompt).ok();
                         }
                         buffer.drain(..valid_up_to);
                     }
@@ -225,10 +225,10 @@ pub async fn shell_command(
                                 line.clear();
                             }
                         }
-                        if !line.is_empty() {
-                            if let Some(prompt) = detect_prompt(&line) {
-                                tx_err.send(prompt).ok();
-                            }
+                        if !line.is_empty()
+                            && let Some(prompt) = detect_prompt(&line)
+                        {
+                            tx_err.send(prompt).ok();
                         }
                         buffer.drain(..valid_up_to);
                     }

@@ -1,6 +1,7 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{short_path, task::TaskManager, Tool};
-use anyhow::{anyhow, Context, Result};
+use crate::errors::ToolError;
+use crate::tools::{Tool, short_path, task::TaskManager};
+use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -33,10 +34,11 @@ fn resolve_and_verify_path(requested: &str, task_manager: &TaskManager) -> Resul
         && working_dir.to_string_lossy() != "."
         && working_dir.to_string_lossy() != "./"
     {
-        return Err(anyhow!(
-            "Security Error: Access denied. Path '{}' is outside the permitted working directory.",
+        return Err(ToolError::SecurityError(format!(
+            "Access denied. Path '{}' is outside the permitted working directory.",
             requested
-        ));
+        ))
+        .into());
     }
 
     Ok(cleaned_requested)
@@ -67,12 +69,12 @@ pub async fn read_file(path: &PathBuf) -> Result<String> {
 } // read_file
 
 pub async fn write_file(path: &PathBuf, content: &str) -> Result<String> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
     tokio::fs::write(path, content)
         .await
@@ -90,10 +92,11 @@ pub async fn edit_file(path: &PathBuf, old_string: &str, new_string: &str) -> Re
         .with_context(|| format!("Failed to read file for editing: {}", path.display()))?;
 
     if !contents.contains(old_string) {
-        anyhow::bail!(
+        return Err(ToolError::EditFailed(format!(
             "The string to replace was not found in {}. Make sure the old_string matches exactly.",
             path.display()
-        );
+        ))
+        .into());
     }
 
     let new_contents = contents.replacen(old_string, new_string, 1);

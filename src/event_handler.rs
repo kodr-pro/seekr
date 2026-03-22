@@ -169,7 +169,6 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     base_url: base_url.clone(),
                                     model: model_id.to_string(),
                                     timeout: None,
-                                    key_is_plaintext: false,
                                 }],
                                 active_provider: 0,
                                 agent: crate::config::AgentConfig {
@@ -184,15 +183,18 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                 },
                             };
 
-                            if let Err(e) = config.save() {
-                                app.setup_state.error_message =
-                                    Some(format!("Failed to save config: {e}"));
-                            } else {
-                                app.manager = Some(std::sync::Arc::new(
-                                    crate::manager::SeekrManager::new(config.clone()),
-                                ));
-                                app.config = Some(config);
-                                app.setup_state.current_step = 7;
+                            match config.save() {
+                                Err(e) => {
+                                    app.setup_state.error_message =
+                                        Some(format!("Failed to save config: {e}"));
+                                }
+                                _ => {
+                                    app.manager = Some(std::sync::Arc::new(
+                                        crate::manager::SeekrManager::new(config.clone()),
+                                    ));
+                                    app.config = Some(config);
+                                    app.setup_state.current_step = 7;
+                                }
                             }
                         }
                         Ok(false) => {
@@ -310,17 +312,17 @@ fn handle_editing_provider_keys(app: &mut App, code: &KeyCode) {
 
     match code {
         KeyCode::Enter | KeyCode::Esc => {
-            if let Some(cfg) = app.config.as_mut() {
-                if let Some(p) = cfg.providers.get_mut(idx) {
-                    match field {
-                        "key" => p.key = app.input.clone(),
-                        "name" => p.name = app.input.clone(),
-                        "url" => p.base_url = app.input.clone(),
-                        "model" => p.model = app.input.clone(),
-                        _ => {}
-                    }
-                    cfg.save().ok();
+            if let Some(cfg) = app.config.as_mut()
+                && let Some(p) = cfg.providers.get_mut(idx)
+            {
+                match field {
+                    "key" => p.key = app.input.clone(),
+                    "name" => p.name = app.input.clone(),
+                    "url" => p.base_url = app.input.clone(),
+                    "model" => p.model = app.input.clone(),
+                    _ => {}
                 }
+                cfg.save().ok();
             }
             app.input.clear();
             app.cursor_pos = 0;
@@ -524,96 +526,80 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
         KeyCode::Char('d') | KeyCode::Delete => {
             if app.menu_state.active_tab == crate::app::MenuTab::Sessions {
                 app.delete_session_at(app.menu_state.selection_idx).await;
-            } else if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_mut() {
-                    if cfg.providers.len() > 1 {
-                        cfg.providers.remove(app.menu_state.selection_idx);
-                        if cfg.active_provider >= cfg.providers.len() {
-                            cfg.active_provider = cfg.providers.len() - 1;
-                        }
-                        cfg.save().ok();
-                    }
+            } else if app.menu_state.active_tab == crate::app::MenuTab::Providers
+                && let Some(cfg) = app.config.as_mut()
+                && cfg.providers.len() > 1
+            {
+                cfg.providers.remove(app.menu_state.selection_idx);
+                if cfg.active_provider >= cfg.providers.len() {
+                    cfg.active_provider = cfg.providers.len() - 1;
                 }
+                cfg.save().ok();
             }
         }
         KeyCode::Char('a') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_mut() {
-                    let new_idx = cfg.providers.len();
-                    cfg.providers.push(crate::config::ProviderConfig {
-                        name: format!("New Provider {}", new_idx + 1),
-                        ..Default::default()
-                    });
-                    app.menu_state.selection_idx = new_idx;
-                    app.input = cfg.providers[new_idx].name.clone();
-                    app.cursor_pos = app.input.len();
-                    app.input_mode = crate::app::InputMode::EditingProviderName {
-                        provider_idx: new_idx,
-                    };
-                }
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers
+                && let Some(cfg) = app.config.as_mut()
+            {
+                let new_idx = cfg.providers.len();
+                cfg.providers.push(crate::config::ProviderConfig {
+                    name: format!("New Provider {}", new_idx + 1),
+                    ..Default::default()
+                });
+                app.menu_state.selection_idx = new_idx;
+                app.input = cfg.providers[new_idx].name.clone();
+                app.cursor_pos = app.input.len();
+                app.input_mode = crate::app::InputMode::EditingProviderName {
+                    provider_idx: new_idx,
+                };
             }
         }
         KeyCode::Char('e') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_ref() {
-                    let idx = app.menu_state.selection_idx;
-                    if let Some(p) = cfg.providers.get(idx) {
-                        app.input = p.key.clone();
-                        app.cursor_pos = app.input.len();
-                        app.input_mode =
-                            crate::app::InputMode::EditingProviderKey { provider_idx: idx };
-                    }
-                }
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers
+                && let Some(cfg) = app.config.as_ref()
+                && let Some(p) = cfg.providers.get(app.menu_state.selection_idx)
+            {
+                app.input = p.key.clone();
+                app.cursor_pos = app.input.len();
+                app.input_mode = crate::app::InputMode::EditingProviderKey {
+                    provider_idx: app.menu_state.selection_idx,
+                };
             }
         }
         KeyCode::Char('n') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_ref() {
-                    let idx = app.menu_state.selection_idx;
-                    if let Some(p) = cfg.providers.get(idx) {
-                        app.input = p.name.clone();
-                        app.cursor_pos = app.input.len();
-                        app.input_mode =
-                            crate::app::InputMode::EditingProviderName { provider_idx: idx };
-                    }
-                }
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers
+                && let Some(cfg) = app.config.as_ref()
+                && let Some(p) = cfg.providers.get(app.menu_state.selection_idx)
+            {
+                app.input = p.name.clone();
+                app.cursor_pos = app.input.len();
+                app.input_mode = crate::app::InputMode::EditingProviderName {
+                    provider_idx: app.menu_state.selection_idx,
+                };
             }
         }
         KeyCode::Char('u') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_ref() {
-                    let idx = app.menu_state.selection_idx;
-                    if let Some(p) = cfg.providers.get(idx) {
-                        app.input = p.base_url.clone();
-                        app.cursor_pos = app.input.len();
-                        app.input_mode =
-                            crate::app::InputMode::EditingProviderUrl { provider_idx: idx };
-                    }
-                }
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers
+                && let Some(cfg) = app.config.as_ref()
+                && let Some(p) = cfg.providers.get(app.menu_state.selection_idx)
+            {
+                app.input = p.base_url.clone();
+                app.cursor_pos = app.input.len();
+                app.input_mode = crate::app::InputMode::EditingProviderUrl {
+                    provider_idx: app.menu_state.selection_idx,
+                };
             }
         }
         KeyCode::Char('m') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_ref() {
-                    let idx = app.menu_state.selection_idx;
-                    if let Some(p) = cfg.providers.get(idx) {
-                        app.input = p.model.clone();
-                        app.cursor_pos = app.input.len();
-                        app.input_mode =
-                            crate::app::InputMode::EditingProviderModel { provider_idx: idx };
-                    }
-                }
-            }
-        }
-        KeyCode::Char('p') => {
-            if app.menu_state.active_tab == crate::app::MenuTab::Providers {
-                if let Some(cfg) = app.config.as_mut() {
-                    let idx = app.menu_state.selection_idx;
-                    if let Some(p) = cfg.providers.get_mut(idx) {
-                        p.key_is_plaintext = !p.key_is_plaintext;
-                        cfg.save().ok();
-                    }
-                }
+            if app.menu_state.active_tab == crate::app::MenuTab::Providers
+                && let Some(cfg) = app.config.as_ref()
+                && let Some(p) = cfg.providers.get(app.menu_state.selection_idx)
+            {
+                app.input = p.model.clone();
+                app.cursor_pos = app.input.len();
+                app.input_mode = crate::app::InputMode::EditingProviderModel {
+                    provider_idx: app.menu_state.selection_idx,
+                };
             }
         }
         KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {

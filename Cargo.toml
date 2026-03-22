@@ -1,7 +1,7 @@
 [package]
 name = "seekr"
 version = "0.2.1"
-edition = "2021"
+edition = "2024"
 description = "AI Agent Manager - Terminal UI powered by DeepSeek"
 license = "Polyform-Prosperity-1.0.0"
 
@@ -15,8 +15,8 @@ path = "src/main.rs"
 
 [dependencies]
 # TUI
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -62,7 +62,7 @@ async-trait = "0.1"
 colored = "3"
 shellexpand = "3"
 arboard = "3.4.1"
-syntect = "5.3.0"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig", "parsing", "dump-load", "html"] }
 keyring = "3.6.3"
 url = "2.5.8"
 semver = "1.0.27"

@@ -1,7 +1,9 @@
+use crate::agent::loop_mod::AgentLoop;
 use crate::agent::{AgentCommand, AgentEvent};
 use crate::api::client::ApiClient;
 use crate::app_state::{AgentState, SessionState, UiState};
 use crate::config::AppConfig;
+use crate::errors::ApiError;
 use crate::event_handler::handle_event;
 use crate::tools::task::Task;
 use crate::ui::render::render;
@@ -145,7 +147,7 @@ pub enum MenuTab {
 
 #[derive(Debug)]
 pub enum BgEvent {
-    ModelsFetched(Result<Vec<String>, String>),
+    ModelsFetched(Result<Vec<String>, ApiError>),
     UpdateAvailable(String),
 }
 
@@ -279,7 +281,7 @@ impl App {
                     return;
                 }
             };
-            crate::agent::loop_mod::AgentLoop::resume(
+            AgentLoop::resume(
                 config.clone(),
                 sid,
                 evt_tx,
@@ -296,7 +298,7 @@ impl App {
                     return;
                 }
             };
-            Ok(crate::agent::loop_mod::AgentLoop::new(
+            Ok(AgentLoop::new(
                 config.clone(),
                 evt_tx,
                 cmd_rx,
@@ -496,7 +498,7 @@ impl App {
                 AgentEvent::Error(msg) => {
                     self.finalize_streaming();
                     self.agent.is_streaming = false;
-                    self.chat_entries.push(ChatEntry::Error(msg));
+                    self.chat_entries.push(ChatEntry::Error(msg.to_string()));
                 }
                 AgentEvent::ToolApprovalRequest {
                     name, arguments, ..
@@ -587,7 +589,7 @@ impl App {
 
     fn update_streaming_entry(&mut self) {
         let last_idx = self.chat_entries.len().saturating_sub(1);
-        if let Some(ChatEntry::AssistantStreaming(ref mut content)) = self.chat_entries.last_mut() {
+        if let Some(ChatEntry::AssistantStreaming(content)) = self.chat_entries.last_mut() {
             *content = self.agent.streaming_content.clone();
             self.update_vlines_for_entry(last_idx, self.ui.last_chat_width);
             return;
@@ -738,7 +740,7 @@ impl App {
         let tx = self.bg_tx.clone();
         tokio::spawn(async move {
             let client = ApiClient::new(&config);
-            let res = client.list_models().await.map_err(|e| e.to_string());
+            let res = client.list_models().await;
             let _ = tx.send(BgEvent::ModelsFetched(res));
         });
     } // fetch_available_models
@@ -756,20 +758,24 @@ impl App {
                 .send()
                 .await;
 
-            if let Ok(response) = res {
-                if let Ok(json) = response.json::<serde_json::Value>().await {
-                    if let Some(tag) = json["tag_name"].as_str() {
-                        let current = env!("CARGO_PKG_VERSION");
-                        let version = tag.trim_start_matches('v');
+            if let Ok(response) = res
+                && let Ok(json) = response.json::<serde_json::Value>().await
+                && let Some(tag) = json["tag_name"].as_str()
+            {
+                let current = env!("CARGO_PKG_VERSION");
+                let version = tag.trim_start_matches('v');
 
-                        if let (Ok(current_v), Ok(latest_v)) = (
-                            semver::Version::parse(current),
-                            semver::Version::parse(version),
-                        ) {
-                            if latest_v > current_v {
-                                let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
-                            }
-                        } else if version != current {
+                match (
+                    semver::Version::parse(current),
+                    semver::Version::parse(version),
+                ) {
+                    (Ok(current_v), Ok(latest_v)) => {
+                        if latest_v > current_v {
+                            let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
+                        }
+                    }
+                    _ => {
+                        if version != current {
                             // Fallback to basic string comparison if semver fails
                             let _ = tx.send(BgEvent::UpdateAvailable(version.to_string()));
                         }
@@ -1065,10 +1071,10 @@ async fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()>
                 }
             }
             maybe_ev = reader.next() => {
-                if let Some(Ok(ev)) = maybe_ev {
-                    if handle_event(app, &ev).await? {
-                        return Ok(());
-                    }
+                if let Some(Ok(ev)) = maybe_ev
+                    && handle_event(app, &ev).await?
+                {
+                    return Ok(());
                 }
                 // Also poll agent events on any user interaction for maximum responsiveness
                 app.poll_bg_events();

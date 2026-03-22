@@ -1,4 +1,5 @@
-use anyhow::{Context, Result};
+use crate::errors::ConfigError;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -10,8 +11,6 @@ pub struct ProviderConfig {
     pub model: String,
     #[serde(default)]
     pub timeout: Option<u64>,
-    #[serde(default)]
-    pub key_is_plaintext: bool,
 }
 
 impl Default for ProviderConfig {
@@ -22,7 +21,6 @@ impl Default for ProviderConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             model: "gpt-4o".to_string(),
             timeout: None,
-            key_is_plaintext: false,
         }
     }
 }
@@ -113,8 +111,9 @@ impl AppConfig {
         &mut self.providers[self.active_provider]
     }
 
-    pub fn config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir().context("Could not determine config directory")?;
+    pub fn config_path() -> Result<PathBuf, ConfigError> {
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| ConfigError::Path("Could not determine config directory".to_string()))?;
         Ok(config_dir.join("seekr").join("config.toml"))
     } // config_path
 
@@ -123,9 +122,8 @@ impl AppConfig {
     } // exists
 
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
-        let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read config from {}", path.display()))?;
+        let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
+        let contents = std::fs::read_to_string(&path).map_err(ConfigError::Io)?;
 
         let mut config: AppConfig = if let Ok(config) = toml::from_str(&contents) {
             config
@@ -152,7 +150,6 @@ impl AppConfig {
                         base_url: old.api.base_url,
                         model: old.api.model,
                         timeout: None,
-                        key_is_plaintext: false,
                     }],
                     active_provider: 0,
                     agent: old.agent,
@@ -163,7 +160,10 @@ impl AppConfig {
                 let _ = config.save();
                 config
             } else {
-                anyhow::bail!("Failed to parse config.toml - format may be corrupted");
+                return Err(ConfigError::MigrationFailed(
+                    "Failed to parse config.toml - format may be corrupted".to_string(),
+                )
+                .into());
             }
         };
 
@@ -175,8 +175,8 @@ impl AppConfig {
             if let Ok(env_val) = std::env::var("SEEKR_API_KEY").or_else(|_| std::env::var(&env_key))
             {
                 provider.key = env_val;
-            } else if provider.key.is_empty() || !provider.key_is_plaintext {
-                // If the key in TOML is empty, OR we are not in plaintext mode, try keyring
+            } else if provider.key.is_empty() {
+                // If the key in TOML is empty, always try keyring
                 let entry_name = format!("seekr_api_key_{}", normalized_name);
                 match keyring::Entry::new("seekr", &entry_name) {
                     Ok(entry) => {
@@ -211,11 +211,9 @@ impl AppConfig {
     } // load
 
     pub fn save(&self) -> Result<()> {
-        let path = Self::config_path()?;
+        let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("Failed to create config directory: {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
         }
 
         let mut keyring_errors = Vec::new();
@@ -225,46 +223,36 @@ impl AppConfig {
             let normalized_name = provider.name.to_lowercase().replace(" ", "_");
             let entry_name = format!("seekr_api_key_{}", normalized_name);
 
-            if !provider.key_is_plaintext && !provider.key.is_empty() {
+            if !provider.key.is_empty() {
                 match keyring::Entry::new("seekr", &entry_name) {
                     Ok(entry) => match entry.set_password(&provider.key) {
                         Ok(_) => {
                             saveable_config.providers[i].key = String::new();
-                            saveable_config.providers[i].key_is_plaintext = false;
                         }
                         Err(e) => {
                             keyring_errors.push(format!("{}: {}", entry_name, e));
-                            saveable_config.providers[i].key = provider.key.clone();
-                            saveable_config.providers[i].key_is_plaintext = true;
+                            // We DO NOT save it to TOML if it failed.
+                            // The next load will simply show it as empty or use Env.
+                            saveable_config.providers[i].key = String::new();
                         }
                     },
                     Err(e) => {
                         keyring_errors.push(format!("{}: {}", entry_name, e));
-                        saveable_config.providers[i].key = provider.key.clone();
-                        saveable_config.providers[i].key_is_plaintext = true;
+                        saveable_config.providers[i].key = String::new();
                     }
                 }
             } else {
-                // Manually explicitly set to plaintext or key is empty
-                saveable_config.providers[i].key = provider.key.clone();
-                // If it's not empty, it's definitely plaintext now
-                if !provider.key.is_empty() {
-                    saveable_config.providers[i].key_is_plaintext = true;
-                }
+                saveable_config.providers[i].key = String::new();
             }
         }
 
         if !keyring_errors.is_empty() {
-            tracing::error!(
-                "Keyring issues, some keys saved in plaintext: {}",
-                keyring_errors.join(", ")
-            );
+            return Err(ConfigError::Keyring(keyring_errors.join(", ")).into());
         }
 
-        let contents =
-            toml::to_string_pretty(&saveable_config).context("Failed to serialize config")?;
-        std::fs::write(&path, contents)
-            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        let contents = toml::to_string_pretty(&saveable_config)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+        std::fs::write(&path, contents).map_err(ConfigError::Io)?;
         Ok(())
     } // save
 

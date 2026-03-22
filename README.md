@@ -133,6 +133,25 @@ Each skill is a directory containing a `skill.json` definition and any necessary
 
 ---
 
+## 🛠️ Troubleshooting
+
+### 🔑 Authentication / Keyring Issues
+Seekr uses your OS keyring (GNOME Keyring, KDE Wallet, etc.) to store API keys securely.
+- **Fail-Fast Policy:** Seekr will now fail to save if a secure keyring is unavailable (plaintext fallback is disabled for security).
+- **Headless Servers:** On servers without a keyring, use the `SEEKR_API_KEY_<PROVIDER>` environment variable (e.g., `SEEKR_API_KEY_DEEPSEEK=sk-...`).
+- **Permission Denied:** Ensure your user has permissions to access the login keyring.
+
+### 🌐 Connectivity
+- **401 Unauthorized:** Double-check your API key and Ensure you are using the correct `base_url` for your provider.
+- **429 Too Many Requests:** You have hit your provider's rate limit. Seekr has built-in exponential backoff, but you may need to wait.
+- **TLS/SSL Errors:** Ensure your system certificates are up to date. Seekr uses `rustls` for secure communication.
+
+### 🖥️ Performance & UI
+- **Large Result Lag:** If tools output massive amounts of data (>1MB), the TUI may stutter. Try to limit output in your custom scripts.
+- **Flickering on Resize:** This is a known limitation of TUI rendering during active terminal streams. Avoid rapid resizing while the agent is "thinking."
+
+---
+
 ## Configuration
 
 **seekr** stores its configuration in `~/.config/seekr/config.toml`. You can manually edit this file or use the built-in setup wizard.

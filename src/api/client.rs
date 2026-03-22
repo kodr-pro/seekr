@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use reqwest::{Client, StatusCode};
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tokio::time::sleep;
 
 use super::anthropic::AnthropicProvider;
 use super::openai::OpenAiProvider;
@@ -10,6 +9,7 @@ use super::provider::Provider;
 use super::stream::StreamEvent;
 use super::types::*;
 use crate::config::AppConfig;
+use crate::errors::ApiError;
 
 use std::sync::Arc;
 
@@ -48,7 +48,10 @@ impl ApiClient {
         }
     }
 
-    async fn send_request_with_retry<F>(&self, mut request_builder: F) -> Result<reqwest::Response>
+    async fn send_request_with_retry<F>(
+        &self,
+        mut request_builder: F,
+    ) -> Result<reqwest::Response, ApiError>
     where
         F: FnMut() -> reqwest::RequestBuilder,
     {
@@ -65,25 +68,27 @@ impl ApiClient {
                     let status = response.status();
                     if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
                         let error_body = response.text().await.unwrap_or_default();
-                        last_error = Some(anyhow::anyhow!("HTTP {}: {}", status, error_body));
+                        last_error = Some(ApiError::HttpStatus(status, error_body));
                     } else {
                         let body = response
                             .text()
                             .await
                             .unwrap_or_else(|_| "Failed to read error body".to_string());
-                        anyhow::bail!("API request failed ({}): {}", status, body);
+                        return Err(ApiError::HttpStatus(status, body));
                     }
                 }
                 Err(e) => {
-                    last_error = Some(e.into());
+                    last_error = Some(ApiError::Http(e));
                 }
             }
             if attempt < MAX_RETRIES {
                 let delay = BASE_DELAY_MS * 2u64.pow(attempt);
-                sleep(Duration::from_millis(delay)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
             }
         }
-        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error after retries")))
+        Err(last_error.unwrap_or_else(|| {
+            ApiError::InvalidProvider("Maximum retries exceeded with no recorded error".to_string())
+        }))
     }
 
     /// Sends a chat completion request and returns a receiver for the stream of events.
@@ -92,7 +97,7 @@ impl ApiClient {
         messages: Vec<ChatMessage>,
         model: &str,
         tools: Option<Vec<ToolDefinition>>,
-    ) -> Result<mpsc::UnboundedReceiver<StreamEvent>> {
+    ) -> Result<mpsc::UnboundedReceiver<StreamEvent>, ApiError> {
         let is_anthropic = self.provider.name() == "Anthropic";
 
         let request = ChatCompletionRequest {
@@ -151,7 +156,11 @@ impl ApiClient {
     } // chat_completion_stream
 
     /// Sends a non-streaming chat completion request and returns the full response content.
-    pub async fn chat_completion(&self, messages: Vec<ChatMessage>, model: &str) -> Result<String> {
+    pub async fn chat_completion(
+        &self,
+        messages: Vec<ChatMessage>,
+        model: &str,
+    ) -> Result<String, ApiError> {
         let is_anthropic = self.provider.name() == "Anthropic";
 
         let request = ChatCompletionRequest {
@@ -184,8 +193,7 @@ impl ApiClient {
             .headers(headers)
             .json(&request_body)
             .send()
-            .await
-            .context("Failed to send request to API")?;
+            .await?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -193,36 +201,37 @@ impl ApiClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Failed to read error body".to_string());
-            anyhow::bail!("API request failed ({}): {}", status, body);
+            return Err(ApiError::HttpStatus(status, body));
         }
 
-        let result: serde_json::Value = response
-            .json()
-            .await
-            .context("Failed to parse JSON response")?;
+        let result: serde_json::Value = response.json().await?;
 
         if is_anthropic {
             if let Some(content_array) = result["content"].as_array() {
                 for content_block in content_array {
-                    if content_block["type"] == "text" {
-                        if let Some(text) = content_block["text"].as_str() {
-                            return Ok(text.to_string());
-                        }
+                    if content_block["type"] == "text"
+                        && let Some(text) = content_block["text"].as_str()
+                    {
+                        return Ok(text.to_string());
                     }
                 }
             }
-            anyhow::bail!("No text content in Anthropic API response")
+            Err(ApiError::MissingContent(
+                "Anthropic response content".to_string(),
+            ))
         } else {
             if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
                 Ok(content.to_string())
             } else {
-                anyhow::bail!("No content in API response")
+                Err(ApiError::MissingContent(
+                    "OpenAI message content".to_string(),
+                ))
             }
         }
     } // chat_completion
 
     /// Retrieves a list of available models from the provider.
-    pub async fn list_models(&self) -> Result<Vec<String>> {
+    pub async fn list_models(&self) -> Result<Vec<String>, ApiError> {
         let is_anthropic = self.provider.name() == "Anthropic";
 
         if is_anthropic {
@@ -239,22 +248,16 @@ impl ApiClient {
         } else {
             let url = format!("{}/models", self.base_url);
             let headers = self.provider.auth_headers(&self.api_key);
-            let response = self
-                .http
-                .get(&url)
-                .headers(headers)
-                .send()
-                .await
-                .context("Failed to fetch models from API")?;
+            let response = self.http.get(&url).headers(headers).send().await?;
 
             if !response.status().is_success() {
-                anyhow::bail!("Failed to fetch models: {}", response.status());
+                return Err(ApiError::HttpStatus(
+                    response.status(),
+                    "Failed to list models".to_string(),
+                ));
             }
 
-            let list: ModelList = response
-                .json()
-                .await
-                .context("Failed to parse model list")?;
+            let list: ModelList = response.json().await?;
             Ok(list.data.into_iter().map(|m| m.id).collect())
         }
     } // list_models
