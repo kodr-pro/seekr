@@ -16,6 +16,7 @@ pub async fn run_diagnostics() -> Result<()> {
 
     let checks = vec![
         ("Configuration", check_config()),
+        ("Keyring Status", check_keyring()),
         ("API Connectivity", check_api().await),
         ("Working Directory", check_working_dir()),
         ("System Tools", check_system_tools()),
@@ -144,6 +145,25 @@ fn check_working_dir() -> CheckResult {
         )),
     }
 } // check_working_dir
+
+fn check_keyring() -> CheckResult {
+    let test_entry = "seekr_doctor_test";
+    match keyring::Entry::new("seekr", test_entry) {
+        Ok(entry) => {
+            match entry.set_password("test_password") {
+                Ok(_) => {
+                    let _ = entry.delete_credential();
+                    CheckResult::Ok("OS Keyring is accessible and working correctly.".to_string())
+                }
+                Err(e) => CheckResult::Error(format!(
+                    "Keyring found but cannot set password: {}. Your system might need a running secret service (e.g. gnome-keyring or kwallet).",
+                    e
+                )),
+            }
+        }
+        Err(e) => CheckResult::Error(format!("Failed to initialize keyring: {}", e)),
+    }
+} // check_keyring
 
 fn check_system_tools() -> CheckResult {
     let mut missing = Vec::new();

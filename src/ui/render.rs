@@ -71,6 +71,7 @@ fn render_main(frame: &mut Frame, area: Rect, app: &mut App) {
             Some("Shell input required"),
         ),
         InputMode::Normal => (None, None),
+        _ => (None, None),
     };
 
     ui::input::render_input(

@@ -292,3 +292,25 @@ async fn test_streaming_content_preservation() {
         app.chat_entries
     );
 }
+
+#[tokio::test]
+async fn test_keyring_debug() {
+    use keyring::Entry;
+    let providers = vec!["deepseek", "DeepSeek", "openai", "OpenAI", "anthropic", "Anthropic"];
+    println!("--- KEYRING DEBUG ---");
+    for p in providers {
+        let entry_name = format!("seekr_api_key_{}", p);
+        if let Ok(entry) = Entry::new("seekr", &entry_name) {
+            match entry.get_password() {
+                Ok(pw) => println!("Entry {}: Found (len: {})", entry_name, pw.len()),
+                Err(e) => println!("Entry {}: Not found or error ({:?})", entry_name, e),
+            }
+        }
+    }
+    
+    // Test normalization match
+    let p_name = "DeepSeek";
+    let normalized = p_name.to_lowercase().replace(" ", "_");
+    println!("'{}' normalized is '{}'", p_name, normalized);
+    println!("---------------------");
+}

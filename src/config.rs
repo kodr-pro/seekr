@@ -10,6 +10,8 @@ pub struct ProviderConfig {
     pub model: String,
     #[serde(default)]
     pub timeout: Option<u64>,
+    #[serde(default)]
+    pub key_is_plaintext: bool,
 }
 
 impl Default for ProviderConfig {
@@ -20,6 +22,7 @@ impl Default for ProviderConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             model: "gpt-4o".to_string(),
             timeout: None,
+            key_is_plaintext: false,
         }
     }
 }
@@ -149,6 +152,7 @@ impl AppConfig {
                         base_url: old.api.base_url,
                         model: old.api.model,
                         timeout: None,
+                        key_is_plaintext: false,
                     }],
                     active_provider: 0,
                     agent: old.agent,
@@ -165,18 +169,33 @@ impl AppConfig {
 
         // Load keys from keyring (or env override)
         for provider in &mut config.providers {
-            let env_key = format!(
-                "SEEKR_API_KEY_{}",
-                provider.name.to_uppercase().replace(" ", "_")
-            );
+            let normalized_name = provider.name.to_lowercase().replace(" ", "_");
+            let env_key = format!("SEEKR_API_KEY_{}", normalized_name.to_uppercase());
+
             if let Ok(env_val) = std::env::var("SEEKR_API_KEY").or_else(|_| std::env::var(&env_key))
             {
                 provider.key = env_val;
-            } else if provider.key.is_empty() {
-                let entry_name = format!("seekr_api_key_{}", provider.name);
-                if let Ok(entry) = keyring::Entry::new("seekr", &entry_name) {
-                    if let Ok(password) = entry.get_password() {
-                        provider.key = password;
+            } else if provider.key.is_empty() || !provider.key_is_plaintext {
+                // If the key in TOML is empty, OR we are not in plaintext mode, try keyring
+                let entry_name = format!("seekr_api_key_{}", normalized_name);
+                match keyring::Entry::new("seekr", &entry_name) {
+                    Ok(entry) => {
+                        match entry.get_password() {
+                            Ok(password) => {
+                                if !password.is_empty() {
+                                    provider.key = password;
+                                }
+                            }
+                            Err(e) => {
+                                // Only log error if it's not "No password found"
+                                if !format!("{:?}", e).contains("NoEntry") && !format!("{:?}", e).contains("NotFound") {
+                                    tracing::warn!("Keyring error for {}: {}", entry_name, e);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize keyring entry for {}: {}", entry_name, e);
                     }
                 }
             }
@@ -193,19 +212,46 @@ impl AppConfig {
             })?;
         }
 
-        // Clone config to wipe out keys before saving to disk
+        let mut keyring_errors = Vec::new();
         let mut saveable_config = self.clone();
-        for provider in &mut saveable_config.providers {
-            // Save to keyring
-            let entry_name = format!("seekr_api_key_{}", provider.name);
-            if let Ok(entry) = keyring::Entry::new("seekr", &entry_name) {
+
+        for (i, provider) in self.providers.iter().enumerate() {
+            let normalized_name = provider.name.to_lowercase().replace(" ", "_");
+            let entry_name = format!("seekr_api_key_{}", normalized_name);
+
+            if !provider.key_is_plaintext && !provider.key.is_empty() {
+                match keyring::Entry::new("seekr", &entry_name) {
+                    Ok(entry) => {
+                        match entry.set_password(&provider.key) {
+                            Ok(_) => {
+                                saveable_config.providers[i].key = String::new();
+                                saveable_config.providers[i].key_is_plaintext = false;
+                            }
+                            Err(e) => {
+                                keyring_errors.push(format!("{}: {}", entry_name, e));
+                                saveable_config.providers[i].key = provider.key.clone();
+                                saveable_config.providers[i].key_is_plaintext = true;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        keyring_errors.push(format!("{}: {}", entry_name, e));
+                        saveable_config.providers[i].key = provider.key.clone();
+                        saveable_config.providers[i].key_is_plaintext = true;
+                    }
+                }
+            } else {
+                // Manually explicitly set to plaintext or key is empty
+                saveable_config.providers[i].key = provider.key.clone();
+                // If it's not empty, it's definitely plaintext now
                 if !provider.key.is_empty() {
-                    let _ = entry.set_password(&provider.key);
+                    saveable_config.providers[i].key_is_plaintext = true;
                 }
             }
+        }
 
-            // Wipe from TOML file
-            provider.key = String::new();
+        if !keyring_errors.is_empty() {
+            tracing::error!("Keyring issues, some keys saved in plaintext: {}", keyring_errors.join(", "));
         }
 
         let contents =
