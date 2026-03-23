@@ -52,6 +52,10 @@ pub enum AgentEvent {
         id: String,
         summary: String,
     },
+    ProviderStatus {
+        index: usize,
+        connected: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +69,7 @@ pub enum AgentCommand {
     AnswerNow,
     Shutdown,
     ContextSummarized { id: String, summary: String },
+    CheckConnection,
 }
 
 pub struct AgentLoop {
@@ -174,12 +179,69 @@ impl AgentLoop {
                             }
                         }
                         AgentCommand::Shutdown => break,
+                        AgentCommand::CheckConnection => {
+                            self.run_connection_check().await;
+                        }
                         _ => {}
                     }
                 }
             }
         }
     } // run
+
+    async fn run_connection_check(&mut self) {
+        let registry = self.session.tool_registry.as_ref();
+        let tool_defs = registry.map(|reg| tools::all_tool_definitions(reg));
+
+        // 1. Check current provider (immediate feedback for the UI "light")
+        let res = self
+            .client
+            .chat_completion_stream(
+                vec![ChatMessage::user("connection_check")],
+                &self.config.current_provider().model,
+                tool_defs.clone(),
+            )
+            .await;
+
+        self.event_tx
+            .send(AgentEvent::ProviderStatus {
+                index: self.config.active_provider,
+                connected: res.is_ok(),
+            })
+            .ok();
+
+        // 2. Check other providers in the background
+        for (i, provider) in self.config.providers.iter().enumerate() {
+            if i == self.config.active_provider {
+                continue;
+            }
+            if provider.key.is_empty() {
+                self.event_tx
+                    .send(AgentEvent::ProviderStatus {
+                        index: i,
+                        connected: false,
+                    })
+                    .ok();
+                continue;
+            }
+
+            let client = ApiClient::new_for_provider(&self.config, provider);
+            let tx = self.event_tx.clone();
+            let model = provider.model.clone();
+            let td = tool_defs.clone();
+
+            tokio::spawn(async move {
+                let res = client
+                    .chat_completion_stream(vec![ChatMessage::user("connection_check")], &model, td)
+                    .await;
+                tx.send(AgentEvent::ProviderStatus {
+                    index: i,
+                    connected: res.is_ok(),
+                })
+                .ok();
+            });
+        }
+    } // run_connection_check
 
     async fn run_agent_turn(&mut self) {
         'turn: loop {
@@ -255,7 +317,15 @@ impl AgentLoop {
                 .await;
 
             let mut stream_rx = match stream_result {
-                Ok(rx) => rx,
+                Ok(rx) => {
+                    self.event_tx
+                        .send(AgentEvent::ProviderStatus {
+                            index: self.config.active_provider,
+                            connected: true,
+                        })
+                        .ok();
+                    rx
+                }
                 Err(e) => {
                     self.event_tx.send(AgentEvent::Error(e.into())).ok();
                     break;

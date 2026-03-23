@@ -310,9 +310,11 @@ impl App {
         match agent_res {
             Ok(agent) => {
                 tokio::spawn(agent.run());
-                self.agent.cmd_tx = Some(cmd_tx);
+                self.agent.cmd_tx = Some(cmd_tx.clone());
                 self.agent.event_rx = Some(evt_rx);
-                self.agent.connected = true;
+                self.agent.provider_connected =
+                    vec![false; self.config.as_ref().unwrap().providers.len()];
+                cmd_tx.send(AgentCommand::CheckConnection).ok();
             }
             Err(e) => {
                 self.chat_entries
@@ -430,7 +432,23 @@ impl App {
 
         for event in events {
             match event {
+                AgentEvent::ProviderStatus { index, connected } => {
+                    if self.agent.provider_connected.len() <= index {
+                        self.agent.provider_connected.resize(index + 1, false);
+                    }
+                    self.agent.provider_connected[index] = connected;
+
+                    // Update main connected light if this is the active provider
+                    if self
+                        .config
+                        .as_ref()
+                        .is_some_and(|c| c.active_provider == index)
+                    {
+                        self.agent.connected = connected;
+                    }
+                }
                 AgentEvent::ContentDelta(text) => {
+                    self.agent.connected = true; // Also treat first delta as connected
                     self.agent.streaming_content.push_str(&text);
                     self.update_streaming_entry();
                     if !self.ui.user_scrolled {

@@ -141,11 +141,11 @@ fn render_api_key_step(frame: &mut Frame, area: Rect, state: &SetupState) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "  > Keys are securely stored in the OS Keyring and NOT in config.toml",
+            "  > Keys are stored in config.toml (secured with chmod 600)",
             Style::default().fg(Color::Cyan),
         )),
         Line::from(Span::styled(
-            "  > For headless usage, set SEEKR_API_KEY=<key> or SEEKR_API_KEY_OPENAI=<key>",
+            "  > You can also use environment variables like DEEPSEEK_API_KEY",
             Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),

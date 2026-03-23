@@ -28,8 +28,14 @@ pub enum ConfigError {
     #[error("TOML error: {0}")]
     Toml(#[from] toml::de::Error),
 
+    #[error("TOML serialization error: {0}")]
+    Serialization(#[from] toml::ser::Error),
+
     #[error("Keyring error: {0}")]
     Keyring(String),
+
+    #[error("Keyring error: {0}. Please run this command to set the key manually:\n\n  {1}")]
+    KeyringWithCommand(String, String),
 
     #[error("Migration failed: {0}")]
     MigrationFailed(String),

@@ -167,42 +167,60 @@ impl AppConfig {
             }
         };
 
-        // Load keys from keyring (or env override)
+        // Load keys from environment or keyring (legacy fallback)
         for provider in &mut config.providers {
-            let normalized_name = provider.name.to_lowercase().replace(" ", "_");
-            let env_key = format!("SEEKR_API_KEY_{}", normalized_name.to_uppercase());
-
-            if let Ok(env_val) = std::env::var("SEEKR_API_KEY").or_else(|_| std::env::var(&env_key))
+            // 1. Check Standard Env Var: [PROVIDER]_API_KEY (e.g., DEEPSEEK_API_KEY)
+            let std_env_key = format!(
+                "{}_API_KEY",
+                provider
+                    .name
+                    .to_uppercase()
+                    .replace(" ", "_")
+                    .replace("-", "_")
+            );
+            if let Some(val) = std::env::var(&std_env_key)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
             {
-                provider.key = env_val;
-            } else if provider.key.is_empty() {
-                // If the key in TOML is empty, always try keyring
+                tracing::debug!(
+                    "Using environment variable {} for provider: {}",
+                    std_env_key,
+                    provider.name
+                );
+                provider.key = val;
+                continue;
+            }
+
+            // 2. Check Generic Env Var: SEEKR_API_KEY (Legacy/Override)
+            if let Some(val) = std::env::var("SEEKR_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+            {
+                tracing::debug!(
+                    "Using environment variable SEEKR_API_KEY for provider: {}",
+                    provider.name
+                );
+                provider.key = val;
+                continue;
+            }
+
+            // 3. Fallback to Keyring ONLY if key is still empty (Legacy Support)
+            if provider.key.is_empty() {
+                let normalized_name = provider
+                    .name
+                    .to_lowercase()
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                    .collect::<String>();
                 let entry_name = format!("seekr_api_key_{}", normalized_name);
-                match keyring::Entry::new("seekr", &entry_name) {
-                    Ok(entry) => {
-                        match entry.get_password() {
-                            Ok(password) => {
-                                if !password.is_empty() {
-                                    provider.key = password;
-                                }
-                            }
-                            Err(e) => {
-                                // Only log error if it's not "No password found"
-                                if !format!("{:?}", e).contains("NoEntry")
-                                    && !format!("{:?}", e).contains("NotFound")
-                                {
-                                    tracing::warn!("Keyring error for {}: {}", entry_name, e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to initialize keyring entry for {}: {}",
-                            entry_name,
-                            e
-                        );
-                    }
+
+                if let Some(password) = keyring::Entry::new("seekr", &entry_name)
+                    .and_then(|entry| entry.get_password())
+                    .ok()
+                    .filter(|p| !p.trim().is_empty())
+                {
+                    provider.key = password;
+                    tracing::debug!("Loaded legacy key from keyring for {}", entry_name);
                 }
             }
         }
@@ -216,43 +234,20 @@ impl AppConfig {
             std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
         }
 
-        let mut keyring_errors = Vec::new();
-        let mut saveable_config = self.clone();
-
-        for (i, provider) in self.providers.iter().enumerate() {
-            let normalized_name = provider.name.to_lowercase().replace(" ", "_");
-            let entry_name = format!("seekr_api_key_{}", normalized_name);
-
-            if !provider.key.is_empty() {
-                match keyring::Entry::new("seekr", &entry_name) {
-                    Ok(entry) => match entry.set_password(&provider.key) {
-                        Ok(_) => {
-                            saveable_config.providers[i].key = String::new();
-                        }
-                        Err(e) => {
-                            keyring_errors.push(format!("{}: {}", entry_name, e));
-                            // We DO NOT save it to TOML if it failed.
-                            // The next load will simply show it as empty or use Env.
-                            saveable_config.providers[i].key = String::new();
-                        }
-                    },
-                    Err(e) => {
-                        keyring_errors.push(format!("{}: {}", entry_name, e));
-                        saveable_config.providers[i].key = String::new();
-                    }
-                }
-            } else {
-                saveable_config.providers[i].key = String::new();
-            }
-        }
-
-        if !keyring_errors.is_empty() {
-            return Err(ConfigError::Keyring(keyring_errors.join(", ")).into());
-        }
-
-        let contents = toml::to_string_pretty(&saveable_config)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+        let contents = toml::to_string_pretty(self).map_err(ConfigError::Serialization)?;
         std::fs::write(&path, contents).map_err(ConfigError::Io)?;
+
+        // Set file permissions to 600 (read/write by owner only) on Unix-like systems
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path)
+                .map_err(ConfigError::Io)?
+                .permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&path, perms).map_err(ConfigError::Io)?;
+        }
+
         Ok(())
     } // save
 
