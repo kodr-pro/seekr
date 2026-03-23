@@ -310,8 +310,10 @@ impl App {
         match agent_res {
             Ok(agent) => {
                 tokio::spawn(agent.run());
-                self.agent.cmd_tx = Some(cmd_tx);
+                self.agent.cmd_tx = Some(cmd_tx.clone());
                 self.agent.event_rx = Some(evt_rx);
+                // Trigger an initial connection check to update the UI "connected" light
+                cmd_tx.send(AgentCommand::CheckConnection).ok();
             }
             Err(e) => {
                 self.chat_entries

@@ -169,27 +169,42 @@ impl AppConfig {
 
         // Load keys from keyring (or env override)
         for provider in &mut config.providers {
-            let normalized_name = provider.name.to_lowercase().replace(" ", "_");
-            let env_key = format!("SEEKR_API_KEY_{}", normalized_name.to_uppercase());
+            let normalized_name = provider.name.to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>();
+            let env_key = format!("SEEKR_API_KEY_{}", normalized_name.to_uppercase().replace("-", "_"));
 
-            if let Ok(env_val) = std::env::var("SEEKR_API_KEY").or_else(|_| std::env::var(&env_key))
-            {
-                provider.key = env_val;
-            } else if provider.key.is_empty() {
+            let env_val = std::env::var("SEEKR_API_KEY").or_else(|_| std::env::var(&env_key)).ok();
+            
+            if let Some(val) = env_val {
+                if !val.trim().is_empty() {
+                    tracing::debug!("Using environment variable for API key for provider: {}", provider.name);
+                    provider.key = val;
+                }
+            }
+            
+            if provider.key.is_empty() {
                 // If the key in TOML is empty, always try keyring
                 let entry_name = format!("seekr_api_key_{}", normalized_name);
+                tracing::debug!("Attempting to load API key from keyring for entry: {}", entry_name);
                 match keyring::Entry::new("seekr", &entry_name) {
                     Ok(entry) => {
                         match entry.get_password() {
                             Ok(password) => {
-                                if !password.is_empty() {
+                                if !password.trim().is_empty() {
                                     provider.key = password;
+                                    tracing::debug!("Successfully loaded key from keyring for {}", entry_name);
+                                } else {
+                                    tracing::warn!("Keyring entry {} found but password was empty or just whitespace", entry_name);
                                 }
                             }
                             Err(e) => {
                                 // Only log error if it's not "No password found"
-                                if !format!("{:?}", e).contains("NoEntry")
-                                    && !format!("{:?}", e).contains("NotFound")
+                                let err_str = format!("{:?}", e);
+                                if !err_str.contains("NoEntry")
+                                    && !err_str.contains("NotFound")
+                                    && !err_str.contains("No password found")
                                 {
                                     tracing::warn!("Keyring error for {}: {}", entry_name, e);
                                 }
@@ -219,7 +234,10 @@ impl AppConfig {
         let mut saveable_config = self.clone();
 
         for (i, provider) in self.providers.iter().enumerate() {
-            let normalized_name = provider.name.to_lowercase().replace(" ", "_");
+            let normalized_name = provider.name.to_lowercase()
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>();
             let entry_name = format!("seekr_api_key_{}", normalized_name);
 
             if !provider.key.is_empty() {

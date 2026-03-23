@@ -66,6 +66,7 @@ pub enum AgentCommand {
     AnswerNow,
     Shutdown,
     ContextSummarized { id: String, summary: String },
+    CheckConnection,
 }
 
 pub struct AgentLoop {
@@ -175,12 +176,40 @@ impl AgentLoop {
                             }
                         }
                         AgentCommand::Shutdown => break,
+                        AgentCommand::CheckConnection => {
+                            self.run_connection_check().await;
+                        }
                         _ => {}
                     }
                 }
             }
         }
     } // run
+
+    async fn run_connection_check(&mut self) {
+        let registry = match self.session.tool_registry.as_ref() {
+            Some(reg) => reg,
+            None => return,
+        };
+        let tool_defs = tools::all_tool_definitions(registry);
+        
+        // We use a dummy message to check connection with the provider
+        let res = self.client.chat_completion_stream(
+            vec![ChatMessage::user("connection_check")],
+            &self.config.current_provider().model,
+            Some(tool_defs),
+        ).await;
+
+        match res {
+            Ok(_) => {
+                self.event_tx.send(AgentEvent::Connected).ok();
+            }
+            Err(e) => {
+                // If it's a 401, we want to know, but don't break the loop
+                tracing::warn!("Startup connection check failed: {}", e);
+            }
+        }
+    } // run_connection_check
 
     async fn run_agent_turn(&mut self) {
         'turn: loop {
