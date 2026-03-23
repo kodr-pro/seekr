@@ -39,6 +39,7 @@ pub struct AgentState {
     pub total_tokens: u32,
     pub iteration: u32,
     pub connected: bool,
+    pub provider_connected: Vec<bool>,
     pub awaiting_approval: bool,
     pub streaming_content: String,
     pub streaming_reasoning: String,

@@ -275,17 +275,39 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(i, p)| {
             let is_active = i == active_idx;
-            let prefix = if is_active { "✔ " } else { "  " };
-            let storage = if !p.key.is_empty() {
-                "[Secure]"
+            let is_connected = app
+                .agent
+                .provider_connected
+                .get(i)
+                .copied()
+                .unwrap_or(false);
+
+            let status_dot = if is_connected {
+                Span::styled("● ", Style::default().fg(Color::Green))
             } else {
-                "[Empty]"
+                Span::styled("○ ", Style::default().fg(Color::Red))
             };
-            let content = format!(
-                "{}{} ({}) - {} {}",
-                prefix, p.name, p.model, p.base_url, storage
-            );
-            ListItem::new(content)
+
+            let prefix = if is_active { "✔ " } else { "  " };
+            let name_style = if is_active {
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            let line = Line::from(vec![
+                status_dot,
+                Span::styled(format!("{}{}", prefix, p.name), name_style),
+                Span::raw(format!(" ({})", p.model)),
+                Span::styled(
+                    format!(" - {}", p.base_url),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+
+            ListItem::new(line)
         })
         .collect();
 

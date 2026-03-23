@@ -28,6 +28,9 @@ pub enum ConfigError {
     #[error("TOML error: {0}")]
     Toml(#[from] toml::de::Error),
 
+    #[error("TOML serialization error: {0}")]
+    Serialization(#[from] toml::ser::Error),
+
     #[error("Keyring error: {0}")]
     Keyring(String),
 

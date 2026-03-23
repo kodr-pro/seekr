@@ -167,57 +167,60 @@ impl AppConfig {
             }
         };
 
-        // Load keys from keyring (or env override)
+        // Load keys from environment or keyring (legacy fallback)
         for provider in &mut config.providers {
-            let normalized_name = provider.name.to_lowercase()
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-                .collect::<String>();
-            let env_key = format!("SEEKR_API_KEY_{}", normalized_name.to_uppercase().replace("-", "_"));
-
-            let env_val = std::env::var("SEEKR_API_KEY").or_else(|_| std::env::var(&env_key)).ok();
-            
-            if let Some(val) = env_val {
-                if !val.trim().is_empty() {
-                    tracing::debug!("Using environment variable for API key for provider: {}", provider.name);
-                    provider.key = val;
-                }
+            // 1. Check Standard Env Var: [PROVIDER]_API_KEY (e.g., DEEPSEEK_API_KEY)
+            let std_env_key = format!(
+                "{}_API_KEY",
+                provider
+                    .name
+                    .to_uppercase()
+                    .replace(" ", "_")
+                    .replace("-", "_")
+            );
+            if let Some(val) = std::env::var(&std_env_key)
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+            {
+                tracing::debug!(
+                    "Using environment variable {} for provider: {}",
+                    std_env_key,
+                    provider.name
+                );
+                provider.key = val;
+                continue;
             }
-            
+
+            // 2. Check Generic Env Var: SEEKR_API_KEY (Legacy/Override)
+            if let Some(val) = std::env::var("SEEKR_API_KEY")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+            {
+                tracing::debug!(
+                    "Using environment variable SEEKR_API_KEY for provider: {}",
+                    provider.name
+                );
+                provider.key = val;
+                continue;
+            }
+
+            // 3. Fallback to Keyring ONLY if key is still empty (Legacy Support)
             if provider.key.is_empty() {
-                // If the key in TOML is empty, always try keyring
+                let normalized_name = provider
+                    .name
+                    .to_lowercase()
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                    .collect::<String>();
                 let entry_name = format!("seekr_api_key_{}", normalized_name);
-                tracing::debug!("Attempting to load API key from keyring for entry: {}", entry_name);
-                match keyring::Entry::new("seekr", &entry_name) {
-                    Ok(entry) => {
-                        match entry.get_password() {
-                            Ok(password) => {
-                                if !password.trim().is_empty() {
-                                    provider.key = password;
-                                    tracing::debug!("Successfully loaded key from keyring for {}", entry_name);
-                                } else {
-                                    tracing::warn!("Keyring entry {} found but password was empty or just whitespace", entry_name);
-                                }
-                            }
-                            Err(e) => {
-                                // Only log error if it's not "No password found"
-                                let err_str = format!("{:?}", e);
-                                if !err_str.contains("NoEntry")
-                                    && !err_str.contains("NotFound")
-                                    && !err_str.contains("No password found")
-                                {
-                                    tracing::warn!("Keyring error for {}: {}", entry_name, e);
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to initialize keyring entry for {}: {}",
-                            entry_name,
-                            e
-                        );
-                    }
+
+                if let Some(password) = keyring::Entry::new("seekr", &entry_name)
+                    .and_then(|entry| entry.get_password())
+                    .ok()
+                    .filter(|p| !p.trim().is_empty())
+                {
+                    provider.key = password;
+                    tracing::debug!("Loaded legacy key from keyring for {}", entry_name);
                 }
             }
         }
@@ -231,61 +234,20 @@ impl AppConfig {
             std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
         }
 
-        let mut saveable_config = self.clone();
+        let contents = toml::to_string_pretty(self).map_err(ConfigError::Serialization)?;
+        std::fs::write(&path, contents).map_err(ConfigError::Io)?;
 
-        for (i, provider) in self.providers.iter().enumerate() {
-            let normalized_name = provider.name.to_lowercase()
-                .chars()
-                .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
-                .collect::<String>();
-            let entry_name = format!("seekr_api_key_{}", normalized_name);
-
-            if !provider.key.is_empty() {
-                match keyring::Entry::new("seekr", &entry_name) {
-                    Ok(entry) => {
-                        match entry.set_password(&provider.key) {
-                            Ok(_) => {
-                                // Verify persistence immediately
-                                match entry.get_password() {
-                                    Ok(saved_key) if saved_key == provider.key => {
-                                        saveable_config.providers[i].key = String::new();
-                                    }
-                                    _ => {
-                                        let cmd = Self::get_keyring_manual_command(&entry_name);
-                                        return Err(ConfigError::KeyringWithCommand(
-                                            format!("Verification failed for {}. Key was not persisted correctly", entry_name),
-                                            cmd,
-                                        ).into());
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                let cmd = Self::get_keyring_manual_command(&entry_name);
-                                return Err(ConfigError::KeyringWithCommand(
-                                    format!("{}: {}", entry_name, e),
-                                    cmd,
-                                )
-                                .into());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        let cmd = Self::get_keyring_manual_command(&entry_name);
-                        return Err(ConfigError::KeyringWithCommand(
-                            format!("{}: {}", entry_name, e),
-                            cmd,
-                        )
-                        .into());
-                    }
-                }
-            } else {
-                saveable_config.providers[i].key = String::new();
-            }
+        // Set file permissions to 600 (read/write by owner only) on Unix-like systems
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path)
+                .map_err(ConfigError::Io)?
+                .permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&path, perms).map_err(ConfigError::Io)?;
         }
 
-        let contents = toml::to_string_pretty(&saveable_config)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
-        std::fs::write(&path, contents).map_err(ConfigError::Io)?;
         Ok(())
     } // save
 
@@ -303,25 +265,5 @@ impl AppConfig {
         } else {
             "https://api.openai.com/v1".to_string()
         }
-    }
-
-    fn get_keyring_manual_command(entry_name: &str) -> String {
-        #[cfg(target_os = "linux")]
-        return format!(
-            "secret-tool store --label=\"Seekr API Key\" seekr {}",
-            entry_name
-        );
-        #[cfg(target_os = "macos")]
-        return format!(
-            "security add-generic-password -s \"seekr\" -a \"{}\" -w",
-            entry_name
-        );
-        #[cfg(target_os = "windows")]
-        return format!(
-            "cmdkey /generic:seekr /user:{} /pass:[YOUR_KEY]",
-            entry_name
-        );
-        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-        return "Manual keyring command not supported for this platform.".to_string();
     }
 } // impl AppConfig

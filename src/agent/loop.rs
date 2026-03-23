@@ -52,7 +52,10 @@ pub enum AgentEvent {
         id: String,
         summary: String,
     },
-    Connected,
+    ProviderStatus {
+        index: usize,
+        connected: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -187,27 +190,56 @@ impl AgentLoop {
     } // run
 
     async fn run_connection_check(&mut self) {
-        let registry = match self.session.tool_registry.as_ref() {
-            Some(reg) => reg,
-            None => return,
-        };
-        let tool_defs = tools::all_tool_definitions(registry);
-        
-        // We use a dummy message to check connection with the provider
-        let res = self.client.chat_completion_stream(
-            vec![ChatMessage::user("connection_check")],
-            &self.config.current_provider().model,
-            Some(tool_defs),
-        ).await;
+        let registry = self.session.tool_registry.as_ref();
+        let tool_defs = registry.map(|reg| tools::all_tool_definitions(reg));
 
-        match res {
-            Ok(_) => {
-                self.event_tx.send(AgentEvent::Connected).ok();
+        // 1. Check current provider (immediate feedback for the UI "light")
+        let res = self
+            .client
+            .chat_completion_stream(
+                vec![ChatMessage::user("connection_check")],
+                &self.config.current_provider().model,
+                tool_defs.clone(),
+            )
+            .await;
+
+        self.event_tx
+            .send(AgentEvent::ProviderStatus {
+                index: self.config.active_provider,
+                connected: res.is_ok(),
+            })
+            .ok();
+
+        // 2. Check other providers in the background
+        for (i, provider) in self.config.providers.iter().enumerate() {
+            if i == self.config.active_provider {
+                continue;
             }
-            Err(e) => {
-                // If it's a 401, we want to know, but don't break the loop
-                tracing::warn!("Startup connection check failed: {}", e);
+            if provider.key.is_empty() {
+                self.event_tx
+                    .send(AgentEvent::ProviderStatus {
+                        index: i,
+                        connected: false,
+                    })
+                    .ok();
+                continue;
             }
+
+            let client = ApiClient::new_for_provider(&self.config, provider);
+            let tx = self.event_tx.clone();
+            let model = provider.model.clone();
+            let td = tool_defs.clone();
+
+            tokio::spawn(async move {
+                let res = client
+                    .chat_completion_stream(vec![ChatMessage::user("connection_check")], &model, td)
+                    .await;
+                tx.send(AgentEvent::ProviderStatus {
+                    index: i,
+                    connected: res.is_ok(),
+                })
+                .ok();
+            });
         }
     } // run_connection_check
 
@@ -286,7 +318,12 @@ impl AgentLoop {
 
             let mut stream_rx = match stream_result {
                 Ok(rx) => {
-                    self.event_tx.send(AgentEvent::Connected).ok();
+                    self.event_tx
+                        .send(AgentEvent::ProviderStatus {
+                            index: self.config.active_provider,
+                            connected: true,
+                        })
+                        .ok();
                     rx
                 }
                 Err(e) => {

@@ -24,16 +24,20 @@ pub struct ApiClient {
 }
 
 impl ApiClient {
-    /// Creates a new `ApiClient` from the given application configuration.
     pub fn new(config: &AppConfig) -> Self {
-        let provider_cfg = config.current_provider();
+        Self::new_for_provider(config, config.current_provider())
+    }
+
+    pub fn new_for_provider(
+        _config: &AppConfig,
+        provider_cfg: &crate::config::ProviderConfig,
+    ) -> Self {
         let mut client_builder = Client::builder();
         if let Some(timeout_secs) = provider_cfg.timeout {
             client_builder = client_builder.timeout(Duration::from_secs(timeout_secs));
         }
         let http = client_builder.build().unwrap_or_else(|_| Client::new());
 
-        // Determine provider implementation based on base_url or explicit config
         let provider: Arc<dyn Provider> = if provider_cfg.base_url.contains("anthropic.com") {
             Arc::new(AnthropicProvider)
         } else {
@@ -326,8 +330,6 @@ mod tests {
         };
 
         // This should not panic when processing
-        // We can't test the private conversion logic directly,
-        // but we can at least ensure the struct works
         assert_eq!(msg.role, "user");
         assert_eq!(msg.content, None);
     }
