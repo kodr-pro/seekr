@@ -312,7 +312,6 @@ impl App {
                 tokio::spawn(agent.run());
                 self.agent.cmd_tx = Some(cmd_tx);
                 self.agent.event_rx = Some(evt_rx);
-                self.agent.connected = true;
             }
             Err(e) => {
                 self.chat_entries
@@ -430,7 +429,11 @@ impl App {
 
         for event in events {
             match event {
+                AgentEvent::Connected => {
+                    self.agent.connected = true;
+                }
                 AgentEvent::ContentDelta(text) => {
+                    self.agent.connected = true; // Also treat first delta as connected
                     self.agent.streaming_content.push_str(&text);
                     self.update_streaming_entry();
                     if !self.ui.user_scrolled {

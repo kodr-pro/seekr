@@ -216,7 +216,6 @@ impl AppConfig {
             std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
         }
 
-        let mut keyring_errors = Vec::new();
         let mut saveable_config = self.clone();
 
         for (i, provider) in self.providers.iter().enumerate() {
@@ -225,29 +224,45 @@ impl AppConfig {
 
             if !provider.key.is_empty() {
                 match keyring::Entry::new("seekr", &entry_name) {
-                    Ok(entry) => match entry.set_password(&provider.key) {
-                        Ok(_) => {
-                            saveable_config.providers[i].key = String::new();
+                    Ok(entry) => {
+                        match entry.set_password(&provider.key) {
+                            Ok(_) => {
+                                // Verify persistence immediately
+                                match entry.get_password() {
+                                    Ok(saved_key) if saved_key == provider.key => {
+                                        saveable_config.providers[i].key = String::new();
+                                    }
+                                    _ => {
+                                        let cmd = Self::get_keyring_manual_command(&entry_name);
+                                        return Err(ConfigError::KeyringWithCommand(
+                                            format!("Verification failed for {}. Key was not persisted correctly", entry_name),
+                                            cmd,
+                                        ).into());
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let cmd = Self::get_keyring_manual_command(&entry_name);
+                                return Err(ConfigError::KeyringWithCommand(
+                                    format!("{}: {}", entry_name, e),
+                                    cmd,
+                                )
+                                .into());
+                            }
                         }
-                        Err(e) => {
-                            keyring_errors.push(format!("{}: {}", entry_name, e));
-                            // We DO NOT save it to TOML if it failed.
-                            // The next load will simply show it as empty or use Env.
-                            saveable_config.providers[i].key = String::new();
-                        }
-                    },
+                    }
                     Err(e) => {
-                        keyring_errors.push(format!("{}: {}", entry_name, e));
-                        saveable_config.providers[i].key = String::new();
+                        let cmd = Self::get_keyring_manual_command(&entry_name);
+                        return Err(ConfigError::KeyringWithCommand(
+                            format!("{}: {}", entry_name, e),
+                            cmd,
+                        )
+                        .into());
                     }
                 }
             } else {
                 saveable_config.providers[i].key = String::new();
             }
-        }
-
-        if !keyring_errors.is_empty() {
-            return Err(ConfigError::Keyring(keyring_errors.join(", ")).into());
         }
 
         let contents = toml::to_string_pretty(&saveable_config)
@@ -270,5 +285,25 @@ impl AppConfig {
         } else {
             "https://api.openai.com/v1".to_string()
         }
+    }
+
+    fn get_keyring_manual_command(entry_name: &str) -> String {
+        #[cfg(target_os = "linux")]
+        return format!(
+            "secret-tool store --label=\"Seekr API Key\" seekr {}",
+            entry_name
+        );
+        #[cfg(target_os = "macos")]
+        return format!(
+            "security add-generic-password -s \"seekr\" -a \"{}\" -w",
+            entry_name
+        );
+        #[cfg(target_os = "windows")]
+        return format!(
+            "cmdkey /generic:seekr /user:{} /pass:[YOUR_KEY]",
+            entry_name
+        );
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        return "Manual keyring command not supported for this platform.".to_string();
     }
 } // impl AppConfig

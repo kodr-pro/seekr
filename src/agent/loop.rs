@@ -52,6 +52,7 @@ pub enum AgentEvent {
         id: String,
         summary: String,
     },
+    Connected,
 }
 
 #[derive(Debug, Clone)]
@@ -255,7 +256,10 @@ impl AgentLoop {
                 .await;
 
             let mut stream_rx = match stream_result {
-                Ok(rx) => rx,
+                Ok(rx) => {
+                    self.event_tx.send(AgentEvent::Connected).ok();
+                    rx
+                }
                 Err(e) => {
                     self.event_tx.send(AgentEvent::Error(e.into())).ok();
                     break;

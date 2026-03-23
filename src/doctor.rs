@@ -81,7 +81,13 @@ fn check_config() -> CheckResult {
                 ))
             }
         }
-        Err(e) => CheckResult::Error(format!("Failed to parse config: {}", e)),
+        Err(e) => {
+            let mut msg = format!("Failed to parse config: {}", e);
+            if format!("{:?}", e).contains("Keyring") {
+                msg.push_str("\n    Tip: If your OS keyring is inaccessible, you can set the key via environment variable:\n    export SEEKR_API_KEY_OPENAI=your_key_here");
+            }
+            CheckResult::Error(msg)
+        }
     }
 } // check_config
 
@@ -154,12 +160,18 @@ fn check_keyring() -> CheckResult {
                 let _ = entry.delete_credential();
                 CheckResult::Ok("OS Keyring is accessible and working correctly.".to_string())
             }
-            Err(e) => CheckResult::Error(format!(
-                "Keyring found but cannot set password: {}. Your system might need a running secret service (e.g. gnome-keyring or kwallet).",
-                e
-            )),
+            Err(e) => {
+                let msg = format!(
+                    "Keyring found but cannot set password: {}. Your system might need a running secret service (e.g. gnome-keyring or kwallet).",
+                    e
+                );
+                CheckResult::Error(msg)
+            }
         },
-        Err(e) => CheckResult::Error(format!("Failed to initialize keyring: {}", e)),
+        Err(e) => CheckResult::Error(format!(
+            "Failed to initialize keyring: {}. Tip: You can skip the keyring by using environment variables like SEEKR_API_KEY.",
+            e
+        )),
     }
 } // check_keyring
 
