@@ -365,6 +365,7 @@ fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
         format!("Working Directory: {}", config.agent.working_directory),
         format!("Max Iterations: {}", config.agent.max_iterations),
         format!("Auto-approve Tools: {}", config.agent.auto_approve_tools),
+        format!("Enable AI Peer Review: {}", config.agent.enable_peer_review),
         format!("Theme: {}", config.ui.theme),
         format!("Show Reasoning: {}", config.ui.show_reasoning),
     ];

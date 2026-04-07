@@ -1,5 +1,5 @@
-pub fn build_system_prompt(working_directory: &str) -> String {
-    format!(
+pub fn build_system_prompt(working_directory: &str, enable_peer_review: bool) -> String {
+    let mut prompt = format!(
         r#"You are Seekr, an autonomous AI agent running in a terminal. You complete tasks by using tools available to you.
 
 ## CRITICAL: Plan before you act
@@ -44,5 +44,18 @@ pub fn build_system_prompt(working_directory: &str) -> String {
 - **Wrap Up Early.** If the core objective is met, finalize immediately. Do not perform redundant steps.
 
 Current working directory: {working_directory}"#
-    )
+    );
+
+    if enable_peer_review {
+        prompt.push_str(
+        r#"
+
+## Overarching Request Completion and AI Peer Review
+
+- When you have completely finished resolving the user's primary overarching request (e.g., "build a website", "fix this bug"), you MUST call the `submit_for_peer_review` tool BEFORE providing your final response.
+- This will trigger an AI Peer Review. Wait for the review to pass. If it fails, address the remaining issues listed in the review results and try again."#
+        );
+    }
+
+    prompt
 } // build_system_prompt

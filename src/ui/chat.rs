@@ -37,6 +37,9 @@ fn get_char_styles(vline: &VisualLine) -> Vec<Style> {
                 "[ERROR]" => Style::default()
                     .fg(Color::Rgb(255, 69, 0))
                     .add_modifier(Modifier::BOLD),
+                "[WARNING]" => Style::default()
+                    .fg(Color::Rgb(255, 165, 0))
+                    .add_modifier(Modifier::BOLD),
                 "[APPROVAL REQUIRED]" => Style::default()
                     .fg(Color::Rgb(255, 165, 0))
                     .add_modifier(Modifier::BOLD),

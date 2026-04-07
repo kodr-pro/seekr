@@ -2,6 +2,7 @@ pub mod file_edit;
 pub mod shell;
 pub mod task;
 pub mod web;
+pub mod review;
 
 use crate::api::types::ToolDefinition;
 use crate::tools::task::TaskManager;
@@ -260,6 +261,7 @@ impl Skill for CoreSkill {
             Arc::new(web::WebSearchTool),
             Arc::new(task::CreateTaskTool),
             Arc::new(task::UpdateTaskTool),
+            Arc::new(review::SubmitForPeerReviewTool),
         ]
     } // tools
 } // impl Skill for CoreSkill

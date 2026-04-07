@@ -1,22 +1,64 @@
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use seekr::{app, config};
+use seekr::daemon::server::start_server;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Start the background Seekr daemon
+    Daemon,
+    /// Run diagnostics
+    Doctor,
+    /// Start TUI from a previous session
+    Resume {
+        session_id: String,
+    },
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_logging();
     setup_panic_hook();
 
-    let args: Vec<String> = std::env::args().collect();
+    let cli = Cli::parse();
 
-    if args.len() >= 2 && args[1] == "doctor" {
-        return seekr::doctor::run_diagnostics().await;
+    match cli.command {
+        Some(Commands::Daemon) => {
+            println!("Starting Seekr daemon...");
+            return start_server().await;
+        }
+        Some(Commands::Doctor) => {
+            return seekr::doctor::run_diagnostics().await;
+        }
+        _ => {}
     }
 
-    let resume_id = if args.len() >= 3 && args[1] == "--resume" {
-        Some(args[2].clone())
-    } else {
-        None
+    let resume_id = match cli.command {
+        Some(Commands::Resume { ref session_id }) => Some(session_id.clone()),
+        _ => None,
     };
+
+    if matches!(cli.command, None | Some(Commands::Resume { .. })) {
+        let client = seekr::daemon::client::DaemonClient::new();
+        if !client.check_health().await {
+            println!("Daemon not reachable. Starting 'seekr daemon' in background...");
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = tokio::process::Command::new(exe)
+                    .arg("daemon")
+                    .spawn();
+                
+                // wait for it to boot
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
 
     let mut app = if config::AppConfig::exists() {
         match config::AppConfig::load() {

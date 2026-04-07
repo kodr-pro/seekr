@@ -1,18 +1,24 @@
-# Introduction
+# Introduction: The Asynchronous Agentic OS
 
 Welcome to the **seekr** documentation.
 
-**seekr** is an autonomous AI agent manager designed specifically for the terminal. Built with Rust, it provides a fast, reliable, and powerful interface for managing AI-driven tasks within your local development environment. While it is heavily optimized as a DeepSeek-first client, it features full OpenAPI integration, allowing you to seamlessly configure and use models from any compatible provider.
+**seekr** is a high-performance, background-first AI Agent Manager designed to transform your terminal into an autonomous operating system. Originally built as a DeepSeek-native client, seekr has evolved into a full-featured agentic platform that runs persistently in the background, executing long-running tasks while you work elsewhere.
+
+seekr brings "Jarvis-style" persistence to Linux via a client-server architecture, featuring a rugged Terminal UI (TUI) and a headless background daemon (`seekrd`) that communicates over a high-speed SSE (Server-Sent Events) interface.
 
 ## Why seekr?
 
+- **Persistent Daemon Architecture:** Launch the Seekr daemon to maintain a peristent agentic presence. Close the TUI anytime; your tasks continue to execute in the background.
+- **Asynchronous Task Execution:** Long-running shell commands, web scrapes, and file edits continue even when you detach from the session.
 - **Native Speed:** Written in Rust for minimal overhead and maximum performance.
-- **Multi-Model Support:** Full OpenAPI integration allows you to run multiple models and providers.
 - **DeepSeek Optimized:** Built as a DeepSeek original, highly optimized for DeepSeek's latest reasoning models.
 - **Local Control:** All agent activities happen in your terminal, under your supervision.
 - **Rich TUI:** A sophisticated Terminal User Interface that doesn't sacrifice power for aesthetics.
 
 ## Core Concepts
+
+### The Asynchronous Daemon (`seekrd`)
+At the heart of seekr is the background daemon. When you start seekr, it automatically stands up a headless server that manages the agent's state, tool executions, and model communication. The TUI connects to this server via SSE (Server-Sent Events) to provide a real-time window into the agent's activities.
 
 ### The Agent Loop
 seekr runs a continuous loop where the agent:
@@ -21,12 +27,6 @@ seekr runs a continuous loop where the agent:
 3. Decides which tools to use. **Parallel Execution:** seekr can execute multiple independent tool calls simultaneously in a single turn.
 4. Executes the tools and observes the outcome.
 5. Repeats until the task is complete.
-
-### Skills & Extensibility
-Custom capabilities can be added through **Skills**. A skill is a collection of tools (scripts or commands) that can be loaded globally or for specific repositories.
-
-### Activity Stream
-The **Activity Stream** provides real-time visibility into every tool execution, including diffs for file edits and output summaries for shell commands.
 
 ---
 

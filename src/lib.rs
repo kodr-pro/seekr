@@ -10,3 +10,4 @@ pub mod manager;
 pub mod session;
 pub mod tools;
 pub mod ui;
+pub mod daemon;
