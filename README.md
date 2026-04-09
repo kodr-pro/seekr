@@ -1,10 +1,10 @@
-# seekr: The Asynchronous Agentic Operating System
+# seekr: The Asynchronous Agentic System Operator
 
 <p align="center">
   <img src="docs/logo.png" alt="seekr Logo">
 </p>
 
-**seekr** is a high-performance, background-first AI Agent Manager designed to transform your terminal into an autonomous operating system. Originally built as a DeepSeek-native client, seekr has evolved into a full-featured agentic platform that runs persistently in the background, executing long-running tasks while you work elsewhere.
+**seekr** is a high-performance, background-first AI Agent Manager designed to transform your terminal into an autonomous system operator. Originally built as a DeepSeek-native client, seekr has evolved into a full-featured agentic platform that runs persistently in the background, executing long-running tasks while you work elsewhere.
 
 seekr brings "Jarvis-style" persistence to Linux via a client-server architecture, featuring a rugged Terminal UI (TUI) and a headless background daemon (`seekrd`) that communicates over a high-speed SSE (Server-Sent Events) interface.
 

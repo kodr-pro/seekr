@@ -1,8 +1,8 @@
 [package]
 name = "seekr"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
-description = "AI Agent Manager - Terminal UI powered by DeepSeek"
+description = "Async Agentic System Operator"
 license = "Polyform-Prosperity-1.0.0"
 
 [lib]
