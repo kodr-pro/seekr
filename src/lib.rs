@@ -3,6 +3,7 @@ pub mod api;
 pub mod app;
 pub mod app_state;
 pub mod config;
+pub mod daemon;
 pub mod doctor;
 pub mod errors;
 pub mod event_handler;

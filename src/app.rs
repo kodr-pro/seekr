@@ -1,4 +1,3 @@
-use crate::agent::loop_mod::AgentLoop;
 use crate::agent::{AgentCommand, AgentEvent};
 use crate::api::client::ApiClient;
 use crate::app_state::{AgentState, SessionState, UiState};
@@ -93,6 +92,7 @@ pub enum ChatEntry {
         result: String,
     },
     Error(String),
+    Warning(String),
     SystemInfo(String),
     ToolApproval {
         name: String,
@@ -252,7 +252,8 @@ impl App {
 
         if config.agent.show_shell_warnings {
             let warning = "SECURITY WARNING: The shell tool is enabled. Seekr can execute terminal commands. A basic blocklist is active, but you should review commands before execution or run in an isolated environment.";
-            app.chat_entries.push(ChatEntry::Error(warning.to_string()));
+            app.chat_entries
+                .push(ChatEntry::Warning(warning.to_string()));
         }
 
         app.ui.needs_recompute_vlines = true;
@@ -260,67 +261,23 @@ impl App {
     }
 
     pub fn start_agent(&mut self) {
-        let config = match self.config.as_ref() {
-            Some(c) => c,
-            None => return,
-        };
-
-        if let Some(ref tx) = self.agent.cmd_tx {
-            tx.send(AgentCommand::Shutdown).ok();
+        if self.config.is_none() {
+            return;
         }
+
+        let sid = self.session.session_id.clone();
+        let daemon_client = crate::daemon::client::DaemonClient::new();
 
         let (evt_tx, evt_rx) = mpsc::unbounded_channel();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
-        let agent_res = if let Some(sid) = &self.session.session_id {
-            let registry = match self.manager.as_ref() {
-                Some(m) => m.tool_registry(),
-                None => {
-                    self.chat_entries
-                        .push(ChatEntry::Error("Manager not initialized".to_string()));
-                    return;
-                }
-            };
-            AgentLoop::resume(
-                config.clone(),
-                sid,
-                evt_tx,
-                cmd_rx,
-                cmd_tx.clone(),
-                registry,
-            )
-        } else {
-            let registry = match self.manager.as_ref() {
-                Some(m) => m.tool_registry(),
-                None => {
-                    self.chat_entries
-                        .push(ChatEntry::Error("Manager not initialized".to_string()));
-                    return;
-                }
-            };
-            Ok(AgentLoop::new(
-                config.clone(),
-                evt_tx,
-                cmd_rx,
-                cmd_tx.clone(),
-                registry,
-            ))
-        };
+        tokio::spawn(async move {
+            let _ = daemon_client.start_agent(sid).await;
+            let _ = daemon_client.subscribe_events(evt_tx).await;
+        });
 
-        match agent_res {
-            Ok(agent) => {
-                tokio::spawn(agent.run());
-                self.agent.cmd_tx = Some(cmd_tx.clone());
-                self.agent.event_rx = Some(evt_rx);
-                self.agent.provider_connected =
-                    vec![false; self.config.as_ref().unwrap().providers.len()];
-                cmd_tx.send(AgentCommand::CheckConnection).ok();
-            }
-            Err(e) => {
-                self.chat_entries
-                    .push(ChatEntry::Error(format!("Failed to start agent: {}", e)));
-            }
-        }
+        self.agent.cmd_tx = None; // App no longer sends commands directly via MPSC
+        self.agent.event_rx = Some(evt_rx);
+        self.agent.provider_connected = vec![false; self.config.as_ref().unwrap().providers.len()];
     } // start_agent
 
     pub fn resume_session(&mut self, session_id: String) {
@@ -410,9 +367,10 @@ impl App {
         self.agent.streaming_reasoning.clear();
         self.ui.user_scrolled = false;
 
-        if let Some(ref tx) = self.agent.cmd_tx {
-            tx.send(AgentCommand::UserMessage(msg)).ok();
-        }
+        let daemon_client = crate::daemon::client::DaemonClient::new();
+        tokio::spawn(async move {
+            let _ = daemon_client.send_chat(msg).await;
+        });
 
         self.ui.scroll_offset = self.ui.chat_max_scroll;
     } // send_message
@@ -684,15 +642,10 @@ impl App {
             self.chat_entries.remove(pos);
         }
 
-        if let Some(ref tx) = self.agent.cmd_tx {
-            if always {
-                tx.send(AgentCommand::ToolAlwaysApprove).ok();
-            } else if approved {
-                tx.send(AgentCommand::ToolApproved { call_index: 0 }).ok();
-            } else {
-                tx.send(AgentCommand::ToolDenied { call_index: 0 }).ok();
-            }
-        }
+        let daemon_client = crate::daemon::client::DaemonClient::new();
+        tokio::spawn(async move {
+            let _ = daemon_client.send_approval(approved, always).await;
+        });
     } // handle_approval
 
     pub fn clear_chat(&mut self) {
@@ -901,6 +854,7 @@ impl App {
                 )
             }
             ChatEntry::Error(msg) => (Some("[ERROR]"), msg.as_str()),
+            ChatEntry::Warning(msg) => (Some("[WARNING]"), msg.as_str()),
             ChatEntry::SystemInfo(msg) => (None, &*format!("[INFO] {}", msg)),
             ChatEntry::ToolApproval { name, arguments } => (
                 Some("[APPROVAL REQUIRED]"),

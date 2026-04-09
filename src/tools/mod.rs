@@ -1,4 +1,5 @@
 pub mod file_edit;
+pub mod review;
 pub mod shell;
 pub mod task;
 pub mod web;
@@ -260,6 +261,7 @@ impl Skill for CoreSkill {
             Arc::new(web::WebSearchTool),
             Arc::new(task::CreateTaskTool),
             Arc::new(task::UpdateTaskTool),
+            Arc::new(review::SubmitForPeerReviewTool),
         ]
     } // tools
 } // impl Skill for CoreSkill

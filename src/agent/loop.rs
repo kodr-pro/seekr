@@ -3,7 +3,6 @@ use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
-use crate::errors::AppError;
 use crate::session::Session;
 use crate::tools;
 use crate::tools::SkillRegistry;
@@ -12,7 +11,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AgentEvent {
     ContentDelta(String),
     ReasoningDelta(String),
@@ -33,7 +32,7 @@ pub enum AgentEvent {
     IterationUpdate(u32),
     TurnComplete,
     MaxIterationsReached,
-    Error(AppError),
+    Error(String),
     ToolApprovalRequest {
         call_index: usize,
         name: String,
@@ -92,7 +91,10 @@ impl AgentLoop {
         registry: Arc<SkillRegistry>,
     ) -> Self {
         let client = ApiClient::new(&config);
-        let system_prompt = build_system_prompt(&config.agent.working_directory);
+        let system_prompt = build_system_prompt(
+            &config.agent.working_directory,
+            config.agent.enable_peer_review,
+        );
         let auto_approve = config.agent.auto_approve_tools;
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -299,18 +301,40 @@ impl AgentLoop {
                 Some(reg) => reg,
                 None => {
                     self.event_tx
-                        .send(AgentEvent::Error(AppError::Internal(
+                        .send(AgentEvent::Error(
                             "Tool registry not initialized".to_string(),
-                        )))
+                        ))
                         .ok();
                     break;
                 }
             };
             let tool_defs = tools::all_tool_definitions(registry);
+
+            let mut messages_to_send = self.session.messages.clone();
+            let tasks = self.session.task_manager.tasks();
+            if !tasks.is_empty() {
+                let mut task_summary = String::from("CURRENT TASK STATE:\n");
+                for t in &tasks {
+                    task_summary.push_str(&format!(
+                        "- [{}] {} (ID: {})\n",
+                        t.status.icon(),
+                        t.title,
+                        t.id
+                    ));
+                }
+                task_summary.push_str("\nCRITICAL INSTRUCTION: Do NOT attempt to work on or repeat overarching requests and tasks that are already marked as completed (✓). Move on to the next pending task, or ask the user for a new objective.");
+
+                if !messages_to_send.is_empty() {
+                    messages_to_send.insert(1, ChatMessage::system(&task_summary));
+                } else {
+                    messages_to_send.push(ChatMessage::system(&task_summary));
+                }
+            }
+
             let stream_result = self
                 .client
                 .chat_completion_stream(
-                    self.session.messages.clone(),
+                    messages_to_send,
                     &self.config.current_provider().model,
                     Some(tool_defs),
                 )
@@ -327,7 +351,7 @@ impl AgentLoop {
                     rx
                 }
                 Err(e) => {
-                    self.event_tx.send(AgentEvent::Error(e.into())).ok();
+                    self.event_tx.send(AgentEvent::Error(e.to_string())).ok();
                     break;
                 }
             };
@@ -356,7 +380,7 @@ impl AgentLoop {
                             }
                             StreamEvent::Done => break,
                             StreamEvent::Error(e) => {
-                                self.event_tx.send(AgentEvent::Error(AppError::Stream(e))).ok();
+                                self.event_tx.send(AgentEvent::Error(e.to_string())).ok();
                                 break;
                             }
                         }
@@ -453,9 +477,7 @@ impl AgentLoop {
                         None => {
                             // This should not happen since we checked earlier, but handle gracefully
                             self.event_tx
-                                .send(AgentEvent::Error(AppError::Internal(
-                                    "Tool registry not available".to_string(),
-                                )))
+                                .send(AgentEvent::Error("Tool registry not available".to_string()))
                                 .ok();
                             continue;
                         }
@@ -543,10 +565,31 @@ impl AgentLoop {
     async fn do_final_answer(&mut self) {
         self.prune_messages();
 
+        let mut messages_to_send = self.session.messages.clone();
+        let tasks = self.session.task_manager.tasks();
+        if !tasks.is_empty() {
+            let mut task_summary = String::from("CURRENT TASK STATE:\n");
+            for t in &tasks {
+                task_summary.push_str(&format!(
+                    "- [{}] {} (ID: {})\n",
+                    t.status.icon(),
+                    t.title,
+                    t.id
+                ));
+            }
+            task_summary.push_str("\nCRITICAL INSTRUCTION: Do NOT attempt to work on or repeat overarching requests and tasks that are already marked as completed (✓). Move on to the next pending task, or ask the user for a new objective.");
+
+            if !messages_to_send.is_empty() {
+                messages_to_send.insert(1, ChatMessage::system(&task_summary));
+            } else {
+                messages_to_send.push(ChatMessage::system(&task_summary));
+            }
+        }
+
         let stream_result = self
             .client
             .chat_completion_stream(
-                self.session.messages.clone(),
+                messages_to_send,
                 &self.config.current_provider().model,
                 None,
             )
@@ -555,7 +598,7 @@ impl AgentLoop {
         let mut stream_rx = match stream_result {
             Ok(rx) => rx,
             Err(e) => {
-                self.event_tx.send(AgentEvent::Error(e.into())).ok();
+                self.event_tx.send(AgentEvent::Error(e.to_string())).ok();
                 self.event_tx.send(AgentEvent::TurnComplete).ok();
                 return;
             }
@@ -583,9 +626,7 @@ impl AgentLoop {
                 }
                 crate::api::stream::StreamEvent::Done => break,
                 crate::api::stream::StreamEvent::Error(e) => {
-                    self.event_tx
-                        .send(AgentEvent::Error(AppError::Stream(e)))
-                        .ok();
+                    self.event_tx.send(AgentEvent::Error(e.to_string())).ok();
                     break;
                 }
                 _ => {}
@@ -671,7 +712,7 @@ impl AgentLoop {
         let model = self.config.current_provider().model.clone();
 
         tokio::spawn(async move {
-            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, ongoing tasks, specific file paths mentioned, and critical tool outputs. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
+            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, specific file paths mentioned, and critical tool outputs. Note that the agent will be provided with its current overall task status separately, so your focus should strictly be on the technical context and what exact work/tool output has been done here. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
 
             let mut summary_messages = vec![ChatMessage::system(&pt)];
             let mut conversation_text = String::new();
