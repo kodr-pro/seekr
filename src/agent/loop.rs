@@ -91,7 +91,10 @@ impl AgentLoop {
         registry: Arc<SkillRegistry>,
     ) -> Self {
         let client = ApiClient::new(&config);
-        let system_prompt = build_system_prompt(&config.agent.working_directory, config.agent.enable_peer_review);
+        let system_prompt = build_system_prompt(
+            &config.agent.working_directory,
+            config.agent.enable_peer_review,
+        );
         let auto_approve = config.agent.auto_approve_tools;
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -298,7 +301,9 @@ impl AgentLoop {
                 Some(reg) => reg,
                 None => {
                     self.event_tx
-                        .send(AgentEvent::Error("Tool registry not initialized".to_string()))
+                        .send(AgentEvent::Error(
+                            "Tool registry not initialized".to_string(),
+                        ))
                         .ok();
                     break;
                 }
@@ -310,10 +315,15 @@ impl AgentLoop {
             if !tasks.is_empty() {
                 let mut task_summary = String::from("CURRENT TASK STATE:\n");
                 for t in &tasks {
-                    task_summary.push_str(&format!("- [{}] {} (ID: {})\n", t.status.icon(), t.title, t.id));
+                    task_summary.push_str(&format!(
+                        "- [{}] {} (ID: {})\n",
+                        t.status.icon(),
+                        t.title,
+                        t.id
+                    ));
                 }
                 task_summary.push_str("\nCRITICAL INSTRUCTION: Do NOT attempt to work on or repeat overarching requests and tasks that are already marked as completed (✓). Move on to the next pending task, or ask the user for a new objective.");
-                
+
                 if !messages_to_send.is_empty() {
                     messages_to_send.insert(1, ChatMessage::system(&task_summary));
                 } else {
@@ -560,10 +570,15 @@ impl AgentLoop {
         if !tasks.is_empty() {
             let mut task_summary = String::from("CURRENT TASK STATE:\n");
             for t in &tasks {
-                task_summary.push_str(&format!("- [{}] {} (ID: {})\n", t.status.icon(), t.title, t.id));
+                task_summary.push_str(&format!(
+                    "- [{}] {} (ID: {})\n",
+                    t.status.icon(),
+                    t.title,
+                    t.id
+                ));
             }
             task_summary.push_str("\nCRITICAL INSTRUCTION: Do NOT attempt to work on or repeat overarching requests and tasks that are already marked as completed (✓). Move on to the next pending task, or ask the user for a new objective.");
-            
+
             if !messages_to_send.is_empty() {
                 messages_to_send.insert(1, ChatMessage::system(&task_summary));
             } else {
@@ -611,9 +626,7 @@ impl AgentLoop {
                 }
                 crate::api::stream::StreamEvent::Done => break,
                 crate::api::stream::StreamEvent::Error(e) => {
-                    self.event_tx
-                        .send(AgentEvent::Error(e.to_string()))
-                        .ok();
+                    self.event_tx.send(AgentEvent::Error(e.to_string())).ok();
                     break;
                 }
                 _ => {}

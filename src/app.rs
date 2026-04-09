@@ -252,7 +252,8 @@ impl App {
 
         if config.agent.show_shell_warnings {
             let warning = "SECURITY WARNING: The shell tool is enabled. Seekr can execute terminal commands. A basic blocklist is active, but you should review commands before execution or run in an isolated environment.";
-            app.chat_entries.push(ChatEntry::Warning(warning.to_string()));
+            app.chat_entries
+                .push(ChatEntry::Warning(warning.to_string()));
         }
 
         app.ui.needs_recompute_vlines = true;
@@ -266,9 +267,9 @@ impl App {
 
         let sid = self.session.session_id.clone();
         let daemon_client = crate::daemon::client::DaemonClient::new();
-        
+
         let (evt_tx, evt_rx) = mpsc::unbounded_channel();
-        
+
         tokio::spawn(async move {
             let _ = daemon_client.start_agent(sid).await;
             let _ = daemon_client.subscribe_events(evt_tx).await;

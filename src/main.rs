@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use seekr::{app, config};
 use seekr::daemon::server::start_server;
+use seekr::{app, config};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -17,9 +17,7 @@ enum Commands {
     /// Run diagnostics
     Doctor,
     /// Start TUI from a previous session
-    Resume {
-        session_id: String,
-    },
+    Resume { session_id: String },
 }
 
 #[tokio::main]
@@ -50,10 +48,8 @@ async fn main() -> Result<()> {
         if !client.check_health().await {
             println!("Daemon not reachable. Starting 'seekr daemon' in background...");
             if let Ok(exe) = std::env::current_exe() {
-                let _ = tokio::process::Command::new(exe)
-                    .arg("daemon")
-                    .spawn();
-                
+                let _ = tokio::process::Command::new(exe).arg("daemon").spawn();
+
                 // wait for it to boot
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }

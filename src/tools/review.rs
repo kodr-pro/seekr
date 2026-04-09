@@ -65,7 +65,8 @@ impl Tool for SubmitForPeerReviewTool {
                 total_threads,
             );
             return Ok((
-                "Peer Review Disabled. You may now provide your final response to the user.".to_string(),
+                "Peer Review Disabled. You may now provide your final response to the user."
+                    .to_string(),
                 "Peer review disabled (auto-passed)".to_string(),
             ));
         }
@@ -98,30 +99,40 @@ impl Tool for SubmitForPeerReviewTool {
         );
 
         let client = ApiClient::new(config);
-        
+
         let messages = vec![
             ChatMessage::system("You are a strict code and logic reviewer."),
-            ChatMessage::user(&prompt)
+            ChatMessage::user(&prompt),
         ];
 
-        let result = match client.chat_completion(messages, &config.current_provider().model).await {
+        let result = match client
+            .chat_completion(messages, &config.current_provider().model)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 return Ok((
-                    format!("Peer Review System Error: {}. Treat as passed and provide your final response.", e),
-                    "Peer review API failed".to_string()
+                    format!(
+                        "Peer Review System Error: {}. Treat as passed and provide your final response.",
+                        e
+                    ),
+                    "Peer review API failed".to_string(),
                 ));
             }
         };
 
         if result.trim().starts_with("APPROVED") {
             Ok((
-                "Peer Review Passed. You may now provide your final response to the user.".to_string(),
+                "Peer Review Passed. You may now provide your final response to the user."
+                    .to_string(),
                 "Peer review passed".to_string(),
             ))
         } else {
             Ok((
-                format!("Peer Review FAILED. Please address the following issues immediately:\n{}", result),
+                format!(
+                    "Peer Review FAILED. Please address the following issues immediately:\n{}",
+                    result
+                ),
                 "Peer review FAILED (returned to agent)".to_string(),
             ))
         }

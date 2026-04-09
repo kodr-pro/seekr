@@ -1,16 +1,16 @@
 use axum::{
+    Json, Router,
     extract::State,
     response::sse::{Event, Sse},
     routing::{get, post},
-    Json, Router,
 };
 use futures_util::stream::Stream;
+use serde::{Deserialize, Serialize};
 use std::{convert::Infallible, net::SocketAddr, sync::Arc};
-use tokio::sync::{broadcast, mpsc, Mutex};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_stream::StreamExt;
+use tokio_stream::wrappers::BroadcastStream;
 use tower_http::cors::CorsLayer;
-use serde::{Serialize, Deserialize};
 
 use crate::agent::{AgentCommand, AgentEvent, loop_mod::AgentLoop};
 use crate::config::AppConfig;
@@ -75,10 +75,10 @@ pub async fn start_server() -> anyhow::Result<()> {
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 8765));
     println!("Seekr daemon listening on {}", addr);
-    
+
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;
-    
+
     Ok(())
 }
 
@@ -87,62 +87,112 @@ pub async fn start_server() -> anyhow::Result<()> {
 pub enum NetworkEvent {
     ContentDelta(String),
     ReasoningDelta(String),
-    ToolCallStart { name: String, arguments: String },
-    ToolCallResult { name: String, result: String },
+    ToolCallStart {
+        name: String,
+        arguments: String,
+    },
+    ToolCallResult {
+        name: String,
+        result: String,
+    },
     Activity(crate::tools::ActivityEntry),
-    TokenUsage { prompt_tokens: u32, completion_tokens: u32, total_tokens: u32 },
+    TokenUsage {
+        prompt_tokens: u32,
+        completion_tokens: u32,
+        total_tokens: u32,
+    },
     IterationUpdate(u32),
     TurnComplete,
     MaxIterationsReached,
     Error(String),
-    ToolApprovalRequest { call_index: usize, name: String, arguments: String },
-    ShellInputNeeded { context: String },
+    ToolApprovalRequest {
+        call_index: usize,
+        name: String,
+        arguments: String,
+    },
+    ShellInputNeeded {
+        context: String,
+    },
     TaskCreated(crate::tools::task::Task),
     TaskUpdated(crate::tools::task::Task),
-    ContextPruned { count: usize },
-    ContextSummaryReady { id: String, summary: String },
-    ProviderStatus { index: usize, connected: bool },
+    ContextPruned {
+        count: usize,
+    },
+    ContextSummaryReady {
+        id: String,
+        summary: String,
+    },
+    ProviderStatus {
+        index: usize,
+        connected: bool,
+    },
 }
 
-async fn sse_handler(State(state): State<DaemonState>) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+async fn sse_handler(
+    State(state): State<DaemonState>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.evt_broadcast.subscribe();
-    let stream = BroadcastStream::new(rx)
-        .filter_map(|res| {
-            match res {
-                Ok(evt) => {
-                    let net_evt = match evt {
-                        AgentEvent::ContentDelta(s) => NetworkEvent::ContentDelta(s),
-                        AgentEvent::ReasoningDelta(s) => NetworkEvent::ReasoningDelta(s),
-                        AgentEvent::ToolCallStart { name, arguments } => NetworkEvent::ToolCallStart { name, arguments },
-                        AgentEvent::ToolCallResult { name, result } => NetworkEvent::ToolCallResult { name, result },
-                        AgentEvent::Activity(a) => NetworkEvent::Activity(a),
-                        AgentEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens } => NetworkEvent::TokenUsage { prompt_tokens, completion_tokens, total_tokens },
-                        AgentEvent::IterationUpdate(n) => NetworkEvent::IterationUpdate(n),
-                        AgentEvent::TurnComplete => NetworkEvent::TurnComplete,
-                        AgentEvent::MaxIterationsReached => NetworkEvent::MaxIterationsReached,
-                        AgentEvent::Error(e) => NetworkEvent::Error(e.to_string()),
-                        AgentEvent::ToolApprovalRequest { call_index, name, arguments } => NetworkEvent::ToolApprovalRequest { call_index, name, arguments },
-                        AgentEvent::ShellInputNeeded { context, .. } => NetworkEvent::ShellInputNeeded { context },
-                        AgentEvent::TaskCreated(t) => NetworkEvent::TaskCreated(t),
-                        AgentEvent::TaskUpdated(t) => NetworkEvent::TaskUpdated(t),
-                        AgentEvent::ContextPruned { count } => NetworkEvent::ContextPruned { count },
-                        AgentEvent::ContextSummaryReady { id, summary } => NetworkEvent::ContextSummaryReady { id, summary },
-                        AgentEvent::ProviderStatus { index, connected } => NetworkEvent::ProviderStatus { index, connected },
-                    };
-
-                    if let Ok(json) = serde_json::to_string(&net_evt) {
-                        Some(Ok(Event::default().data(json)))
-                    } else {
-                        None
+    let stream = BroadcastStream::new(rx).filter_map(|res| {
+        match res {
+            Ok(evt) => {
+                let net_evt = match evt {
+                    AgentEvent::ContentDelta(s) => NetworkEvent::ContentDelta(s),
+                    AgentEvent::ReasoningDelta(s) => NetworkEvent::ReasoningDelta(s),
+                    AgentEvent::ToolCallStart { name, arguments } => {
+                        NetworkEvent::ToolCallStart { name, arguments }
                     }
+                    AgentEvent::ToolCallResult { name, result } => {
+                        NetworkEvent::ToolCallResult { name, result }
+                    }
+                    AgentEvent::Activity(a) => NetworkEvent::Activity(a),
+                    AgentEvent::TokenUsage {
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                    } => NetworkEvent::TokenUsage {
+                        prompt_tokens,
+                        completion_tokens,
+                        total_tokens,
+                    },
+                    AgentEvent::IterationUpdate(n) => NetworkEvent::IterationUpdate(n),
+                    AgentEvent::TurnComplete => NetworkEvent::TurnComplete,
+                    AgentEvent::MaxIterationsReached => NetworkEvent::MaxIterationsReached,
+                    AgentEvent::Error(e) => NetworkEvent::Error(e.to_string()),
+                    AgentEvent::ToolApprovalRequest {
+                        call_index,
+                        name,
+                        arguments,
+                    } => NetworkEvent::ToolApprovalRequest {
+                        call_index,
+                        name,
+                        arguments,
+                    },
+                    AgentEvent::ShellInputNeeded { context, .. } => {
+                        NetworkEvent::ShellInputNeeded { context }
+                    }
+                    AgentEvent::TaskCreated(t) => NetworkEvent::TaskCreated(t),
+                    AgentEvent::TaskUpdated(t) => NetworkEvent::TaskUpdated(t),
+                    AgentEvent::ContextPruned { count } => NetworkEvent::ContextPruned { count },
+                    AgentEvent::ContextSummaryReady { id, summary } => {
+                        NetworkEvent::ContextSummaryReady { id, summary }
+                    }
+                    AgentEvent::ProviderStatus { index, connected } => {
+                        NetworkEvent::ProviderStatus { index, connected }
+                    }
+                };
+
+                if let Ok(json) = serde_json::to_string(&net_evt) {
+                    Some(Ok(Event::default().data(json)))
+                } else {
+                    None
                 }
-                Err(_) => None, // RecvError::Lagged
             }
-        });
+            Err(_) => None, // RecvError::Lagged
+        }
+    });
 
     Sse::new(stream).keep_alive(
-        axum::response::sse::KeepAlive::new()
-            .interval(std::time::Duration::from_secs(15)),
+        axum::response::sse::KeepAlive::new().interval(std::time::Duration::from_secs(15)),
     )
 }
 
@@ -162,7 +212,7 @@ async fn start_handler(
 
     let broadcast = state.evt_broadcast.clone();
     let shell_input_tx_state = state.shell_input_tx.clone();
-    
+
     // Spawn a forwarder task
     tokio::spawn(async move {
         while let Some(evt) = evt_rx.recv().await {
@@ -180,7 +230,13 @@ async fn start_handler(
     let agent_res = if let Some(sid) = payload.session_id {
         AgentLoop::resume(config, &sid, evt_tx, cmd_rx, cmd_tx.clone(), registry)
     } else {
-        Ok(AgentLoop::new(config, evt_tx, cmd_rx, cmd_tx.clone(), registry))
+        Ok(AgentLoop::new(
+            config,
+            evt_tx,
+            cmd_rx,
+            cmd_tx.clone(),
+            registry,
+        ))
     };
 
     match agent_res {
