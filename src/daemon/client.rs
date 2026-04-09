@@ -9,6 +9,12 @@ pub struct DaemonClient {
     base_url: String,
 }
 
+impl Default for DaemonClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DaemonClient {
     pub fn new() -> Self {
         Self {
@@ -20,7 +26,7 @@ impl DaemonClient {
     pub async fn check_health(&self) -> bool {
         if let Ok(res) = self
             .http
-            .get(&format!("{}/health", self.base_url))
+            .get(format!("{}/health", self.base_url))
             .send()
             .await
         {
@@ -33,7 +39,7 @@ impl DaemonClient {
     pub async fn start_agent(&self, session_id: Option<String>) -> anyhow::Result<()> {
         let req = StartAgentReq { session_id };
         self.http
-            .post(&format!("{}/start", self.base_url))
+            .post(format!("{}/start", self.base_url))
             .json(&req)
             .send()
             .await?;
@@ -43,7 +49,7 @@ impl DaemonClient {
     pub async fn send_chat(&self, message: String) -> anyhow::Result<()> {
         let req = ChatMessageReq { message };
         self.http
-            .post(&format!("{}/chat", self.base_url))
+            .post(format!("{}/chat", self.base_url))
             .json(&req)
             .send()
             .await?;
@@ -53,7 +59,7 @@ impl DaemonClient {
     pub async fn send_approval(&self, approved: bool, always: bool) -> anyhow::Result<()> {
         let req = ToolApprovalReq { approved, always };
         self.http
-            .post(&format!("{}/command/approve", self.base_url))
+            .post(format!("{}/command/approve", self.base_url))
             .json(&req)
             .send()
             .await?;
@@ -62,7 +68,7 @@ impl DaemonClient {
 
     pub async fn send_shutdown(&self) -> anyhow::Result<()> {
         self.http
-            .post(&format!("{}/command/shutdown", self.base_url))
+            .post(format!("{}/command/shutdown", self.base_url))
             .send()
             .await?;
         Ok(())
@@ -70,7 +76,7 @@ impl DaemonClient {
 
     pub async fn send_check_connection(&self) -> anyhow::Result<()> {
         self.http
-            .post(&format!("{}/command/check_connection", self.base_url))
+            .post(format!("{}/command/check_connection", self.base_url))
             .send()
             .await?;
         Ok(())
@@ -79,7 +85,7 @@ impl DaemonClient {
     pub async fn send_shell_input(&self, input: String) -> anyhow::Result<()> {
         let req = ShellInputReq { input };
         self.http
-            .post(&format!("{}/command/shell", self.base_url))
+            .post(format!("{}/command/shell", self.base_url))
             .json(&req)
             .send()
             .await?;
