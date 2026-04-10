@@ -55,11 +55,11 @@ Traditional AI agents live and die with your terminal session. **seekr** changes
 
 ```bash
 # Download the binary
-curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.3.0/seekr-v0.3.0-linux-x86_64
+curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.3.1/seekr-v0.3.1-linux-x86_64
 
 # Make it executable and move to path
-chmod +x seekr-v0.3.0-linux-x86_64
-sudo mv seekr-v0.3.0-linux-x86_64 /usr/local/bin/seekr
+chmod +x seekr-v0.3.1-linux-x86_64
+sudo mv seekr-v0.3.1-linux-x86_64 /usr/local/bin/seekr
 ```
 
 #### Build from Source

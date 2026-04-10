@@ -141,6 +141,7 @@ pub enum MenuTab {
     Sessions,
     Models,
     Providers,
+    Skills,
     Settings,
     Help,
 }

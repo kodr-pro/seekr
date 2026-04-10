@@ -1,0 +1,37 @@
+# Model Context Protocol (MCP)
+
+Seekr implements advanced support for the Model Context Protocol (MCP), enabling it to seamlessly tap into external data sources, expert tools, and predefined conversation prompts.
+
+## Architecture
+
+Seekr interacts with MCP via the `McpManager`, an internal state director that manages concurrent connections across multiple configurable MCP servers. During startup, the agent maps and indexes:
+- **Tools**: Discoverable functions exposed to the agent natively.
+- **Resources**: Datasets, API schemas, and localized code documents.
+- **Prompts**: Specialized templates and workflows.
+
+## Features
+
+### Unified Discovery
+When the Seekr agent is initialized, it triggers an early metadata synchronization with all connected servers. This injects crucial state directly into the LLM's system prompt to ground the agent in the external context it actually has access to.
+
+### Skills Tab Master-Detail
+The built-in text user interface (TUI) features an advanced master-detail view for managing MCP capabilities:
+- **Left Panel**: Presents all active baseline local Skills alongside managed MCP Servers.
+- **Right Panel**: Dynamically visualizes detailed capability information (Tools, Resources, Prompts) associated with the highlighted integration.
+
+### Telemetry Pipeline & Observability
+MCP execution events, including live telemetry sourced via standard server streams (`notifications/message`), are piped directly into Seekr's `TaskManager`. As a result, the activity feed in the TUI provides 100% observability of actions taking place transparently across external environments.
+
+## Configuration
+
+Servers can be plugged directly into the `seekr` ecosystem by registering them in `~/.seekr/config.toml`. 
+
+```toml
+[[mcp_servers]]
+name = "filesystem"
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/my_project"]
+auto_install = true
+```
+
+The `auto_install` parameter permits Seekr to instantly initialize missing dependencies when loading the MCP server, removing operational boilerplate.

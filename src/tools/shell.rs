@@ -1,5 +1,5 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{Tool, task::TaskManager, truncate};
+use crate::tools::{ExecutionContext, Tool, truncate};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
@@ -58,7 +58,7 @@ fn detect_prompt(line: &str) -> Option<String> {
 
 pub async fn shell_command(
     args: &serde_json::Value,
-    task_manager: &TaskManager,
+    context: &ExecutionContext,
     thread_id: Option<usize>,
     total_threads: Option<usize>,
 ) -> Result<(String, String)> {
@@ -68,7 +68,7 @@ pub async fn shell_command(
     let background = args["background"].as_bool().unwrap_or(false);
 
     let summary = format!("shell_command {}", truncate(command, 20));
-    task_manager.log_activity(
+    context.task_manager.log_activity(
         "shell_command",
         &summary,
         crate::tools::task::ActivityStatus::Starting,
@@ -76,10 +76,7 @@ pub async fn shell_command(
         total_threads,
     );
 
-    let task_config = task_manager.config.clone();
-    let blocklist = task_config
-        .map(|cfg| cfg.agent.shell_blocklist)
-        .unwrap_or_else(|| crate::config::AgentConfig::default().shell_blocklist);
+    let blocklist = context.config.agent.shell_blocklist.clone();
 
     for pattern in blocklist.iter() {
         if command.contains(pattern) {
@@ -246,7 +243,7 @@ pub async fn shell_command(
     loop {
         tokio::select! {
             Some(_prompt) = prompt_rx.recv() => {
-                if let Some(ref event_tx) = task_manager.event_tx {
+                if let Some(ref event_tx) = context.task_manager.event_tx {
                     let ctx_lines = context_arc.lock().await.join("\n");
                     event_tx.send(crate::agent::AgentEvent::ShellInputNeeded {
                         context: ctx_lines,
@@ -318,11 +315,11 @@ impl Tool for ShellCommandTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        shell_command(args, task_manager, thread_id, total_threads).await
+        shell_command(args, context, thread_id, total_threads).await
     } // execute
 } // impl ShellCommandTool
 

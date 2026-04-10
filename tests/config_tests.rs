@@ -93,6 +93,7 @@ show_reasoning = false
         active_provider: 0,
         agent: old.agent,
         ui: old.ui,
+        mcp_servers: vec![],
     };
 
     assert_eq!(config.providers[0].key, "old-key");

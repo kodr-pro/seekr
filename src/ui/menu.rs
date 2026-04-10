@@ -97,6 +97,7 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         " Sessions ",
         " Models ",
         " Providers ",
+        " Skills ",
         " Settings ",
         " Help ",
     ];
@@ -105,8 +106,9 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         MenuTab::Sessions => 0,
         MenuTab::Models => 1,
         MenuTab::Providers => 2,
-        MenuTab::Settings => 3,
-        MenuTab::Help => 4,
+        MenuTab::Skills => 3,
+        MenuTab::Settings => 4,
+        MenuTab::Help => 5,
     };
 
     let tabs = Tabs::new(titles)
@@ -137,6 +139,7 @@ fn render_content(frame: &mut Frame, area: Rect, app: &App) {
         MenuTab::Sessions => render_sessions(frame, area, app),
         MenuTab::Models => render_models(frame, area, app),
         MenuTab::Providers => render_providers(frame, area, app),
+        MenuTab::Skills => render_skills(frame, area, app),
         MenuTab::Settings => render_settings(frame, area, app),
         MenuTab::Help => render_help(frame, area, app),
     }
@@ -355,6 +358,165 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(help_para, chunks[1]);
 } // render_providers
 
+fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .split(area);
+
+    let mut items = Vec::new();
+    let mut skill_metas = Vec::new();
+
+    // Local Skills
+    if let Some(ref mgr) = app.manager {
+        for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
+            let meta = skill.metadata();
+            let line = Line::from(vec![
+                Span::styled("📦 ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    meta.name.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!(" v{}", meta.version)),
+            ]);
+            items.push(ListItem::new(line));
+            skill_metas.push((meta.name.clone(), true));
+        }
+    }
+
+    // MCP Servers
+    if let Some(ref cfg) = app.config {
+        for mcp in &cfg.mcp_servers {
+            let status_dot = if mcp.enabled {
+                Span::styled("● ", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("○ ", Style::default().fg(Color::DarkGray))
+            };
+
+            let line = Line::from(vec![
+                status_dot,
+                Span::styled("MCP: ", Style::default().fg(Color::Cyan)),
+                Span::styled(&mcp.name, Style::default().add_modifier(Modifier::BOLD)),
+            ]);
+            items.push(ListItem::new(line));
+            skill_metas.push((mcp.name.clone(), false));
+        }
+    }
+
+    if items.is_empty() {
+        items.push(ListItem::new(" No skills found."));
+    }
+
+    let list = List::new(items)
+        .block(Block::default().title(" Skills ").borders(Borders::RIGHT))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol(">> ");
+
+    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
+    frame.render_stateful_widget(list, chunks[0], &mut state);
+
+    // Detail area
+    let detail_area = chunks[1];
+    if let Some((name, is_local)) = skill_metas.get(app.menu_state.selection_idx) {
+        let mut detail_text = Vec::new();
+        detail_text.push(Line::from(vec![
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(if *is_local {
+                " (Local Skill)"
+            } else {
+                " (MCP Server)"
+            }),
+        ]));
+        detail_text.push(Line::from(""));
+
+        if *is_local {
+            detail_text.push(Line::from(vec![Span::styled(
+                "Tools:",
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            )]));
+            if let Some(ref mgr) = app.manager {
+                for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
+                    if skill.metadata().name == *name {
+                        for tool in skill.tools() {
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(
+                                    tool.name().to_string(),
+                                    Style::default().fg(Color::Green),
+                                ),
+                            ]));
+                        }
+                    }
+                }
+            }
+        } else if let Some(ref mgr) = app.manager {
+            let mcp_mgr = mgr.mcp_manager();
+            if let Ok(meta_guard) = mcp_mgr.metadata.try_lock() {
+                let meta_map: &std::collections::HashMap<
+                    String,
+                    crate::mcp::manager::McpServerMetadata,
+                > = &meta_guard;
+                if let Some(meta) = meta_map.get(name) {
+                    if !meta.tools.is_empty() {
+                        detail_text.push(Line::from(vec![Span::styled(
+                            "Tools:",
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        )]));
+                        for t in &meta.tools {
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(t.name.clone(), Style::default().fg(Color::Green)),
+                            ]));
+                        }
+                    }
+                    if !meta.resources.is_empty() {
+                        detail_text.push(Line::from(""));
+                        detail_text.push(Line::from(vec![Span::styled(
+                            "Resources:",
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        )]));
+                        for r in &meta.resources {
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(r.name.clone(), Style::default().fg(Color::Blue)),
+                            ]));
+                        }
+                    }
+                    if !meta.prompts.is_empty() {
+                        detail_text.push(Line::from(""));
+                        detail_text.push(Line::from(vec![Span::styled(
+                            "Prompts:",
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        )]));
+                        for p in &meta.prompts {
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(p.name.clone(), Style::default().fg(Color::Magenta)),
+                            ]));
+                        }
+                    }
+                } else {
+                    detail_text.push(Line::from(
+                        "Server is being initialized or no metadata available.",
+                    ));
+                }
+            } else {
+                detail_text.push(Line::from("Loading metadata..."));
+            }
+        }
+
+        let para = Paragraph::new(detail_text)
+            .block(Block::default().borders(Borders::NONE))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(para, detail_area);
+    }
+}
+
 fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
     let config = match app.config.as_ref() {
         Some(c) => c,
@@ -365,7 +527,6 @@ fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
         format!("Working Directory: {}", config.agent.working_directory),
         format!("Max Iterations: {}", config.agent.max_iterations),
         format!("Auto-approve Tools: {}", config.agent.auto_approve_tools),
-        format!("Enable AI Peer Review: {}", config.agent.enable_peer_review),
         format!("Theme: {}", config.ui.theme),
         format!("Show Reasoning: {}", config.ui.show_reasoning),
     ];

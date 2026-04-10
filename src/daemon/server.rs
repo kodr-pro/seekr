@@ -227,8 +227,19 @@ async fn start_handler(
     let config = state.config.clone();
     let registry = state.manager.tool_registry();
 
-    let agent_res = if let Some(sid) = payload.session_id {
-        AgentLoop::resume(config, &sid, evt_tx, cmd_rx, cmd_tx.clone(), registry)
+    let mcp_manager = state.manager.mcp_manager();
+
+    let agent = if let Some(sid) = payload.session_id {
+        AgentLoop::resume(
+            config,
+            &sid,
+            evt_tx,
+            cmd_rx,
+            cmd_tx.clone(),
+            registry,
+            crate::agent::system_prompt::AgentRole::Main,
+            mcp_manager,
+        )
     } else {
         Ok(AgentLoop::new(
             config,
@@ -236,10 +247,12 @@ async fn start_handler(
             cmd_rx,
             cmd_tx.clone(),
             registry,
+            crate::agent::system_prompt::AgentRole::Main,
+            mcp_manager,
         ))
     };
 
-    match agent_res {
+    match agent {
         Ok(agent) => {
             tokio::spawn(agent.run());
             *cmd_tx_guard = Some(cmd_tx);

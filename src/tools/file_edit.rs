@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::errors::ToolError;
-use crate::tools::{Tool, short_path, task::TaskManager};
+use crate::tools::{ExecutionContext, TaskManager, Tool, short_path};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
@@ -152,7 +152,7 @@ impl Tool for ReadFileTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -160,7 +160,7 @@ impl Tool for ReadFileTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing path"))?;
         let summary = format!("read_file {}", short_path(path));
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             crate::tools::task::ActivityStatus::Starting,
@@ -168,7 +168,7 @@ impl Tool for ReadFileTool {
             total_threads,
         );
 
-        let resolved_path = resolve_and_verify_path(path, task_manager)?;
+        let resolved_path = resolve_and_verify_path(path, &context.task_manager)?;
         let result = read_file(&resolved_path).await?;
 
         Ok((result, summary))
@@ -202,7 +202,7 @@ impl Tool for WriteFileTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -213,7 +213,7 @@ impl Tool for WriteFileTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing content"))?;
         let summary = format!("write_file {}", short_path(path));
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             crate::tools::task::ActivityStatus::Starting,
@@ -221,7 +221,7 @@ impl Tool for WriteFileTool {
             total_threads,
         );
 
-        let resolved_path = resolve_and_verify_path(path, task_manager)?;
+        let resolved_path = resolve_and_verify_path(path, &context.task_manager)?;
         let result = write_file(&resolved_path, content).await?;
 
         Ok((result, summary))
@@ -257,7 +257,7 @@ impl Tool for EditFileTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -271,7 +271,7 @@ impl Tool for EditFileTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing new_string"))?;
         let summary = format!("edit_file {}", short_path(path));
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             crate::tools::task::ActivityStatus::Starting,
@@ -279,7 +279,7 @@ impl Tool for EditFileTool {
             total_threads,
         );
 
-        let resolved_path = resolve_and_verify_path(path, task_manager)?;
+        let resolved_path = resolve_and_verify_path(path, &context.task_manager)?;
         let result = edit_file(&resolved_path, old, new).await?;
 
         Ok((result, summary))
@@ -310,13 +310,13 @@ impl Tool for ListDirectoryTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
         let path = args["path"].as_str().unwrap_or(".");
         let summary = format!("list_directory {}", short_path(path));
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             crate::tools::task::ActivityStatus::Starting,
@@ -324,7 +324,7 @@ impl Tool for ListDirectoryTool {
             total_threads,
         );
 
-        let resolved_path = resolve_and_verify_path(path, task_manager)?;
+        let resolved_path = resolve_and_verify_path(path, &context.task_manager)?;
         let result = list_directory(&resolved_path).await?;
 
         Ok((result, summary))

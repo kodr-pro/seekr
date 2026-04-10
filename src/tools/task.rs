@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::errors::ToolError;
-use crate::tools::Tool;
+use crate::tools::{ExecutionContext, Tool};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -278,7 +278,7 @@ impl Tool for CreateTaskTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -286,9 +286,9 @@ impl Tool for CreateTaskTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing title"))?;
         let status = args["status"].as_str();
-        let task_id = task_manager.create_task(title, status);
+        let task_id = context.task_manager.create_task(title, status);
         let summary = format!("Created task {}: {}", task_id, title);
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             ActivityStatus::Success,
@@ -328,7 +328,7 @@ impl Tool for UpdateTaskTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -337,11 +337,12 @@ impl Tool for UpdateTaskTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing status"))?;
 
-        task_manager
+        context
+            .task_manager
             .update_task(id_raw, status)
             .map_err(|e| anyhow!(e))?;
         let summary = format!("Updated task {} to {}", id_raw, status);
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             ActivityStatus::Success,

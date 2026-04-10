@@ -10,15 +10,18 @@ pub struct SeekrManager {
     pub config: AppConfig,
     active_sessions: RwLock<Vec<SessionMetadata>>,
     tool_registry: Arc<SkillRegistry>,
+    mcp_manager: Arc<crate::mcp::McpManager>,
 }
 
 impl SeekrManager {
     pub fn new(config: AppConfig) -> Self {
         let tool_registry = Arc::new(SkillRegistry::new(Some(&config.agent.working_directory)));
+        let mcp_manager = Arc::new(crate::mcp::McpManager::new());
         Self {
             config,
             active_sessions: RwLock::new(Vec::new()),
             tool_registry,
+            mcp_manager,
         }
     } // new
 
@@ -63,4 +66,8 @@ impl SeekrManager {
     pub fn tool_registry(&self) -> Arc<SkillRegistry> {
         self.tool_registry.clone()
     } // tool_registry
+
+    pub fn mcp_manager(&self) -> Arc<crate::mcp::McpManager> {
+        self.mcp_manager.clone()
+    } // mcp_manager
 } // impl SeekrManager

@@ -13,6 +13,21 @@ pub struct ProviderConfig {
     pub timeout: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub auto_install: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
@@ -29,8 +44,6 @@ impl Default for ProviderConfig {
 pub struct AgentConfig {
     pub max_iterations: u32,
     pub auto_approve_tools: bool,
-    #[serde(default = "default_true")]
-    pub enable_peer_review: bool,
     pub working_directory: String,
     pub context_window_threshold: usize,
     pub context_window_keep: usize,
@@ -38,16 +51,11 @@ pub struct AgentConfig {
     pub show_shell_warnings: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_iterations: 100,
             auto_approve_tools: false,
-            enable_peer_review: true,
             working_directory: ".".to_string(),
             context_window_threshold: 40,
             context_window_keep: 10,
@@ -87,6 +95,8 @@ pub struct AppConfig {
     pub active_provider: usize,
     pub agent: AgentConfig,
     pub ui: UiConfig,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 impl Default for AppConfig {
@@ -96,6 +106,7 @@ impl Default for AppConfig {
             active_provider: 0,
             agent: AgentConfig::default(),
             ui: UiConfig::default(),
+            mcp_servers: Vec::new(),
         }
     }
 } // default
@@ -161,6 +172,7 @@ impl AppConfig {
                     active_provider: 0,
                     agent: old.agent,
                     ui: old.ui,
+                    mcp_servers: Vec::new(),
                 };
 
                 // When migrating, keys from old config will be moved to keyring on next save automatically if the user modifies anything. Or we can save immediately:
@@ -266,6 +278,8 @@ impl AppConfig {
         } else if model.contains("claude") {
             // Anthropic official API
             "https://api.anthropic.com/v1".to_string()
+        } else if model.contains("gemini") {
+            "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
         } else if model.contains("nvidia/") {
             // NVIDIA NIM API
             "https://integrate.api.nvidia.com/v1".to_string()

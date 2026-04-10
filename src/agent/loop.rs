@@ -1,13 +1,16 @@
-use super::system_prompt::build_system_prompt;
+use crate::agent::system_prompt::{AgentRole, build_system_prompt};
 use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
+use crate::lsp::LspManager;
+use crate::mcp::McpManager;
 use crate::session::Session;
 use crate::tools;
 use crate::tools::SkillRegistry;
 use crate::tools::task::TaskManager;
 use anyhow::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -80,21 +83,24 @@ pub struct AgentLoop {
     command_tx: mpsc::UnboundedSender<AgentCommand>,
     auto_approve: bool,
     iteration: u32,
+    role: AgentRole,
+    lsp_manager: Arc<LspManager>,
+    mcp_manager: Arc<McpManager>,
 }
 
 impl AgentLoop {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: AppConfig,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
         command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
+        role: AgentRole,
+        mcp_manager: Arc<McpManager>,
     ) -> Self {
         let client = ApiClient::new(&config);
-        let system_prompt = build_system_prompt(
-            &config.agent.working_directory,
-            config.agent.enable_peer_review,
-        );
+        let system_prompt = build_system_prompt(&config.agent.working_directory, role, Vec::new());
         let auto_approve = config.agent.auto_approve_tools;
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -106,6 +112,10 @@ impl AgentLoop {
         session.tool_registry = Some(registry);
         session.messages.push(ChatMessage::system(&system_prompt));
 
+        let working_dir =
+            PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
+        let lsp_manager = Arc::new(LspManager::new(working_dir));
+
         Self {
             client,
             config,
@@ -115,9 +125,13 @@ impl AgentLoop {
             command_tx,
             auto_approve,
             iteration: 0,
+            role,
+            lsp_manager,
+            mcp_manager,
         }
     } // new
 
+    #[allow(clippy::too_many_arguments)]
     pub fn resume(
         config: AppConfig,
         session_id: &str,
@@ -125,6 +139,8 @@ impl AgentLoop {
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
         command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
+        role: AgentRole,
+        mcp_manager: Arc<McpManager>,
     ) -> Result<Self> {
         let client = ApiClient::new(&config);
         let mut session = Session::load(session_id)?;
@@ -135,6 +151,10 @@ impl AgentLoop {
         session.tool_registry = Some(registry);
         let auto_approve = config.agent.auto_approve_tools;
 
+        let working_dir =
+            PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
+        let lsp_manager = Arc::new(LspManager::new(working_dir));
+
         Ok(Self {
             client,
             config,
@@ -144,10 +164,48 @@ impl AgentLoop {
             command_tx,
             auto_approve,
             iteration: 0,
+            role,
+            lsp_manager,
+            mcp_manager,
         })
     } // resume
 
     pub async fn run(mut self) {
+        let task_manager = self.session.task_manager.clone();
+
+        // Discover MCP capabilities
+        let mut mcp_resources_list = Vec::new();
+        if let Some(registry) = self.session.tool_registry.clone() {
+            let _ = registry
+                .load_mcp_tools(
+                    &self.mcp_manager,
+                    &self.config.mcp_servers,
+                    Some(task_manager.clone()),
+                )
+                .await;
+
+            // List resources for discovery
+            if let Ok(resources) = self
+                .mcp_manager
+                .list_all_resources(&self.config.mcp_servers, Some(task_manager.clone()))
+                .await
+            {
+                for (server, res) in resources {
+                    mcp_resources_list.push((server, res.name, res.uri));
+                }
+            }
+
+            // Re-generate system prompt with newly loaded tools and resources
+            let system_prompt = crate::agent::system_prompt::build_system_prompt(
+                &self.config.agent.working_directory,
+                self.role,
+                mcp_resources_list,
+            );
+            if !self.session.messages.is_empty() && self.session.messages[0].role == "system" {
+                self.session.messages[0].content = Some(system_prompt);
+            }
+        }
+
         loop {
             tokio::select! {
                 Some(command) = self.command_rx.recv() => {
@@ -192,16 +250,13 @@ impl AgentLoop {
     } // run
 
     async fn run_connection_check(&mut self) {
-        let registry = self.session.tool_registry.as_ref();
-        let tool_defs = registry.map(|reg| tools::all_tool_definitions(reg));
-
         // 1. Check current provider (immediate feedback for the UI "light")
         let res = self
             .client
             .chat_completion_stream(
-                vec![ChatMessage::user("connection_check")],
+                vec![ChatMessage::user("ping")],
                 &self.config.current_provider().model,
-                tool_defs.clone(),
+                None,
             )
             .await;
 
@@ -230,11 +285,10 @@ impl AgentLoop {
             let client = ApiClient::new_for_provider(&self.config, provider);
             let tx = self.event_tx.clone();
             let model = provider.model.clone();
-            let td = tool_defs.clone();
 
             tokio::spawn(async move {
                 let res = client
-                    .chat_completion_stream(vec![ChatMessage::user("connection_check")], &model, td)
+                    .chat_completion_stream(vec![ChatMessage::user("ping")], &model, None)
                     .await;
                 tx.send(AgentEvent::ProviderStatus {
                     index: i,
@@ -475,23 +529,31 @@ impl AgentLoop {
                     let registry_clone = match self.session.tool_registry.as_ref() {
                         Some(reg) => reg.clone(),
                         None => {
-                            // This should not happen since we checked earlier, but handle gracefully
                             self.event_tx
                                 .send(AgentEvent::Error("Tool registry not available".to_string()))
                                 .ok();
                             continue;
                         }
                     };
+                    let config_clone = self.config.clone();
+                    let lsp_manager_clone = self.lsp_manager.clone();
+                    let mcp_manager_clone = self.mcp_manager.clone();
 
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
 
                     join_set.spawn(async move {
+                        let context = tools::ExecutionContext {
+                            task_manager: tm_clone,
+                            registry: registry_clone,
+                            config: config_clone,
+                            lsp_manager: lsp_manager_clone,
+                            mcp_manager: mcp_manager_clone,
+                        };
                         let (result, activity) = tools::execute_tool(
                             &name,
                             &arguments,
-                            &tm_clone,
-                            &registry_clone,
+                            &context,
                             Some(thread_id),
                             Some(total_threads),
                         )
@@ -712,23 +774,52 @@ impl AgentLoop {
         let model = self.config.current_provider().model.clone();
 
         tokio::spawn(async move {
-            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, specific file paths mentioned, and critical tool outputs. Note that the agent will be provided with its current overall task status separately, so your focus should strictly be on the technical context and what exact work/tool output has been done here. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
+            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, specific file paths mentioned, and critical tool outputs. Note that the agent will be provided with its current overall task status separately, so your focus should strictly be on the technical context and what exact work/tool output has been done here. CRITICAL: Do NOT list, mention, or re-evaluate any tasks, sub-tasks, or overarching objectives. To prevent old tasks from resurfacing, never include words like 'pending', 'todo', or 'completed task'. Your summary must focus ONLY on the technical work done and constraints discovered. Ensure the agent knows EXACTLY what was accomplished technically and where it left off. Be highly concise but technically precise.".to_string();
 
             let mut summary_messages = vec![ChatMessage::system(&pt)];
             let mut conversation_text = String::new();
-            for m in messages_to_summarize {
-                conversation_text.push_str(&format!(
-                    "{}: {}\n\n",
-                    m.role,
-                    m.content.as_deref().unwrap_or("[No content]")
-                ));
+
+            let mut task_tool_ids = std::collections::HashSet::new();
+            for m in &messages_to_summarize {
                 if let Some(tcs) = &m.tool_calls {
                     for tc in tcs {
-                        conversation_text.push_str(&format!(
-                            "Tool Call: {}({})\n",
-                            tc.function.name, tc.function.arguments
-                        ));
+                        if tc.function.name == "create_task" || tc.function.name == "update_task" {
+                            task_tool_ids.insert(tc.id.clone());
+                        }
                     }
+                }
+            }
+
+            for m in messages_to_summarize {
+                if m.role == "tool"
+                    && let Some(id) = &m.tool_call_id
+                    && task_tool_ids.contains(id)
+                {
+                    continue;
+                }
+
+                let content = m.content.as_deref().unwrap_or("[No content]");
+                let has_content_to_print = content != "[No content]";
+
+                let mut tools_to_print = Vec::new();
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        if tc.function.name != "create_task" && tc.function.name != "update_task" {
+                            tools_to_print.push(tc);
+                        }
+                    }
+                }
+
+                if !has_content_to_print && tools_to_print.is_empty() && m.role == "assistant" {
+                    continue;
+                }
+
+                conversation_text.push_str(&format!("{}: {}\n\n", m.role, content));
+                for tc in tools_to_print {
+                    conversation_text.push_str(&format!(
+                        "Tool Call: {}({})\n",
+                        tc.function.name, tc.function.arguments
+                    ));
                 }
             }
 
@@ -818,7 +909,16 @@ mod tests {
         let (event_tx, _) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let registry = Arc::new(SkillRegistry::new(None));
-        AgentLoop::new(config, event_tx, command_rx, command_tx, registry)
+        let mcp_manager = Arc::new(McpManager::new());
+        AgentLoop::new(
+            config,
+            event_tx,
+            command_rx,
+            command_tx,
+            registry,
+            crate::agent::system_prompt::AgentRole::Main,
+            mcp_manager,
+        )
     } // create_test_loop
 
     #[tokio::test]
