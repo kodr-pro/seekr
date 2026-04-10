@@ -14,6 +14,12 @@ impl SubAgentTool {
     }
 }
 
+impl Default for SubAgentTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Tool for SubAgentTool {
     fn name(&self) -> &str {

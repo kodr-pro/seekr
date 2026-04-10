@@ -4,6 +4,21 @@ use seekr::tools::task::TaskManager;
 use serde_json::json;
 use tokio::sync::mpsc;
 
+
+fn create_mock_context(tm: TaskManager, registry: Option<seekr::tools::SkillRegistry>) -> seekr::tools::ExecutionContext {
+    let config = seekr::config::AppConfig {
+        mcp_servers: vec![],
+        ..Default::default()
+    };
+    seekr::tools::ExecutionContext {
+        task_manager: tm,
+        registry: std::sync::Arc::new(registry.unwrap_or_else(|| seekr::tools::SkillRegistry::new(None))),
+        config,
+        lsp_manager: std::sync::Arc::new(seekr::lsp::LspManager::new(std::path::PathBuf::from("/tmp"))),
+        mcp_manager: std::sync::Arc::new(seekr::mcp::McpManager::new()),
+    }
+}
+
 #[tokio::test]
 async fn test_shell_command_simple() {
     let tm = TaskManager::new();
@@ -11,7 +26,8 @@ async fn test_shell_command_simple() {
         "command": "echo 'hello world'"
     });
 
-    let (result, summary) = shell_command(&args, &tm, Some(1), Some(1))
+    let ctx = create_mock_context(tm.clone(), None);
+    let (result, summary) = shell_command(&args, &ctx, Some(1), Some(1))
         .await
         .expect("shell_command failed");
     assert!(
@@ -34,7 +50,7 @@ async fn test_shell_command_interactive() {
 
     let tm_clone = tm.clone();
     let handle =
-        tokio::spawn(async move { shell_command(&args, &tm_clone, Some(1), Some(1)).await });
+        tokio::spawn(async move { shell_command(&args, &create_mock_context(tm_clone.clone(), None), Some(1), Some(1)).await });
 
     // 1. Skip the Activity event
     println!("Waiting for Activity event...");
@@ -86,7 +102,7 @@ async fn test_shell_command_stderr_prompt() {
 
     let tm_clone = tm.clone();
     let handle =
-        tokio::spawn(async move { shell_command(&args, &tm_clone, Some(1), Some(1)).await });
+        tokio::spawn(async move { shell_command(&args, &create_mock_context(tm_clone.clone(), None), Some(1), Some(1)).await });
 
     // 1. Skip Activity event
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), evt_rx.recv())
@@ -172,7 +188,7 @@ async fn test_execute_tool_mock() {
     let args = json!({ "command": "echo 'execute_tool test'" }).to_string();
 
     let (result, activity) =
-        execute_tool("shell_command", &args, &tm, &registry, Some(1), Some(1)).await;
+        execute_tool("shell_command", &args, &create_mock_context(tm.clone(), Some(registry.clone())), Some(1), Some(1)).await;
     // The shell command might output with newline or exit code, so check for the content
     // It might return "Command completed with exit code: 0" if output is empty
     // or it might contain the actual output
@@ -212,10 +228,10 @@ async fn test_parallel_file_reads() {
     let reg2 = registry.clone();
 
     let h1 = tokio::spawn(async move {
-        execute_tool("read_file", &args1, &tm1, &reg1, Some(1), Some(2)).await
+        execute_tool("read_file", &args1, &create_mock_context(tm1.clone(), Some(reg1.clone())), Some(1), Some(2)).await
     });
     let h2 = tokio::spawn(async move {
-        execute_tool("read_file", &args2, &tm2, &reg2, Some(2), Some(2)).await
+        execute_tool("read_file", &args2, &create_mock_context(tm2.clone(), Some(reg2.clone())), Some(2), Some(2)).await
     });
 
     let (res1, _) = h1.await.unwrap();

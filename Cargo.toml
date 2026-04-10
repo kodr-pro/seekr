@@ -77,10 +77,4 @@ lsp-types = "0.97"
 [dev-dependencies]
 tempfile = "3"
 
-[[bin]]
-name = "test_lsp"
-path = "/home/kodr/.gemini/antigravity/brain/a4359d70-4f1a-42ef-83fe-317ec955d548/scratch/test_lsp.rs"
 
-[[bin]]
-name = "migrate_skills"
-path = "/home/kodr/.gemini/antigravity/brain/a4359d70-4f1a-42ef-83fe-317ec955d548/scratch/migrate_skills.rs"

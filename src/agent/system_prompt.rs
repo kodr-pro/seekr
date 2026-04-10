@@ -22,10 +22,10 @@ pub fn build_system_prompt(working_directory: &str, role: AgentRole, mcp_resourc
     let rules_path = std::path::Path::new(expanded_wd.as_ref())
         .join(".seekr")
         .join("rules.md");
-    if rules_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&rules_path) {
-            project_rules = format!("\n## Project-Specific Rules & Context\n\n{}\n", content);
-        }
+    if rules_path.exists()
+        && let Ok(content) = std::fs::read_to_string(&rules_path)
+    {
+        project_rules = format!("\n## Project-Specific Rules & Context\n\n{}\n", content);
     }
 
     let intro = match role {

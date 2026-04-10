@@ -89,6 +89,7 @@ pub struct AgentLoop {
 }
 
 impl AgentLoop {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: AppConfig,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
@@ -129,6 +130,7 @@ impl AgentLoop {
         }
     } // new
 
+    #[allow(clippy::too_many_arguments)]
     pub fn resume(
         config: AppConfig,
         session_id: &str,

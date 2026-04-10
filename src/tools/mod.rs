@@ -121,18 +121,17 @@ impl SkillRegistry {
                     let md_path = skill_path.join("skill.md");
                     if md_path.exists()
                         && let Ok(content) = std::fs::read_to_string(&md_path)
+                        && let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &skill_path.to_string_lossy())
                     {
-                        if let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &skill_path.to_string_lossy()) {
-                            self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
-                        }
+                        self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
                     }
                 } else if skill_path.extension().and_then(|e| e.to_str()) == Some("md") {
                     // Direct .md file as a skill
-                    if let Ok(content) = std::fs::read_to_string(&skill_path) {
-                        let parent = skill_path.parent().unwrap_or(std::path::Path::new("."));
-                        if let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &parent.to_string_lossy()) {
-                            self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
-                        }
+                    let parent = skill_path.parent().unwrap_or(std::path::Path::new("."));
+                    if let Ok(content) = std::fs::read_to_string(&skill_path)
+                        && let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &parent.to_string_lossy())
+                    {
+                        self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
                     }
                 }
             }
@@ -463,8 +462,8 @@ mod tests {
         )?;
 
         let registry = SkillRegistry {
-            skills: Mutex::new(Vec::new()),
-            tools: Mutex::new(HashMap::new()),
+            skills: Arc::new(Mutex::new(Vec::new())),
+            tools: Arc::new(Mutex::new(HashMap::new())),
         };
 
         registry.load_skills_from_dir(dir.path());
@@ -474,7 +473,7 @@ mod tests {
             .get_tool("test_tool")
             .expect("test_tool should exist");
         let (res, _) = tool
-            .execute(&serde_json::json!({}), &TaskManager::new(), None, None)
+            .execute(&serde_json::json!({}), &crate::tools::ExecutionContext { task_manager: TaskManager::new(), registry: std::sync::Arc::new(SkillRegistry::new(None)), config: crate::config::AppConfig::default(), lsp_manager: std::sync::Arc::new(crate::lsp::LspManager::new(std::path::PathBuf::from("/tmp"))), mcp_manager: std::sync::Arc::new(crate::mcp::McpManager::new()) }, None, None)
             .await?;
         assert_eq!(res.trim(), "hello");
 

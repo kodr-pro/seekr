@@ -17,6 +17,12 @@ pub struct McpManager {
     pub metadata: Mutex<HashMap<String, McpServerMetadata>>,
 }
 
+impl Default for McpManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl McpManager {
     pub fn new() -> Self {
         Self {
@@ -57,16 +63,16 @@ impl McpManager {
                 };
                 let mut rx = rx_mutex.lock().await;
                 while let Some(notif) = rx.recv().await {
-                    if notif.method == "notifications/message" {
-                        if let Ok(msg) = serde_json::from_value::<crate::mcp::types::LoggingMessageNotification>(notif.params) {
-                            tm.log_activity(
-                                &server_name,
-                                &msg.data.to_string(),
-                                crate::tools::task::ActivityStatus::Starting, // Use Starting as a generic "In Progress/Log" status
-                                None,
-                                None,
-                            );
-                        }
+                    if notif.method == "notifications/message"
+                        && let Ok(msg) = serde_json::from_value::<crate::mcp::types::LoggingMessageNotification>(notif.params)
+                    {
+                        tm.log_activity(
+                            &server_name,
+                            &msg.data.to_string(),
+                            crate::tools::task::ActivityStatus::Starting, // Use Starting as a generic "In Progress/Log" status
+                            None,
+                            None,
+                        );
                     }
                 }
             });

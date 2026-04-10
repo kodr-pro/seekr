@@ -439,7 +439,7 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
         } else if let Some(ref mgr) = app.manager {
             let mcp_mgr = mgr.mcp_manager();
             if let Ok(meta_guard) = mcp_mgr.metadata.try_lock() {
-                let meta_map: &std::collections::HashMap<String, crate::mcp::manager::McpServerMetadata> = &*meta_guard;
+                let meta_map: &std::collections::HashMap<String, crate::mcp::manager::McpServerMetadata> = &meta_guard;
                 if let Some(meta) = meta_map.get(name) {
                     if !meta.tools.is_empty() {
                         detail_text.push(Line::from(vec![Span::styled("Tools:", Style::default().add_modifier(Modifier::UNDERLINED))]));

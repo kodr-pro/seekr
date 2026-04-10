@@ -26,15 +26,13 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
 
     // Parse Frontmatter (Version)
     let mut version = "1.0.0".to_string();
-    if let Some(line) = lines.next() {
-        if line.starts_with("---") {
-            while let Some(line) = lines.next() {
-                if line.starts_with("---") {
-                    break;
-                }
-                if line.starts_with("version:") {
-                    version = line.trim_start_matches("version:").trim().to_string();
-                }
+    if lines.next().is_some_and(|l| l.starts_with("---")) {
+        for line in lines.by_ref() {
+            if line.starts_with("---") {
+                break;
+            }
+            if line.starts_with("version:") {
+                version = line.trim_start_matches("version:").trim().to_string();
             }
         }
     }
@@ -72,7 +70,7 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
                     while let Some(l) = lines.next() {
                         if l.starts_with("```") {
                             let mut json_str = String::new();
-                            while let Some(jl) = lines.next() {
+                            for jl in lines.by_ref() {
                                 if jl.starts_with("```") {
                                     break;
                                 }
@@ -87,7 +85,7 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
                     // Expecting ```bash block (or similar)
                     while let Some(l) = lines.next() {
                         if l.starts_with("```") {
-                            while let Some(cl) = lines.next() {
+                            for cl in lines.by_ref() {
                                 if cl.starts_with("```") {
                                     break;
                                 }

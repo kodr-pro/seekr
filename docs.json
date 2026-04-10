@@ -33,6 +33,10 @@
         {
           "title": "The Agent Loop",
           "href": "/agent"
+        },
+        {
+          "title": "Model Context Protocol",
+          "href": "/mcp"
         }
       ]
     }

@@ -3,7 +3,7 @@ use lsp_types::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -39,11 +39,10 @@ pub struct LspClient {
     stdin: ChildStdin,
     pending_requests: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>>,
     next_id: Arc<Mutex<u64>>,
-    root_uri: Uri,
 }
 
 impl LspClient {
-    pub async fn spawn(command: &str, args: &[&str], root_path: &PathBuf) -> Result<Self> {
+    pub async fn spawn(command: &str, args: &[&str], root_path: &Path) -> Result<Self> {
         let mut child = Command::new(command)
             .args(args)
             .stdin(Stdio::piped())
@@ -74,7 +73,6 @@ impl LspClient {
             stdin,
             pending_requests,
             next_id: Arc::new(Mutex::new(1)),
-            root_uri: root_uri.clone(),
         };
 
         client.initialize(root_uri).await?;
@@ -85,7 +83,10 @@ impl LspClient {
     async fn initialize(&mut self, root_uri: Uri) -> Result<()> {
         let params = InitializeParams {
             process_id: Some(std::process::id()),
-            root_uri: Some(root_uri),
+            workspace_folders: Some(vec![WorkspaceFolder {
+                uri: root_uri,
+                name: "seekr_workspace".to_string(),
+            }]),
             capabilities: ClientCapabilities {
                 text_document: Some(TextDocumentClientCapabilities {
                     definition: Some(GotoCapability {
@@ -188,17 +189,15 @@ impl LspClient {
                 reader.read_exact(&mut body_buf).await?;
                 let body = String::from_utf8(body_buf).context("LSP body not UTF-8")?;
 
-                if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&body) {
-                    if let Some(id_val) = resp.id {
-                        if let Some(id) = id_val.as_u64() {
-                            if let Some(tx) = pending.lock().await.remove(&id) {
-                                if let Some(error) = resp.error {
-                                    tx.send(Err(anyhow!("LSP Error: {}", error))).ok();
-                                } else {
-                                    tx.send(Ok(resp.result.unwrap_or(Value::Null))).ok();
-                                }
-                            }
-                        }
+                if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&body)
+                    && let Some(id_val) = resp.id
+                    && let Some(id) = id_val.as_u64()
+                    && let Some(tx) = pending.lock().await.remove(&id)
+                {
+                    if let Some(error) = resp.error {
+                        tx.send(Err(anyhow!("LSP Error: {}", error))).ok();
+                    } else {
+                        tx.send(Ok(resp.result.unwrap_or(Value::Null))).ok();
                     }
                 }
             }
@@ -206,7 +205,7 @@ impl LspClient {
         Ok(())
     }
 
-    pub async fn goto_definition(&mut self, path: &PathBuf, line: u32, character: u32) -> Result<Value> {
+    pub async fn goto_definition(&mut self, path: &Path, line: u32, character: u32) -> Result<Value> {
         let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy())).map_err(|_| anyhow!("Invalid file path"))?;
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
@@ -220,7 +219,7 @@ impl LspClient {
         self.request("textDocument/definition", serde_json::to_value(params)?).await
     }
 
-    pub async fn find_references(&mut self, path: &PathBuf, line: u32, character: u32) -> Result<Value> {
+    pub async fn find_references(&mut self, path: &Path, line: u32, character: u32) -> Result<Value> {
         let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy())).map_err(|_| anyhow!("Invalid file path"))?;
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
@@ -237,7 +236,7 @@ impl LspClient {
         self.request("textDocument/references", serde_json::to_value(params)?).await
     }
 
-    pub async fn hover(&mut self, path: &PathBuf, line: u32, character: u32) -> Result<Value> {
+    pub async fn hover(&mut self, path: &Path, line: u32, character: u32) -> Result<Value> {
         let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy())).map_err(|_| anyhow!("Invalid file path"))?;
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
