@@ -40,6 +40,10 @@ impl ApiClient {
 
         let provider: Arc<dyn Provider> = if provider_cfg.base_url.contains("anthropic.com") {
             Arc::new(AnthropicProvider)
+        } else if provider_cfg.base_url.contains("generativelanguage.googleapis.com")
+            || provider_cfg.model.contains("gemini")
+        {
+            Arc::new(super::gemini::GeminiProvider)
         } else {
             Arc::new(OpenAiProvider)
         };

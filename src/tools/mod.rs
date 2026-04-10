@@ -2,21 +2,28 @@ pub mod file_edit;
 pub mod shell;
 pub mod task;
 pub mod web;
+pub mod agent;
 
 use crate::api::types::ToolDefinition;
-use crate::tools::task::TaskManager;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub use crate::tools::task::{ActivityEntry, ActivityStatus};
+pub use crate::tools::task::{ActivityEntry, ActivityStatus, TaskManager};
+use crate::config::AppConfig;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub name: String,
     pub description: String,
     pub version: String,
+}
+
+pub struct ExecutionContext {
+    pub task_manager: TaskManager,
+    pub registry: Arc<SkillRegistry>,
+    pub config: AppConfig,
 }
 
 #[async_trait]
@@ -26,7 +33,7 @@ pub trait Tool: Send + Sync {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)>;
@@ -184,12 +191,12 @@ impl Tool for ScriptTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
         let summary = format!("script_tool {}", self.name);
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             &self.name,
             &summary,
             crate::tools::task::ActivityStatus::Starting,
@@ -260,6 +267,7 @@ impl Skill for CoreSkill {
             Arc::new(web::WebSearchTool),
             Arc::new(task::CreateTaskTool),
             Arc::new(task::UpdateTaskTool),
+            Arc::new(agent::SubAgentTool::new()),
         ]
     } // tools
 } // impl Skill for CoreSkill
@@ -267,17 +275,16 @@ impl Skill for CoreSkill {
 pub async fn execute_tool(
     name: &str,
     args_json: &str,
-    task_manager: &TaskManager,
-    registry: &SkillRegistry,
+    context: &ExecutionContext,
     thread_id: Option<usize>,
     total_threads: Option<usize>,
 ) -> (String, ActivityEntry) {
     let args: serde_json::Value = serde_json::from_str(args_json).unwrap_or(serde_json::json!({}));
 
-    let tool = match registry.get_tool(name) {
+    let tool = match context.registry.get_tool(name) {
         Some(t) => t,
         _ => {
-            task_manager.log_activity(
+            context.task_manager.log_activity(
                 name,
                 &format!("Error: Unknown tool {}", name),
                 ActivityStatus::Failure,
@@ -299,11 +306,11 @@ pub async fn execute_tool(
     };
 
     match tool
-        .execute(&args, task_manager, thread_id, total_threads)
+        .execute(&args, context, thread_id, total_threads)
         .await
     {
         Ok((result, summary)) => {
-            task_manager.log_activity(
+            context.task_manager.log_activity(
                 name,
                 &summary,
                 ActivityStatus::Success,
@@ -324,7 +331,7 @@ pub async fn execute_tool(
         }
         Err(e) => {
             let error_msg = format!("Error: {}", e);
-            task_manager.log_activity(
+            context.task_manager.log_activity(
                 name,
                 &error_msg,
                 ActivityStatus::Failure,

@@ -259,6 +259,8 @@ impl AppConfig {
         } else if model.contains("claude") {
             // Anthropic official API
             "https://api.anthropic.com/v1".to_string()
+        } else if model.contains("gemini") {
+            "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
         } else if model.contains("nvidia/") {
             // NVIDIA NIM API
             "https://integrate.api.nvidia.com/v1".to_string()

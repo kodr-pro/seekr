@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::errors::ToolError;
-use crate::tools::{Tool, task::TaskManager, truncate};
+use crate::tools::{Tool, truncate, ExecutionContext};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -237,7 +237,7 @@ impl Tool for WebFetchTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -250,7 +250,7 @@ impl Tool for WebFetchTool {
             short_url.push_str("...");
         }
         let summary = format!("web_fetch {}", short_url);
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             crate::tools::task::ActivityStatus::Starting,
@@ -287,7 +287,7 @@ impl Tool for WebSearchTool {
     async fn execute(
         &self,
         args: &serde_json::Value,
-        task_manager: &TaskManager,
+        context: &ExecutionContext,
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
@@ -295,7 +295,7 @@ impl Tool for WebSearchTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing query"))?;
         let summary = format!("web_search \"{}\"", truncate(query, 20));
-        task_manager.log_activity(
+        context.task_manager.log_activity(
             self.name(),
             &summary,
             crate::tools::task::ActivityStatus::Starting,

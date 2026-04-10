@@ -1,4 +1,4 @@
-use super::system_prompt::build_system_prompt;
+use crate::agent::system_prompt::{build_system_prompt, AgentRole};
 use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
@@ -80,6 +80,7 @@ pub struct AgentLoop {
     command_tx: mpsc::UnboundedSender<AgentCommand>,
     auto_approve: bool,
     iteration: u32,
+    role: AgentRole,
 }
 
 impl AgentLoop {
@@ -89,9 +90,10 @@ impl AgentLoop {
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
         command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
+        role: AgentRole,
     ) -> Self {
         let client = ApiClient::new(&config);
-        let system_prompt = build_system_prompt(&config.agent.working_directory);
+        let system_prompt = build_system_prompt(&config.agent.working_directory, role);
         let auto_approve = config.agent.auto_approve_tools;
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -112,6 +114,7 @@ impl AgentLoop {
             command_tx,
             auto_approve,
             iteration: 0,
+            role,
         }
     } // new
 
@@ -122,6 +125,7 @@ impl AgentLoop {
         command_rx: mpsc::UnboundedReceiver<AgentCommand>,
         command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
+        role: AgentRole,
     ) -> Result<Self> {
         let client = ApiClient::new(&config);
         let mut session = Session::load(session_id)?;
@@ -141,6 +145,7 @@ impl AgentLoop {
             command_tx,
             auto_approve,
             iteration: 0,
+            role,
         })
     } // resume
 
@@ -472,23 +477,27 @@ impl AgentLoop {
                     let registry_clone = match self.session.tool_registry.as_ref() {
                         Some(reg) => reg.clone(),
                         None => {
-                            // This should not happen since we checked earlier, but handle gracefully
                             self.event_tx
                                 .send(AgentEvent::Error("Tool registry not available".to_string()))
                                 .ok();
                             continue;
                         }
                     };
+                    let config_clone = self.config.clone();
 
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
 
                     join_set.spawn(async move {
+                        let context = tools::ExecutionContext {
+                            task_manager: tm_clone,
+                            registry: registry_clone,
+                            config: config_clone,
+                        };
                         let (result, activity) = tools::execute_tool(
                             &name,
                             &arguments,
-                            &tm_clone,
-                            &registry_clone,
+                            &context,
                             Some(thread_id),
                             Some(total_threads),
                         )
