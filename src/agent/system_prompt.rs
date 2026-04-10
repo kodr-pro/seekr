@@ -5,7 +5,11 @@ pub enum AgentRole {
     Explorer,
 }
 
-pub fn build_system_prompt(working_directory: &str, role: AgentRole, mcp_resources: Vec<(String, String, String)>) -> String {
+pub fn build_system_prompt(
+    working_directory: &str,
+    role: AgentRole,
+    mcp_resources: Vec<(String, String, String)>,
+) -> String {
     let mut mcp_context = String::new();
     if !mcp_resources.is_empty() {
         mcp_context.push_str("\n## Available MCP Context Resources\n");
@@ -29,9 +33,15 @@ pub fn build_system_prompt(working_directory: &str, role: AgentRole, mcp_resourc
     }
 
     let intro = match role {
-        AgentRole::Main => "You are Seekr, an autonomous AI agent running in a terminal. You complete tasks by using tools available to you.",
-        AgentRole::Planner => "You are the Seekr Planner. Your goal is to analyze a complex request, explore the codebase as needed, and produce a DETAILED, STEP-BY-STEP implementation plan. You do NOT modify files. Your output should be a structured plan that the Main Agent can follow.",
-        AgentRole::Explorer => "You are the Seekr Explorer. Your goal is to quickly navigate the codebase, find specific symbols, patterns, or logic, and report back. You are optimized for read-only speed and precision. You do NOT modify code.",
+        AgentRole::Main => {
+            "You are Seekr, an autonomous AI agent running in a terminal. You complete tasks by using tools available to you."
+        }
+        AgentRole::Planner => {
+            "You are the Seekr Planner. Your goal is to analyze a complex request, explore the codebase as needed, and produce a DETAILED, STEP-BY-STEP implementation plan. You do NOT modify files. Your output should be a structured plan that the Main Agent can follow."
+        }
+        AgentRole::Explorer => {
+            "You are the Seekr Explorer. Your goal is to quickly navigate the codebase, find specific symbols, patterns, or logic, and report back. You are optimized for read-only speed and precision. You do NOT modify code."
+        }
     };
 
     let prompt = format!(

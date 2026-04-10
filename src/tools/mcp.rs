@@ -53,11 +53,17 @@ impl Tool for McpTool {
         );
 
         // Find the server config
-        let server_config = context.config.mcp_servers.iter()
+        let server_config = context
+            .config
+            .mcp_servers
+            .iter()
             .find(|s| s.name == self.server_name)
             .ok_or_else(|| anyhow!("MCP server {} configuration not found", self.server_name))?;
 
-        let client_mutex = context.mcp_manager.get_client(server_config, Some(context.task_manager.clone())).await?;
+        let client_mutex = context
+            .mcp_manager
+            .get_client(server_config, Some(context.task_manager.clone()))
+            .await?;
         let mut client = client_mutex.lock().await;
 
         let result = client.call_tool(self.name(), args.clone()).await?;
@@ -66,8 +72,12 @@ impl Tool for McpTool {
         for content in result.content {
             match content {
                 crate::mcp::types::McpContent::Text { text } => output.push_str(&text),
-                crate::mcp::types::McpContent::Image { .. } => output.push_str("\n[Image content received, but not displayed in TUI]"),
-                crate::mcp::types::McpContent::Resource { resource } => output.push_str(&format!("\n[Resource content: {:?}]", resource)),
+                crate::mcp::types::McpContent::Image { .. } => {
+                    output.push_str("\n[Image content received, but not displayed in TUI]")
+                }
+                crate::mcp::types::McpContent::Resource { resource } => {
+                    output.push_str(&format!("\n[Resource content: {:?}]", resource))
+                }
             }
         }
 

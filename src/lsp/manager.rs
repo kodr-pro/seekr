@@ -18,9 +18,14 @@ impl LspManager {
         }
     }
 
-    pub async fn get_client(&self, language: &str, command: &str, args: &[&str]) -> Result<Arc<Mutex<LspClient>>> {
+    pub async fn get_client(
+        &self,
+        language: &str,
+        command: &str,
+        args: &[&str],
+    ) -> Result<Arc<Mutex<LspClient>>> {
         let mut clients = self.clients.lock().await;
-        
+
         if let Some(client) = clients.get(language) {
             return Ok(client.clone());
         }
@@ -28,7 +33,7 @@ impl LspManager {
         let client = LspClient::spawn(command, args, &self.working_dir).await?;
         let shared_client = Arc::new(Mutex::new(client));
         clients.insert(language.to_string(), shared_client.clone());
-        
+
         Ok(shared_client)
     }
 }

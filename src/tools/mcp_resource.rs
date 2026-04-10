@@ -1,7 +1,7 @@
 use crate::api::types::ToolDefinition;
 use crate::mcp::types::ResourceData;
 use crate::tools::{ExecutionContext, Tool};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -44,7 +44,9 @@ impl Tool for McpReadResourceTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let server_name = args["server_name"].as_str().ok_or_else(|| anyhow!("Missing server_name"))?;
+        let server_name = args["server_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing server_name"))?;
         let uri = args["uri"].as_str().ok_or_else(|| anyhow!("Missing uri"))?;
 
         let summary = format!("Reading MCP resource {} from {}", uri, server_name);
@@ -56,11 +58,17 @@ impl Tool for McpReadResourceTool {
             total_threads,
         );
 
-        let config = context.config.mcp_servers.iter()
+        let config = context
+            .config
+            .mcp_servers
+            .iter()
             .find(|s| s.name == server_name)
             .ok_or_else(|| anyhow!("MCP server {} not found", server_name))?;
 
-        let client_mutex = context.mcp_manager.get_client(config, Some(context.task_manager.clone())).await?;
+        let client_mutex = context
+            .mcp_manager
+            .get_client(config, Some(context.task_manager.clone()))
+            .await?;
         let mut client = client_mutex.lock().await;
         let result = client.read_resource(uri).await?;
 
@@ -116,8 +124,10 @@ impl Tool for McpListResourcesTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let server_name = args["server_name"].as_str().ok_or_else(|| anyhow!("Missing server_name"))?;
-        
+        let server_name = args["server_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing server_name"))?;
+
         let summary = format!("Listing MCP resources from {}", server_name);
         context.task_manager.log_activity(
             self.name(),
@@ -127,17 +137,28 @@ impl Tool for McpListResourcesTool {
             total_threads,
         );
 
-        let config = context.config.mcp_servers.iter()
+        let config = context
+            .config
+            .mcp_servers
+            .iter()
             .find(|s| s.name == server_name)
             .ok_or_else(|| anyhow!("MCP server {} not found", server_name))?;
 
-        let client_mutex = context.mcp_manager.get_client(config, Some(context.task_manager.clone())).await?;
+        let client_mutex = context
+            .mcp_manager
+            .get_client(config, Some(context.task_manager.clone()))
+            .await?;
         let mut client = client_mutex.lock().await;
         let resources = client.list_resources().await?;
 
         let mut output = format!("Resources from {}:\n", server_name);
         for res in resources {
-            output.push_str(&format!("- {}: {} ({})\n", res.name, res.uri, res.description.unwrap_or_default()));
+            output.push_str(&format!(
+                "- {}: {} ({})\n",
+                res.name,
+                res.uri,
+                res.description.unwrap_or_default()
+            ));
         }
 
         Ok((output, summary))

@@ -1,12 +1,12 @@
 use crate::mcp::types::*;
 use anyhow::{Context, Result, anyhow};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 pub struct McpClient {
     _child: Child,
@@ -28,8 +28,14 @@ impl McpClient {
             .spawn()
             .with_context(|| format!("Failed to spawn MCP server: {}", command))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("Failed to open stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to open stdout"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdout"))?;
 
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let (notif_tx, notif_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -67,7 +73,9 @@ impl McpClient {
             },
         };
 
-        let resp = self.request("initialize", serde_json::to_value(params)?).await?;
+        let resp = self
+            .request("initialize", serde_json::to_value(params)?)
+            .await?;
         let result: InitializeResult = serde_json::from_value(resp)?;
 
         self.server_info = Some(result.server_info);
@@ -90,7 +98,9 @@ impl McpClient {
             name: name.to_string(),
             arguments,
         };
-        let resp = self.request("tools/call", serde_json::to_value(params)?).await?;
+        let resp = self
+            .request("tools/call", serde_json::to_value(params)?)
+            .await?;
         let result: CallToolResult = serde_json::from_value(resp)?;
         Ok(result)
     }
@@ -102,7 +112,9 @@ impl McpClient {
     }
 
     pub async fn read_resource(&mut self, uri: &str) -> Result<ReadResourceResult> {
-        let resp = self.request("resources/read", json!({ "uri": uri })).await?;
+        let resp = self
+            .request("resources/read", json!({ "uri": uri }))
+            .await?;
         let result: ReadResourceResult = serde_json::from_value(resp)?;
         Ok(result)
     }
@@ -114,7 +126,12 @@ impl McpClient {
     }
 
     pub async fn get_prompt(&mut self, name: &str, arguments: Value) -> Result<GetPromptResult> {
-        let resp = self.request("prompts/get", json!({ "name": name, "arguments": arguments })).await?;
+        let resp = self
+            .request(
+                "prompts/get",
+                json!({ "name": name, "arguments": arguments }),
+            )
+            .await?;
         let result: GetPromptResult = serde_json::from_value(resp)?;
         Ok(result)
     }
@@ -183,7 +200,12 @@ impl McpClient {
                     let mut guard = pending.lock().await;
                     if let Some(tx) = guard.remove(&id) {
                         if let Some(error) = resp.error {
-                            tx.send(Err(anyhow!("MCP Error ({}): {}", error.code, error.message))).ok();
+                            tx.send(Err(anyhow!(
+                                "MCP Error ({}): {}",
+                                error.code,
+                                error.message
+                            )))
+                            .ok();
                         } else {
                             tx.send(Ok(resp.result.unwrap_or(Value::Null))).ok();
                         }

@@ -373,7 +373,10 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
             let meta = skill.metadata();
             let line = Line::from(vec![
                 Span::styled("📦 ", Style::default().fg(Color::Yellow)),
-                Span::styled(meta.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    meta.name.clone(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(format!(" v{}", meta.version)),
             ]);
             items.push(ListItem::new(line));
@@ -417,20 +420,35 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
     if let Some((name, is_local)) = skill_metas.get(app.menu_state.selection_idx) {
         let mut detail_text = Vec::new();
         detail_text.push(Line::from(vec![
-            Span::styled(name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            Span::raw(if *is_local { " (Local Skill)" } else { " (MCP Server)" }),
+            Span::styled(
+                name,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(if *is_local {
+                " (Local Skill)"
+            } else {
+                " (MCP Server)"
+            }),
         ]));
         detail_text.push(Line::from(""));
 
         if *is_local {
-            detail_text.push(Line::from(vec![Span::styled("Tools:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+            detail_text.push(Line::from(vec![Span::styled(
+                "Tools:",
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            )]));
             if let Some(ref mgr) = app.manager {
                 for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
                     if skill.metadata().name == *name {
                         for tool in skill.tools() {
                             detail_text.push(Line::from(vec![
                                 Span::raw("  - "),
-                                Span::styled(tool.name().to_string(), Style::default().fg(Color::Green)),
+                                Span::styled(
+                                    tool.name().to_string(),
+                                    Style::default().fg(Color::Green),
+                                ),
                             ]));
                         }
                     }
@@ -439,30 +457,53 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
         } else if let Some(ref mgr) = app.manager {
             let mcp_mgr = mgr.mcp_manager();
             if let Ok(meta_guard) = mcp_mgr.metadata.try_lock() {
-                let meta_map: &std::collections::HashMap<String, crate::mcp::manager::McpServerMetadata> = &meta_guard;
+                let meta_map: &std::collections::HashMap<
+                    String,
+                    crate::mcp::manager::McpServerMetadata,
+                > = &meta_guard;
                 if let Some(meta) = meta_map.get(name) {
                     if !meta.tools.is_empty() {
-                        detail_text.push(Line::from(vec![Span::styled("Tools:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+                        detail_text.push(Line::from(vec![Span::styled(
+                            "Tools:",
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        )]));
                         for t in &meta.tools {
-                            detail_text.push(Line::from(vec![Span::raw("  - "), Span::styled(t.name.clone(), Style::default().fg(Color::Green))]));
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(t.name.clone(), Style::default().fg(Color::Green)),
+                            ]));
                         }
                     }
                     if !meta.resources.is_empty() {
                         detail_text.push(Line::from(""));
-                        detail_text.push(Line::from(vec![Span::styled("Resources:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+                        detail_text.push(Line::from(vec![Span::styled(
+                            "Resources:",
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        )]));
                         for r in &meta.resources {
-                            detail_text.push(Line::from(vec![Span::raw("  - "), Span::styled(r.name.clone(), Style::default().fg(Color::Blue))]));
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(r.name.clone(), Style::default().fg(Color::Blue)),
+                            ]));
                         }
                     }
                     if !meta.prompts.is_empty() {
                         detail_text.push(Line::from(""));
-                        detail_text.push(Line::from(vec![Span::styled("Prompts:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+                        detail_text.push(Line::from(vec![Span::styled(
+                            "Prompts:",
+                            Style::default().add_modifier(Modifier::UNDERLINED),
+                        )]));
                         for p in &meta.prompts {
-                            detail_text.push(Line::from(vec![Span::raw("  - "), Span::styled(p.name.clone(), Style::default().fg(Color::Magenta))]));
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(p.name.clone(), Style::default().fg(Color::Magenta)),
+                            ]));
                         }
                     }
                 } else {
-                    detail_text.push(Line::from("Server is being initialized or no metadata available."));
+                    detail_text.push(Line::from(
+                        "Server is being initialized or no metadata available.",
+                    ));
                 }
             } else {
                 detail_text.push(Line::from("Loading metadata..."));

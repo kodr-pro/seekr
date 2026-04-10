@@ -1,13 +1,13 @@
+pub mod agent;
 pub mod file_edit;
+pub mod lsp;
+pub mod mcp;
+pub mod mcp_prompt;
+pub mod mcp_resource;
+pub mod parser;
 pub mod shell;
 pub mod task;
 pub mod web;
-pub mod agent;
-pub mod lsp;
-pub mod mcp;
-pub mod mcp_resource;
-pub mod mcp_prompt;
-pub mod parser;
 
 use crate::api::types::ToolDefinition;
 use anyhow::Result;
@@ -15,13 +15,13 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-pub use crate::tools::task::{ActivityEntry, ActivityStatus, TaskManager};
 use crate::config::{AppConfig, McpServerConfig};
 use crate::lsp::LspManager;
 use crate::mcp::McpManager;
 use crate::tools::mcp::McpTool;
-use crate::tools::mcp_resource::{McpReadResourceTool, McpListResourcesTool};
 use crate::tools::mcp_prompt::{McpGetPromptTool, McpListPromptsTool};
+use crate::tools::mcp_resource::{McpListResourcesTool, McpReadResourceTool};
+pub use crate::tools::task::{ActivityEntry, ActivityStatus, TaskManager};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
@@ -121,7 +121,8 @@ impl SkillRegistry {
                     let md_path = skill_path.join("skill.md");
                     if md_path.exists()
                         && let Ok(content) = std::fs::read_to_string(&md_path)
-                        && let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &skill_path.to_string_lossy())
+                        && let Ok((metadata, tools)) =
+                            parser::parse_markdown_skill(&content, &skill_path.to_string_lossy())
                     {
                         self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
                     }
@@ -129,7 +130,8 @@ impl SkillRegistry {
                     // Direct .md file as a skill
                     let parent = skill_path.parent().unwrap_or(std::path::Path::new("."));
                     if let Ok(content) = std::fs::read_to_string(&skill_path)
-                        && let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &parent.to_string_lossy())
+                        && let Ok((metadata, tools)) =
+                            parser::parse_markdown_skill(&content, &parent.to_string_lossy())
                     {
                         self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
                     }
@@ -182,7 +184,12 @@ impl SkillRegistry {
         self.skills.lock().unwrap().push(skill);
     } // register_skill
 
-    pub async fn load_mcp_tools(&self, mcp_manager: &McpManager, configs: &[McpServerConfig], task_manager: Option<TaskManager>) -> Result<()> {
+    pub async fn load_mcp_tools(
+        &self,
+        mcp_manager: &McpManager,
+        configs: &[McpServerConfig],
+        task_manager: Option<TaskManager>,
+    ) -> Result<()> {
         let mcp_tools = mcp_manager.list_all_tools(configs, task_manager).await?;
         let mut tools = self.tools.lock().unwrap();
         for (server_name, tool_def) in mcp_tools {
@@ -197,7 +204,12 @@ impl SkillRegistry {
     } // get_tool
 
     pub fn all_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.lock().unwrap().values().map(|t| t.definition()).collect()
+        self.tools
+            .lock()
+            .unwrap()
+            .values()
+            .map(|t| t.definition())
+            .collect()
     } // all_definitions
 } // impl SkillRegistry
 
@@ -357,10 +369,7 @@ pub async fn execute_tool(
         }
     };
 
-    match tool
-        .execute(&args, context, thread_id, total_threads)
-        .await
-    {
+    match tool.execute(&args, context, thread_id, total_threads).await {
         Ok((result, summary)) => {
             context.task_manager.log_activity(
                 name,
@@ -473,7 +482,20 @@ mod tests {
             .get_tool("test_tool")
             .expect("test_tool should exist");
         let (res, _) = tool
-            .execute(&serde_json::json!({}), &crate::tools::ExecutionContext { task_manager: TaskManager::new(), registry: std::sync::Arc::new(SkillRegistry::new(None)), config: crate::config::AppConfig::default(), lsp_manager: std::sync::Arc::new(crate::lsp::LspManager::new(std::path::PathBuf::from("/tmp"))), mcp_manager: std::sync::Arc::new(crate::mcp::McpManager::new()) }, None, None)
+            .execute(
+                &serde_json::json!({}),
+                &crate::tools::ExecutionContext {
+                    task_manager: TaskManager::new(),
+                    registry: std::sync::Arc::new(SkillRegistry::new(None)),
+                    config: crate::config::AppConfig::default(),
+                    lsp_manager: std::sync::Arc::new(crate::lsp::LspManager::new(
+                        std::path::PathBuf::from("/tmp"),
+                    )),
+                    mcp_manager: std::sync::Arc::new(crate::mcp::McpManager::new()),
+                },
+                None,
+                None,
+            )
             .await?;
         assert_eq!(res.trim(), "hello");
 

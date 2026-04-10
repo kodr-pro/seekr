@@ -1,5 +1,5 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
-use crate::tools::{Tool, ExecutionContext};
+use crate::tools::{ExecutionContext, Tool};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
@@ -39,9 +39,15 @@ impl Tool for LspDefinitionTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let path_str = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
-        let line = args["line"].as_u64().ok_or_else(|| anyhow!("Missing line"))? as u32;
-        let character = args["character"].as_u64().ok_or_else(|| anyhow!("Missing character"))? as u32;
+        let path_str = args["path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing path"))?;
+        let line = args["line"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing line"))? as u32;
+        let character = args["character"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing character"))? as u32;
 
         let path = PathBuf::from(path_str);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -58,8 +64,10 @@ impl Tool for LspDefinitionTool {
         let mut client = client_mutex.lock().await;
 
         // Convert 1-based to 0-based for LSP
-        let result = client.goto_definition(&path, line - 1, character - 1).await?;
-        
+        let result = client
+            .goto_definition(&path, line - 1, character - 1)
+            .await?;
+
         let summary = format!("lsp_definition in {}", crate::tools::short_path(path_str));
         context.task_manager.log_activity(
             self.name(),
@@ -107,9 +115,15 @@ impl Tool for LspReferencesTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let path_str = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
-        let line = args["line"].as_u64().ok_or_else(|| anyhow!("Missing line"))? as u32;
-        let character = args["character"].as_u64().ok_or_else(|| anyhow!("Missing character"))? as u32;
+        let path_str = args["path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing path"))?;
+        let line = args["line"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing line"))? as u32;
+        let character = args["character"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing character"))? as u32;
 
         let path = PathBuf::from(path_str);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -125,8 +139,10 @@ impl Tool for LspReferencesTool {
         let client_mutex = context.lsp_manager.get_client(ext, cmd, &args_list).await?;
         let mut client = client_mutex.lock().await;
 
-        let result = client.find_references(&path, line - 1, character - 1).await?;
-        
+        let result = client
+            .find_references(&path, line - 1, character - 1)
+            .await?;
+
         let summary = format!("lsp_references in {}", crate::tools::short_path(path_str));
         context.task_manager.log_activity(
             self.name(),
@@ -153,7 +169,9 @@ impl Tool for LspHoverTool {
             tool_type: "function".to_string(),
             function: FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Get hover information (docs, types) for the symbol at the given position.".to_string(),
+                description:
+                    "Get hover information (docs, types) for the symbol at the given position."
+                        .to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -174,9 +192,15 @@ impl Tool for LspHoverTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let path_str = args["path"].as_str().ok_or_else(|| anyhow!("Missing path"))?;
-        let line = args["line"].as_u64().ok_or_else(|| anyhow!("Missing line"))? as u32;
-        let character = args["character"].as_u64().ok_or_else(|| anyhow!("Missing character"))? as u32;
+        let path_str = args["path"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing path"))?;
+        let line = args["line"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing line"))? as u32;
+        let character = args["character"]
+            .as_u64()
+            .ok_or_else(|| anyhow!("Missing character"))? as u32;
 
         let path = PathBuf::from(path_str);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -193,7 +217,7 @@ impl Tool for LspHoverTool {
         let mut client = client_mutex.lock().await;
 
         let result = client.hover(&path, line - 1, character - 1).await?;
-        
+
         let summary = format!("lsp_hover in {}", crate::tools::short_path(path_str));
         context.task_manager.log_activity(
             self.name(),

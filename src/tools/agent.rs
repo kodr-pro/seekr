@@ -1,8 +1,8 @@
 use crate::agent::system_prompt::AgentRole;
 use crate::agent::{AgentCommand, AgentEvent, AgentLoop};
 use crate::api::types::ToolDefinition;
-use crate::tools::{Tool, ExecutionContext};
-use anyhow::{anyhow, Result};
+use crate::tools::{ExecutionContext, Tool};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
@@ -58,8 +58,12 @@ impl Tool for SubAgentTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let role_str = args["role"].as_str().ok_or_else(|| anyhow!("Missing role"))?;
-        let task = args["task"].as_str().ok_or_else(|| anyhow!("Missing task"))?;
+        let role_str = args["role"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing role"))?;
+        let task = args["task"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing task"))?;
 
         let role = match role_str {
             "planner" => AgentRole::Planner,
@@ -67,7 +71,11 @@ impl Tool for SubAgentTool {
             _ => AgentRole::Main,
         };
 
-        let summary = format!("Sub-agent ({}) started: {}", role_str, crate::tools::truncate(task, 40));
+        let summary = format!(
+            "Sub-agent ({}) started: {}",
+            role_str,
+            crate::tools::truncate(task, 40)
+        );
         context.task_manager.log_activity(
             self.name(),
             &summary,
@@ -109,12 +117,12 @@ impl Tool for SubAgentTool {
                     final_answer.push_str(&text);
                 }
                 AgentEvent::ToolCallResult { name, result } => {
-                   tool_results.push(format!("{}: {}", name, crate::tools::truncate(&result, 30)));
+                    tool_results.push(format!("{}: {}", name, crate::tools::truncate(&result, 30)));
                 }
                 AgentEvent::TurnComplete => {
-                   // For sub-agents, we usually want them to finish in one turn or stop when they give a final answer.
-                   // However, AgentLoop continues until it stops calling tools.
-                   // We'll wait for the process to actually finish (AgentLoop::run returns on Shutdown or completion).
+                    // For sub-agents, we usually want them to finish in one turn or stop when they give a final answer.
+                    // However, AgentLoop continues until it stops calling tools.
+                    // We'll wait for the process to actually finish (AgentLoop::run returns on Shutdown or completion).
                 }
                 AgentEvent::MaxIterationsReached => {
                     break;
@@ -136,9 +144,6 @@ impl Tool for SubAgentTool {
             }
         }
 
-        Ok((
-            final_answer,
-            format!("Sub-agent ({}) finished.", role_str)
-        ))
+        Ok((final_answer, format!("Sub-agent ({}) finished.", role_str)))
     }
 }

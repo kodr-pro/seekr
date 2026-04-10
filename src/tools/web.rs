@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::errors::ToolError;
-use crate::tools::{Tool, truncate, ExecutionContext};
+use crate::tools::{ExecutionContext, Tool, truncate};
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
 use reqwest::Client;

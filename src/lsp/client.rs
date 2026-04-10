@@ -1,15 +1,15 @@
 use anyhow::{Context, Result, anyhow};
 use lsp_types::*;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use std::str::FromStr;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{Mutex, oneshot};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct JsonRpcRequest {
@@ -51,8 +51,14 @@ impl LspClient {
             .spawn()
             .with_context(|| format!("Failed to spawn LSP server: {}", command))?;
 
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("Failed to open stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("Failed to open stdout"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to open stdout"))?;
 
         let pending_requests = Arc::new(Mutex::new(HashMap::new()));
         let pending_clone = pending_requests.clone();
@@ -107,8 +113,10 @@ impl LspClient {
             ..Default::default()
         };
 
-        let _response = self.request("initialize", serde_json::to_value(params)?).await?;
-        
+        let _response = self
+            .request("initialize", serde_json::to_value(params)?)
+            .await?;
+
         // Send initialized notification
         self.notify("initialized", json!({})).await?;
 
@@ -205,8 +213,14 @@ impl LspClient {
         Ok(())
     }
 
-    pub async fn goto_definition(&mut self, path: &Path, line: u32, character: u32) -> Result<Value> {
-        let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy())).map_err(|_| anyhow!("Invalid file path"))?;
+    pub async fn goto_definition(
+        &mut self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> Result<Value> {
+        let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy()))
+            .map_err(|_| anyhow!("Invalid file path"))?;
         let params = GotoDefinitionParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
@@ -216,11 +230,18 @@ impl LspClient {
             partial_result_params: Default::default(),
         };
 
-        self.request("textDocument/definition", serde_json::to_value(params)?).await
+        self.request("textDocument/definition", serde_json::to_value(params)?)
+            .await
     }
 
-    pub async fn find_references(&mut self, path: &Path, line: u32, character: u32) -> Result<Value> {
-        let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy())).map_err(|_| anyhow!("Invalid file path"))?;
+    pub async fn find_references(
+        &mut self,
+        path: &Path,
+        line: u32,
+        character: u32,
+    ) -> Result<Value> {
+        let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy()))
+            .map_err(|_| anyhow!("Invalid file path"))?;
         let params = ReferenceParams {
             text_document_position: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
@@ -233,11 +254,13 @@ impl LspClient {
             },
         };
 
-        self.request("textDocument/references", serde_json::to_value(params)?).await
+        self.request("textDocument/references", serde_json::to_value(params)?)
+            .await
     }
 
     pub async fn hover(&mut self, path: &Path, line: u32, character: u32) -> Result<Value> {
-        let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy())).map_err(|_| anyhow!("Invalid file path"))?;
+        let uri = Uri::from_str(&format!("file://{}", path.to_string_lossy()))
+            .map_err(|_| anyhow!("Invalid file path"))?;
         let params = HoverParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: TextDocumentIdentifier { uri },
@@ -246,14 +269,15 @@ impl LspClient {
             work_done_progress_params: Default::default(),
         };
 
-        self.request("textDocument/hover", serde_json::to_value(params)?).await
+        self.request("textDocument/hover", serde_json::to_value(params)?)
+            .await
     }
 }
 
 impl Drop for LspClient {
     fn drop(&mut self) {
-        // We can't await in drop, but we can try to send shutdown. 
-        // In practice, the child will be killed when the task ends if configured, 
+        // We can't await in drop, but we can try to send shutdown.
+        // In practice, the child will be killed when the task ends if configured,
         // or we rely on the OS.
         let _ = self.child.start_kill();
     }

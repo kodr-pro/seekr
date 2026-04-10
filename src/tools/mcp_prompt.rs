@@ -1,7 +1,7 @@
 use crate::api::types::ToolDefinition;
 use crate::mcp::types::PromptContent;
 use crate::tools::{ExecutionContext, Tool};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde_json::json;
 
@@ -18,7 +18,8 @@ impl Tool for McpGetPromptTool {
             tool_type: "function".to_string(),
             function: crate::api::types::FunctionDefinition {
                 name: self.name().to_string(),
-                description: "Retrieve a conversation template (prompt) from an MCP server.".to_string(),
+                description: "Retrieve a conversation template (prompt) from an MCP server."
+                    .to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -48,8 +49,12 @@ impl Tool for McpGetPromptTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let server_name = args["server_name"].as_str().ok_or_else(|| anyhow!("Missing server_name"))?;
-        let prompt_name = args["prompt_name"].as_str().ok_or_else(|| anyhow!("Missing prompt_name"))?;
+        let server_name = args["server_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing server_name"))?;
+        let prompt_name = args["prompt_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing prompt_name"))?;
         let arguments = args["arguments"].clone();
 
         let summary = format!("Getting MCP prompt {} from {}", prompt_name, server_name);
@@ -61,11 +66,17 @@ impl Tool for McpGetPromptTool {
             total_threads,
         );
 
-        let config = context.config.mcp_servers.iter()
+        let config = context
+            .config
+            .mcp_servers
+            .iter()
             .find(|s| s.name == server_name)
             .ok_or_else(|| anyhow!("MCP server {} not found", server_name))?;
 
-        let client_mutex = context.mcp_manager.get_client(config, Some(context.task_manager.clone())).await?;
+        let client_mutex = context
+            .mcp_manager
+            .get_client(config, Some(context.task_manager.clone()))
+            .await?;
         let mut client = client_mutex.lock().await;
         let result = client.get_prompt(prompt_name, arguments).await?;
 
@@ -108,7 +119,8 @@ impl Tool for McpListPromptsTool {
             tool_type: "function".to_string(),
             function: crate::api::types::FunctionDefinition {
                 name: self.name().to_string(),
-                description: "List available conversation templates (prompts) from an MCP server.".to_string(),
+                description: "List available conversation templates (prompts) from an MCP server."
+                    .to_string(),
                 parameters: json!({
                     "type": "object",
                     "properties": {
@@ -130,8 +142,10 @@ impl Tool for McpListPromptsTool {
         thread_id: Option<usize>,
         total_threads: Option<usize>,
     ) -> Result<(String, String)> {
-        let server_name = args["server_name"].as_str().ok_or_else(|| anyhow!("Missing server_name"))?;
-        
+        let server_name = args["server_name"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Missing server_name"))?;
+
         let summary = format!("Listing MCP prompts from {}", server_name);
         context.task_manager.log_activity(
             self.name(),
@@ -141,22 +155,33 @@ impl Tool for McpListPromptsTool {
             total_threads,
         );
 
-        let config = context.config.mcp_servers.iter()
+        let config = context
+            .config
+            .mcp_servers
+            .iter()
             .find(|s| s.name == server_name)
             .ok_or_else(|| anyhow!("MCP server {} not found", server_name))?;
 
-        let client_mutex = context.mcp_manager.get_client(config, Some(context.task_manager.clone())).await?;
+        let client_mutex = context
+            .mcp_manager
+            .get_client(config, Some(context.task_manager.clone()))
+            .await?;
         let mut client = client_mutex.lock().await;
         let prompts = client.list_prompts().await?;
 
         let mut output = format!("Prompts from {}:\n", server_name);
         for p in prompts {
-            output.push_str(&format!("- {}: {}\n", p.name, p.description.unwrap_or_default()));
+            output.push_str(&format!(
+                "- {}: {}\n",
+                p.name,
+                p.description.unwrap_or_default()
+            ));
             if !p.arguments.is_empty() {
                 output.push_str("  Arguments:\n");
                 for arg in p.arguments {
-                    output.push_str(&format!("    - {} ({}): {}\n", 
-                        arg.name, 
+                    output.push_str(&format!(
+                        "    - {} ({}): {}\n",
+                        arg.name,
                         if arg.required { "required" } else { "optional" },
                         arg.description.unwrap_or_default()
                     ));

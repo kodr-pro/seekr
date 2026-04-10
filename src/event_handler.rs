@@ -478,7 +478,7 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                         let mcp_idx = app.menu_state.selection_idx - local_skills_count;
                         let mut mcp_name = String::new();
                         let mut enabled = false;
-                        
+
                         if let Some(mcp) = cfg.mcp_servers.get_mut(mcp_idx) {
                             mcp.enabled = !mcp.enabled;
                             mcp_name = mcp.name.clone();
@@ -487,11 +487,12 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
 
                         if !mcp_name.is_empty() {
                             cfg.save().ok();
-                            app.chat_entries.push(crate::app::ChatEntry::SystemInfo(format!(
-                                "{} MCP server {}",
-                                if enabled { "Enabled" } else { "Disabled" },
-                                mcp_name
-                            )));
+                            app.chat_entries
+                                .push(crate::app::ChatEntry::SystemInfo(format!(
+                                    "{} MCP server {}",
+                                    if enabled { "Enabled" } else { "Disabled" },
+                                    mcp_name
+                                )));
                             app.start_agent();
                         }
                     }

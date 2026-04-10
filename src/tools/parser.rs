@@ -3,16 +3,19 @@ use crate::tools::{Metadata, ScriptTool, Tool};
 use anyhow::{Result, anyhow};
 use std::sync::Arc;
 
-pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadata, Vec<Arc<dyn Tool>>)> {
+pub fn parse_markdown_skill(
+    content: &str,
+    working_dir: &str,
+) -> Result<(Metadata, Vec<Arc<dyn Tool>>)> {
     let mut lines = content.lines().peekable();
-    
+
     // Parse Skill Header
     let name_line = lines.next().ok_or_else(|| anyhow!("Empty file"))?;
     if !name_line.starts_with("# Skill:") {
         return Err(anyhow!("Missing '# Skill: [Name]' header"));
     }
     let name = name_line.trim_start_matches("# Skill:").trim().to_string();
-    
+
     let mut description = String::new();
     while let Some(line) = lines.peek() {
         if line.starts_with("---") {
@@ -37,7 +40,11 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
         }
     }
 
-    let metadata = Metadata { name, description, version };
+    let metadata = Metadata {
+        name,
+        description,
+        version,
+    };
     let mut tools = Vec::new();
 
     // Parse Tools
@@ -45,7 +52,7 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
         if line.starts_with("## Tool:") {
             let tool_name = line.trim_start_matches("## Tool:").trim().to_string();
             let mut tool_description = String::new();
-            
+
             while let Some(line) = lines.peek() {
                 if line.starts_with("###") || line.starts_with("## Tool:") {
                     break;
@@ -54,17 +61,17 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
                 tool_description.push('\n');
                 lines.next();
             }
-            
+
             let mut parameters = serde_json::json!({"type": "object", "properties": {}});
             let mut command = String::new();
 
             while let Some(line) = lines.next() {
                 if line.starts_with("## Tool:") {
-                    // Start of next tool, but we are in a loop so we need to back up? 
+                    // Start of next tool, but we are in a loop so we need to back up?
                     // Actually we used next() here. Let's use a cleaner loop.
-                    break; 
+                    break;
                 }
-                
+
                 if line.starts_with("### Parameters") {
                     // Expecting ```json block
                     while let Some(l) = lines.next() {
@@ -97,7 +104,11 @@ pub fn parse_markdown_skill(content: &str, working_dir: &str) -> Result<(Metadat
                     }
                 }
 
-                if lines.peek().map(|l| l.starts_with("## Tool:")).unwrap_or(false) {
+                if lines
+                    .peek()
+                    .map(|l| l.starts_with("## Tool:"))
+                    .unwrap_or(false)
+                {
                     break;
                 }
             }

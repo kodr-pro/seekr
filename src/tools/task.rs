@@ -1,6 +1,6 @@
 use crate::api::types::{FunctionDefinition, ToolDefinition};
 use crate::errors::ToolError;
-use crate::tools::{Tool, ExecutionContext};
+use crate::tools::{ExecutionContext, Tool};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -337,7 +337,8 @@ impl Tool for UpdateTaskTool {
             .as_str()
             .ok_or_else(|| anyhow!("Missing status"))?;
 
-        context.task_manager
+        context
+            .task_manager
             .update_task(id_raw, status)
             .map_err(|e| anyhow!(e))?;
         let summary = format!("Updated task {} to {}", id_raw, status);
