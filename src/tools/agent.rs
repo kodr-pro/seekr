@@ -82,6 +82,7 @@ impl Tool for SubAgentTool {
             cmd_tx_clone,
             context.registry.clone(),
             role,
+            context.mcp_manager.clone(),
         );
 
         // Inject the task as a user message

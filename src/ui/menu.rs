@@ -359,7 +359,13 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
 } // render_providers
 
 fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .split(area);
+
     let mut items = Vec::new();
+    let mut skill_metas = Vec::new();
 
     // Local Skills
     if let Some(ref mgr) = app.manager {
@@ -369,9 +375,9 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled("📦 ", Style::default().fg(Color::Yellow)),
                 Span::styled(meta.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
                 Span::raw(format!(" v{}", meta.version)),
-                Span::styled(format!(" - {} tools", skill.tools().len()), Style::default().fg(Color::DarkGray)),
             ]);
             items.push(ListItem::new(line));
+            skill_metas.push((meta.name.clone(), true));
         }
     }
 
@@ -388,14 +394,9 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
                 status_dot,
                 Span::styled("MCP: ", Style::default().fg(Color::Cyan)),
                 Span::styled(&mcp.name, Style::default().add_modifier(Modifier::BOLD)),
-                if mcp.auto_install {
-                    Span::styled(" [auto]", Style::default().fg(Color::Magenta))
-                } else {
-                    Span::raw("")
-                },
-                Span::styled(format!(" - {}", mcp.command), Style::default().fg(Color::DarkGray)),
             ]);
             items.push(ListItem::new(line));
+            skill_metas.push((mcp.name.clone(), false));
         }
     }
 
@@ -404,12 +405,75 @@ fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let list = List::new(items)
-        .block(Block::default().title(" Agent Skills & MCP Servers ").borders(Borders::NONE))
+        .block(Block::default().title(" Skills ").borders(Borders::RIGHT))
         .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
         .highlight_symbol(">> ");
 
     let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(list, chunks[0], &mut state);
+
+    // Detail area
+    let detail_area = chunks[1];
+    if let Some((name, is_local)) = skill_metas.get(app.menu_state.selection_idx) {
+        let mut detail_text = Vec::new();
+        detail_text.push(Line::from(vec![
+            Span::styled(name, Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::raw(if *is_local { " (Local Skill)" } else { " (MCP Server)" }),
+        ]));
+        detail_text.push(Line::from(""));
+
+        if *is_local {
+            detail_text.push(Line::from(vec![Span::styled("Tools:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+            if let Some(ref mgr) = app.manager {
+                for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
+                    if skill.metadata().name == *name {
+                        for tool in skill.tools() {
+                            detail_text.push(Line::from(vec![
+                                Span::raw("  - "),
+                                Span::styled(tool.name().to_string(), Style::default().fg(Color::Green)),
+                            ]));
+                        }
+                    }
+                }
+            }
+        } else if let Some(ref mgr) = app.manager {
+            let mcp_mgr = mgr.mcp_manager();
+            if let Ok(meta_guard) = mcp_mgr.metadata.try_lock() {
+                let meta_map: &std::collections::HashMap<String, crate::mcp::manager::McpServerMetadata> = &*meta_guard;
+                if let Some(meta) = meta_map.get(name) {
+                    if !meta.tools.is_empty() {
+                        detail_text.push(Line::from(vec![Span::styled("Tools:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+                        for t in &meta.tools {
+                            detail_text.push(Line::from(vec![Span::raw("  - "), Span::styled(t.name.clone(), Style::default().fg(Color::Green))]));
+                        }
+                    }
+                    if !meta.resources.is_empty() {
+                        detail_text.push(Line::from(""));
+                        detail_text.push(Line::from(vec![Span::styled("Resources:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+                        for r in &meta.resources {
+                            detail_text.push(Line::from(vec![Span::raw("  - "), Span::styled(r.name.clone(), Style::default().fg(Color::Blue))]));
+                        }
+                    }
+                    if !meta.prompts.is_empty() {
+                        detail_text.push(Line::from(""));
+                        detail_text.push(Line::from(vec![Span::styled("Prompts:", Style::default().add_modifier(Modifier::UNDERLINED))]));
+                        for p in &meta.prompts {
+                            detail_text.push(Line::from(vec![Span::raw("  - "), Span::styled(p.name.clone(), Style::default().fg(Color::Magenta))]));
+                        }
+                    }
+                } else {
+                    detail_text.push(Line::from("Server is being initialized or no metadata available."));
+                }
+            } else {
+                detail_text.push(Line::from("Loading metadata..."));
+            }
+        }
+
+        let para = Paragraph::new(detail_text)
+            .block(Block::default().borders(Borders::NONE))
+            .wrap(Wrap { trim: true });
+        frame.render_widget(para, detail_area);
+    }
 }
 
 fn render_settings(frame: &mut Frame, area: Rect, app: &App) {

@@ -57,7 +57,7 @@ impl Tool for McpTool {
             .find(|s| s.name == self.server_name)
             .ok_or_else(|| anyhow!("MCP server {} configuration not found", self.server_name))?;
 
-        let client_mutex = context.mcp_manager.get_client(server_config).await?;
+        let client_mutex = context.mcp_manager.get_client(server_config, Some(context.task_manager.clone())).await?;
         let mut client = client_mutex.lock().await;
 
         let result = client.call_tool(self.name(), args.clone()).await?;

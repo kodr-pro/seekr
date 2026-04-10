@@ -5,6 +5,8 @@ pub mod web;
 pub mod agent;
 pub mod lsp;
 pub mod mcp;
+pub mod mcp_resource;
+pub mod mcp_prompt;
 pub mod parser;
 
 use crate::api::types::ToolDefinition;
@@ -18,6 +20,8 @@ use crate::config::{AppConfig, McpServerConfig};
 use crate::lsp::LspManager;
 use crate::mcp::McpManager;
 use crate::tools::mcp::McpTool;
+use crate::tools::mcp_resource::{McpReadResourceTool, McpListResourcesTool};
+use crate::tools::mcp_prompt::{McpGetPromptTool, McpListPromptsTool};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
@@ -179,8 +183,8 @@ impl SkillRegistry {
         self.skills.lock().unwrap().push(skill);
     } // register_skill
 
-    pub async fn load_mcp_tools(&self, mcp_manager: &McpManager, configs: &[McpServerConfig]) -> Result<()> {
-        let mcp_tools = mcp_manager.list_all_tools(configs).await?;
+    pub async fn load_mcp_tools(&self, mcp_manager: &McpManager, configs: &[McpServerConfig], task_manager: Option<TaskManager>) -> Result<()> {
+        let mcp_tools = mcp_manager.list_all_tools(configs, task_manager).await?;
         let mut tools = self.tools.lock().unwrap();
         for (server_name, tool_def) in mcp_tools {
             let tool = Arc::new(McpTool::new(server_name, tool_def));
@@ -313,6 +317,10 @@ impl Skill for CoreSkill {
             Arc::new(lsp::LspDefinitionTool),
             Arc::new(lsp::LspReferencesTool),
             Arc::new(lsp::LspHoverTool),
+            Arc::new(McpReadResourceTool),
+            Arc::new(McpListResourcesTool),
+            Arc::new(McpGetPromptTool),
+            Arc::new(McpListPromptsTool),
         ]
     } // tools
 } // impl Skill for CoreSkill

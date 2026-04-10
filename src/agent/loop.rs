@@ -96,9 +96,10 @@ impl AgentLoop {
         command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
         role: AgentRole,
+        mcp_manager: Arc<McpManager>,
     ) -> Self {
         let client = ApiClient::new(&config);
-        let system_prompt = build_system_prompt(&config.agent.working_directory, role);
+        let system_prompt = build_system_prompt(&config.agent.working_directory, role, Vec::new());
         let auto_approve = config.agent.auto_approve_tools;
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -112,7 +113,6 @@ impl AgentLoop {
 
         let working_dir = PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
         let lsp_manager = Arc::new(LspManager::new(working_dir));
-        let mcp_manager = Arc::new(McpManager::new());
 
         Self {
             client,
@@ -137,6 +137,7 @@ impl AgentLoop {
         command_tx: mpsc::UnboundedSender<AgentCommand>,
         registry: Arc<SkillRegistry>,
         role: AgentRole,
+        mcp_manager: Arc<McpManager>,
     ) -> Result<Self> {
         let client = ApiClient::new(&config);
         let mut session = Session::load(session_id)?;
@@ -149,7 +150,6 @@ impl AgentLoop {
 
         let working_dir = PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
         let lsp_manager = Arc::new(LspManager::new(working_dir));
-        let mcp_manager = Arc::new(McpManager::new());
 
         Ok(Self {
             client,
@@ -167,12 +167,26 @@ impl AgentLoop {
     } // resume
 
     pub async fn run(mut self) {
-        // Load MCP tools before starting
+        let task_manager = self.session.task_manager.clone();
+        
+        // Discover MCP capabilities
+        let mut mcp_resources_list = Vec::new();
         if let Some(registry) = self.session.tool_registry.clone() {
-            let _ = registry.load_mcp_tools(&self.mcp_manager, &self.config.mcp_servers).await;
+            let _ = registry.load_mcp_tools(&self.mcp_manager, &self.config.mcp_servers, Some(task_manager.clone())).await;
             
-            // Re-generate system prompt with newly loaded tools
-            let system_prompt = build_system_prompt(&self.config.agent.working_directory, self.role);
+            // List resources for discovery
+            if let Ok(resources) = self.mcp_manager.list_all_resources(&self.config.mcp_servers, Some(task_manager.clone())).await {
+                for (server, res) in resources {
+                    mcp_resources_list.push((server, res.name, res.uri));
+                }
+            }
+
+            // Re-generate system prompt with newly loaded tools and resources
+            let system_prompt = crate::agent::system_prompt::build_system_prompt(
+                &self.config.agent.working_directory, 
+                self.role,
+                mcp_resources_list
+            );
             if !self.session.messages.is_empty() && self.session.messages[0].role == "system" {
                 self.session.messages[0].content = Some(system_prompt);
             }
@@ -885,7 +899,8 @@ mod tests {
         let (event_tx, _) = mpsc::unbounded_channel();
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let registry = Arc::new(SkillRegistry::new(None));
-        AgentLoop::new(config, event_tx, command_rx, command_tx, registry)
+        let mcp_manager = Arc::new(McpManager::new());
+        AgentLoop::new(config, event_tx, command_rx, command_tx, registry, crate::agent::system_prompt::AgentRole::Main, mcp_manager)
     } // create_test_loop
 
     #[tokio::test]

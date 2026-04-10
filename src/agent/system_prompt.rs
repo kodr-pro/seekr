@@ -5,7 +5,16 @@ pub enum AgentRole {
     Explorer,
 }
 
-pub fn build_system_prompt(working_directory: &str, role: AgentRole) -> String {
+pub fn build_system_prompt(working_directory: &str, role: AgentRole, mcp_resources: Vec<(String, String, String)>) -> String {
+    let mut mcp_context = String::new();
+    if !mcp_resources.is_empty() {
+        mcp_context.push_str("\n## Available MCP Context Resources\n");
+        mcp_context.push_str("You have access to the following special context resources. Use `mcp_read_resource` to read them:\n");
+        for (server, name, uri) in mcp_resources {
+            mcp_context.push_str(&format!("- **{}** (from {}): {}\n", name, server, uri));
+        }
+    }
+
     let mut project_rules = String::new();
 
     // Check for project-specific rules in .seekr/rules.md
@@ -28,10 +37,12 @@ pub fn build_system_prompt(working_directory: &str, role: AgentRole) -> String {
     let prompt = format!(
         r#"{intro}
 {project_rules}
+{mcp_context}
 ## CRITICAL: Plan before you act
 "#,
         intro = intro,
-        project_rules = project_rules
+        project_rules = project_rules,
+        mcp_context = mcp_context
     );
 
     let mut base_prompt = String::from(

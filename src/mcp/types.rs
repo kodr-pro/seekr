@@ -118,3 +118,94 @@ pub enum McpContent {
     #[serde(rename = "resource")]
     Resource { resource: Value },
 }
+
+// Resources
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Resource {
+    pub uri: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListResourcesResult {
+    pub resources: Vec<Resource>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReadResourceResult {
+    pub contents: Vec<ResourceContent>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ResourceContent {
+    pub uri: String,
+    pub mime_type: Option<String>,
+    #[serde(flatten)]
+    pub content: ResourceData,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ResourceData {
+    Text { text: String },
+    Blob { blob: String },
+}
+
+// Prompts
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Prompt {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub arguments: Vec<PromptArgument>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PromptArgument {
+    pub name: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ListPromptsResult {
+    pub prompts: Vec<Prompt>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GetPromptResult {
+    pub description: Option<String>,
+    pub messages: Vec<PromptMessage>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PromptMessage {
+    pub role: String,
+    pub content: PromptContent,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum PromptContent {
+    #[serde(rename = "text")]
+    Text { text: String },
+    #[serde(rename = "image")]
+    Image { data: String, mime_type: String },
+    #[serde(rename = "resource")]
+    Resource { resource: Value },
+}
+
+// Logging
+#[derive(Debug, Serialize, Deserialize)]
+pub struct LoggingMessageNotification {
+    pub level: String,
+    pub logger: Option<String>,
+    pub data: Value,
+}
