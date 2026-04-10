@@ -250,16 +250,13 @@ impl AgentLoop {
     } // run
 
     async fn run_connection_check(&mut self) {
-        let registry = self.session.tool_registry.as_ref();
-        let tool_defs = registry.map(|reg| tools::all_tool_definitions(reg));
-
         // 1. Check current provider (immediate feedback for the UI "light")
         let res = self
             .client
             .chat_completion_stream(
-                vec![ChatMessage::user("connection_check")],
+                vec![ChatMessage::user("ping")],
                 &self.config.current_provider().model,
-                tool_defs.clone(),
+                None,
             )
             .await;
 
@@ -288,11 +285,10 @@ impl AgentLoop {
             let client = ApiClient::new_for_provider(&self.config, provider);
             let tx = self.event_tx.clone();
             let model = provider.model.clone();
-            let td = tool_defs.clone();
 
             tokio::spawn(async move {
                 let res = client
-                    .chat_completion_stream(vec![ChatMessage::user("connection_check")], &model, td)
+                    .chat_completion_stream(vec![ChatMessage::user("ping")], &model, None)
                     .await;
                 tx.send(AgentEvent::ProviderStatus {
                     index: i,
