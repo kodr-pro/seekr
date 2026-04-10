@@ -29,8 +29,6 @@ impl Default for ProviderConfig {
 pub struct AgentConfig {
     pub max_iterations: u32,
     pub auto_approve_tools: bool,
-    #[serde(default = "default_true")]
-    pub enable_peer_review: bool,
     pub working_directory: String,
     pub context_window_threshold: usize,
     pub context_window_keep: usize,
@@ -38,16 +36,11 @@ pub struct AgentConfig {
     pub show_shell_warnings: bool,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
             max_iterations: 100,
             auto_approve_tools: false,
-            enable_peer_review: true,
             working_directory: ".".to_string(),
             context_window_threshold: 40,
             context_window_keep: 10,

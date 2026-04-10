@@ -512,10 +512,7 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                         2 => {
                             cfg.agent.auto_approve_tools = !cfg.agent.auto_approve_tools;
                         }
-                        3 => {
-                            cfg.agent.enable_peer_review = !cfg.agent.enable_peer_review;
-                        }
-                        5 => {
+                        4 => {
                             cfg.ui.show_reasoning = !cfg.ui.show_reasoning;
                             app.ui.show_reasoning = cfg.ui.show_reasoning;
                         }

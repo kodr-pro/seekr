@@ -91,10 +91,7 @@ impl AgentLoop {
         registry: Arc<SkillRegistry>,
     ) -> Self {
         let client = ApiClient::new(&config);
-        let system_prompt = build_system_prompt(
-            &config.agent.working_directory,
-            config.agent.enable_peer_review,
-        );
+        let system_prompt = build_system_prompt(&config.agent.working_directory);
         let auto_approve = config.agent.auto_approve_tools;
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -712,23 +709,52 @@ impl AgentLoop {
         let model = self.config.current_provider().model.clone();
 
         tokio::spawn(async move {
-            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, specific file paths mentioned, and critical tool outputs. Note that the agent will be provided with its current overall task status separately, so your focus should strictly be on the technical context and what exact work/tool output has been done here. Ensure the agent knows EXACTLY where it left off. Be highly concise but technically precise.".to_string();
+            let pt = "You are a highly capable AI agent context summarizer. Your goal is to take a transcript of past conversation history and tool executions, and summarize it accurately so it can serve as a seamless working memory for the agent going forward. Retain all factual information, specific file paths mentioned, and critical tool outputs. Note that the agent will be provided with its current overall task status separately, so your focus should strictly be on the technical context and what exact work/tool output has been done here. CRITICAL: Do NOT list, mention, or re-evaluate any tasks, sub-tasks, or overarching objectives. To prevent old tasks from resurfacing, never include words like 'pending', 'todo', or 'completed task'. Your summary must focus ONLY on the technical work done and constraints discovered. Ensure the agent knows EXACTLY what was accomplished technically and where it left off. Be highly concise but technically precise.".to_string();
 
             let mut summary_messages = vec![ChatMessage::system(&pt)];
             let mut conversation_text = String::new();
-            for m in messages_to_summarize {
-                conversation_text.push_str(&format!(
-                    "{}: {}\n\n",
-                    m.role,
-                    m.content.as_deref().unwrap_or("[No content]")
-                ));
+
+            let mut task_tool_ids = std::collections::HashSet::new();
+            for m in &messages_to_summarize {
                 if let Some(tcs) = &m.tool_calls {
                     for tc in tcs {
-                        conversation_text.push_str(&format!(
-                            "Tool Call: {}({})\n",
-                            tc.function.name, tc.function.arguments
-                        ));
+                        if tc.function.name == "create_task" || tc.function.name == "update_task" {
+                            task_tool_ids.insert(tc.id.clone());
+                        }
                     }
+                }
+            }
+
+            for m in messages_to_summarize {
+                if m.role == "tool"
+                    && let Some(id) = &m.tool_call_id
+                    && task_tool_ids.contains(id)
+                {
+                    continue;
+                }
+
+                let content = m.content.as_deref().unwrap_or("[No content]");
+                let has_content_to_print = content != "[No content]";
+
+                let mut tools_to_print = Vec::new();
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        if tc.function.name != "create_task" && tc.function.name != "update_task" {
+                            tools_to_print.push(tc);
+                        }
+                    }
+                }
+
+                if !has_content_to_print && tools_to_print.is_empty() && m.role == "assistant" {
+                    continue;
+                }
+
+                conversation_text.push_str(&format!("{}: {}\n\n", m.role, content));
+                for tc in tools_to_print {
+                    conversation_text.push_str(&format!(
+                        "Tool Call: {}({})\n",
+                        tc.function.name, tc.function.arguments
+                    ));
                 }
             }
 
