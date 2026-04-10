@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod errors;
 pub mod event_handler;
 pub mod lsp;
+pub mod mcp;
 pub mod manager;
 pub mod session;
 pub mod tools;

@@ -181,6 +181,7 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     theme: "dark".to_string(),
                                     show_reasoning: true,
                                 },
+                                mcp_servers: Vec::new(),
                             };
 
                             match config.save() {
@@ -418,7 +419,8 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
             app.menu_state.active_tab = match app.menu_state.active_tab {
                 crate::app::MenuTab::Sessions => crate::app::MenuTab::Models,
                 crate::app::MenuTab::Models => crate::app::MenuTab::Providers,
-                crate::app::MenuTab::Providers => crate::app::MenuTab::Settings,
+                crate::app::MenuTab::Providers => crate::app::MenuTab::Skills,
+                crate::app::MenuTab::Skills => crate::app::MenuTab::Settings,
                 crate::app::MenuTab::Settings => crate::app::MenuTab::Help,
                 crate::app::MenuTab::Help => crate::app::MenuTab::Sessions,
             };
@@ -430,7 +432,8 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                 crate::app::MenuTab::Sessions => crate::app::MenuTab::Help,
                 crate::app::MenuTab::Models => crate::app::MenuTab::Sessions,
                 crate::app::MenuTab::Providers => crate::app::MenuTab::Models,
-                crate::app::MenuTab::Settings => crate::app::MenuTab::Providers,
+                crate::app::MenuTab::Skills => crate::app::MenuTab::Providers,
+                crate::app::MenuTab::Settings => crate::app::MenuTab::Skills,
                 crate::app::MenuTab::Help => crate::app::MenuTab::Settings,
             };
             app.menu_state.selection_idx = 0;
@@ -446,6 +449,16 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
                 crate::app::MenuTab::Providers => {
                     app.config.as_ref().map(|c| c.providers.len()).unwrap_or(0)
                 }
+                crate::app::MenuTab::Skills => {
+                    let mut count = 0;
+                    if let Some(ref mgr) = app.manager {
+                        count += mgr.tool_registry().skills.lock().unwrap().len();
+                    }
+                    if let Some(ref cfg) = app.config {
+                        count += cfg.mcp_servers.len();
+                    }
+                    count
+                }
                 crate::app::MenuTab::Settings => 6,
                 crate::app::MenuTab::Help => 0,
             };
@@ -454,6 +467,36 @@ pub async fn handle_unified_menu_event(app: &mut App, key: &KeyEvent) {
             }
         }
         KeyCode::Enter => match app.menu_state.active_tab {
+            crate::app::MenuTab::Skills => {
+                if let Some(cfg) = app.config.as_mut() {
+                    let mut local_skills_count = 0;
+                    if let Some(ref mgr) = app.manager {
+                        local_skills_count = mgr.tool_registry().skills.lock().unwrap().len();
+                    }
+
+                    if app.menu_state.selection_idx >= local_skills_count {
+                        let mcp_idx = app.menu_state.selection_idx - local_skills_count;
+                        let mut mcp_name = String::new();
+                        let mut enabled = false;
+                        
+                        if let Some(mcp) = cfg.mcp_servers.get_mut(mcp_idx) {
+                            mcp.enabled = !mcp.enabled;
+                            mcp_name = mcp.name.clone();
+                            enabled = mcp.enabled;
+                        }
+
+                        if !mcp_name.is_empty() {
+                            cfg.save().ok();
+                            app.chat_entries.push(crate::app::ChatEntry::SystemInfo(format!(
+                                "{} MCP server {}",
+                                if enabled { "Enabled" } else { "Disabled" },
+                                mcp_name
+                            )));
+                            app.start_agent();
+                        }
+                    }
+                }
+            }
             crate::app::MenuTab::Sessions => {
                 if let Some(session) = app.session.sessions.get(app.menu_state.selection_idx) {
                     let id = session.id.clone();

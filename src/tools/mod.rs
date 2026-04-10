@@ -4,16 +4,20 @@ pub mod task;
 pub mod web;
 pub mod agent;
 pub mod lsp;
+pub mod mcp;
+pub mod parser;
 
 use crate::api::types::ToolDefinition;
 use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 pub use crate::tools::task::{ActivityEntry, ActivityStatus, TaskManager};
-use crate::config::AppConfig;
+use crate::config::{AppConfig, McpServerConfig};
 use crate::lsp::LspManager;
+use crate::mcp::McpManager;
+use crate::tools::mcp::McpTool;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
@@ -27,6 +31,7 @@ pub struct ExecutionContext {
     pub registry: Arc<SkillRegistry>,
     pub config: AppConfig,
     pub lsp_manager: Arc<LspManager>,
+    pub mcp_manager: Arc<McpManager>,
 }
 
 #[async_trait]
@@ -49,24 +54,26 @@ pub trait Skill: Send + Sync {
 
 #[derive(Clone)]
 pub struct SkillRegistry {
-    skills: Vec<Arc<dyn Skill>>,
-    tools: HashMap<String, Arc<dyn Tool>>,
+    pub skills: Arc<Mutex<Vec<Arc<dyn Skill>>>>,
+    pub tools: Arc<Mutex<HashMap<String, Arc<dyn Tool>>>>,
 }
 
 impl std::fmt::Debug for SkillRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let skills = self.skills.lock().unwrap();
+        let tools = self.tools.lock().unwrap();
         f.debug_struct("SkillRegistry")
-            .field("skills_count", &self.skills.len())
-            .field("tools_count", &self.tools.len())
+            .field("skills_count", &skills.len())
+            .field("tools_count", &tools.len())
             .finish()
     }
 } // fmt
 
 impl SkillRegistry {
     pub fn new(working_dir: Option<&str>) -> Self {
-        let mut registry = Self {
-            skills: Vec::new(),
-            tools: HashMap::new(),
+        let registry = Self {
+            skills: Arc::new(Mutex::new(Vec::new())),
+            tools: Arc::new(Mutex::new(HashMap::new())),
         };
 
         registry.register_skill(Arc::new(CoreSkill));
@@ -91,71 +98,103 @@ impl SkillRegistry {
         registry
     } // new
 
-    fn load_skills_from_dir(&mut self, path: &std::path::Path) {
+    fn load_skills_from_dir(&self, path: &std::path::Path) {
         if let Ok(entries) = std::fs::read_dir(path) {
             for entry in entries.flatten() {
                 let skill_path = entry.path();
                 if skill_path.is_dir() {
+                    // Try skill.json (Legacy)
                     let config_path = skill_path.join("skill.json");
                     if config_path.exists()
                         && let Ok(content) = std::fs::read_to_string(&config_path)
                         && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
                     {
-                        let metadata = Metadata {
-                            name: json["name"].as_str().unwrap_or("unknown").to_string(),
-                            description: json["description"].as_str().unwrap_or("").to_string(),
-                            version: json["version"].as_str().unwrap_or("1.0.0").to_string(),
-                        };
+                        self.load_json_skill(json, &skill_path);
+                        continue;
+                    }
 
-                        let mut tools = Vec::new();
-                        if let Some(tools_arr) = json["tools"].as_array() {
-                            for t in tools_arr {
-                                let name = t["name"].as_str().unwrap_or("").to_string();
-                                if name.is_empty() {
-                                    continue;
-                                }
-
-                                let tool_def = ToolDefinition {
-                                    tool_type: "function".to_string(),
-                                    function: crate::api::types::FunctionDefinition {
-                                        name: name.clone(),
-                                        description: t["description"]
-                                            .as_str()
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        parameters: t["parameters"].clone(),
-                                    },
-                                };
-
-                                tools.push(Arc::new(ScriptTool {
-                                    name,
-                                    definition: tool_def,
-                                    command: t["command"].as_str().unwrap_or("").to_string(),
-                                    working_dir: skill_path.to_string_lossy().to_string(),
-                                }) as Arc<dyn Tool>);
-                            }
+                    // Try skill.md (New)
+                    let md_path = skill_path.join("skill.md");
+                    if md_path.exists()
+                        && let Ok(content) = std::fs::read_to_string(&md_path)
+                    {
+                        if let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &skill_path.to_string_lossy()) {
+                            self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
                         }
-
-                        self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
+                    }
+                } else if skill_path.extension().and_then(|e| e.to_str()) == Some("md") {
+                    // Direct .md file as a skill
+                    if let Ok(content) = std::fs::read_to_string(&skill_path) {
+                        let parent = skill_path.parent().unwrap_or(std::path::Path::new("."));
+                        if let Ok((metadata, tools)) = parser::parse_markdown_skill(&content, &parent.to_string_lossy()) {
+                            self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
+                        }
                     }
                 }
             }
         }
     } // load_skills_from_dir
 
-    pub fn register_skill(&mut self, skill: Arc<dyn Skill>) {
-        for tool in skill.tools() {
-            self.tools.insert(tool.name().to_string(), tool);
+    fn load_json_skill(&self, json: serde_json::Value, skill_path: &std::path::Path) {
+        let metadata = Metadata {
+            name: json["name"].as_str().unwrap_or("unknown").to_string(),
+            description: json["description"].as_str().unwrap_or("").to_string(),
+            version: json["version"].as_str().unwrap_or("1.0.0").to_string(),
+        };
+
+        let mut tools = Vec::new();
+        if let Some(tools_arr) = json["tools"].as_array() {
+            for t in tools_arr {
+                let name = t["name"].as_str().unwrap_or("").to_string();
+                if name.is_empty() {
+                    continue;
+                }
+
+                let tool_def = ToolDefinition {
+                    tool_type: "function".to_string(),
+                    function: crate::api::types::FunctionDefinition {
+                        name: name.clone(),
+                        description: t["description"].as_str().unwrap_or("").to_string(),
+                        parameters: t["parameters"].clone(),
+                    },
+                };
+
+                tools.push(Arc::new(ScriptTool {
+                    name,
+                    definition: tool_def,
+                    command: t["command"].as_str().unwrap_or("").to_string(),
+                    working_dir: skill_path.to_string_lossy().to_string(),
+                }) as Arc<dyn Tool>);
+            }
         }
-        self.skills.push(skill);
+
+        self.register_skill(Arc::new(ScriptSkill { metadata, tools }));
+    }
+
+    pub fn register_skill(&self, skill: Arc<dyn Skill>) {
+        let mut tools_guard = self.tools.lock().unwrap();
+        for tool in skill.tools() {
+            tools_guard.insert(tool.name().to_string(), tool);
+        }
+        self.skills.lock().unwrap().push(skill);
     } // register_skill
 
+    pub async fn load_mcp_tools(&self, mcp_manager: &McpManager, configs: &[McpServerConfig]) -> Result<()> {
+        let mcp_tools = mcp_manager.list_all_tools(configs).await?;
+        let mut tools = self.tools.lock().unwrap();
+        for (server_name, tool_def) in mcp_tools {
+            let tool = Arc::new(McpTool::new(server_name, tool_def));
+            tools.insert(tool.name().to_string(), tool);
+        }
+        Ok(())
+    }
+
     pub fn get_tool(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(name).cloned()
+        self.tools.lock().unwrap().get(name).cloned()
     } // get_tool
 
     pub fn all_definitions(&self) -> Vec<ToolDefinition> {
-        self.tools.values().map(|t| t.definition()).collect()
+        self.tools.lock().unwrap().values().map(|t| t.definition()).collect()
     } // all_definitions
 } // impl SkillRegistry
 
@@ -415,9 +454,9 @@ mod tests {
             serde_json::to_string(&config)?,
         )?;
 
-        let mut registry = SkillRegistry {
-            skills: Vec::new(),
-            tools: HashMap::new(),
+        let registry = SkillRegistry {
+            skills: Mutex::new(Vec::new()),
+            tools: Mutex::new(HashMap::new()),
         };
 
         registry.load_skills_from_dir(dir.path());

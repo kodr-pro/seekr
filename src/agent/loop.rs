@@ -4,6 +4,7 @@ use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
 use crate::lsp::LspManager;
+use crate::mcp::McpManager;
 use crate::session::Session;
 use crate::tools;
 use crate::tools::SkillRegistry;
@@ -84,6 +85,7 @@ pub struct AgentLoop {
     iteration: u32,
     role: AgentRole,
     lsp_manager: Arc<LspManager>,
+    mcp_manager: Arc<McpManager>,
 }
 
 impl AgentLoop {
@@ -110,6 +112,7 @@ impl AgentLoop {
 
         let working_dir = PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
         let lsp_manager = Arc::new(LspManager::new(working_dir));
+        let mcp_manager = Arc::new(McpManager::new());
 
         Self {
             client,
@@ -122,6 +125,7 @@ impl AgentLoop {
             iteration: 0,
             role,
             lsp_manager,
+            mcp_manager,
         }
     } // new
 
@@ -145,6 +149,7 @@ impl AgentLoop {
 
         let working_dir = PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
         let lsp_manager = Arc::new(LspManager::new(working_dir));
+        let mcp_manager = Arc::new(McpManager::new());
 
         Ok(Self {
             client,
@@ -157,10 +162,22 @@ impl AgentLoop {
             iteration: 0,
             role,
             lsp_manager,
+            mcp_manager,
         })
     } // resume
 
     pub async fn run(mut self) {
+        // Load MCP tools before starting
+        if let Some(registry) = self.session.tool_registry.clone() {
+            let _ = registry.load_mcp_tools(&self.mcp_manager, &self.config.mcp_servers).await;
+            
+            // Re-generate system prompt with newly loaded tools
+            let system_prompt = build_system_prompt(&self.config.agent.working_directory, self.role);
+            if !self.session.messages.is_empty() && self.session.messages[0].role == "system" {
+                self.session.messages[0].content = Some(system_prompt);
+            }
+        }
+
         loop {
             tokio::select! {
                 Some(command) = self.command_rx.recv() => {
@@ -496,6 +513,7 @@ impl AgentLoop {
                     };
                     let config_clone = self.config.clone();
                     let lsp_manager_clone = self.lsp_manager.clone();
+                    let mcp_manager_clone = self.mcp_manager.clone();
 
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
@@ -506,6 +524,7 @@ impl AgentLoop {
                             registry: registry_clone,
                             config: config_clone,
                             lsp_manager: lsp_manager_clone,
+                            mcp_manager: mcp_manager_clone,
                         };
                         let (result, activity) = tools::execute_tool(
                             &name,

@@ -13,6 +13,21 @@ pub struct ProviderConfig {
     pub timeout: Option<u64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub command: String,
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub auto_install: bool,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
 impl Default for ProviderConfig {
     fn default() -> Self {
         Self {
@@ -80,6 +95,8 @@ pub struct AppConfig {
     pub active_provider: usize,
     pub agent: AgentConfig,
     pub ui: UiConfig,
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerConfig>,
 }
 
 impl Default for AppConfig {
@@ -89,6 +106,7 @@ impl Default for AppConfig {
             active_provider: 0,
             agent: AgentConfig::default(),
             ui: UiConfig::default(),
+            mcp_servers: Vec::new(),
         }
     }
 } // default
@@ -154,6 +172,7 @@ impl AppConfig {
                     active_provider: 0,
                     agent: old.agent,
                     ui: old.ui,
+                    mcp_servers: Vec::new(),
                 };
 
                 // When migrating, keys from old config will be moved to keyring on next save automatically if the user modifies anything. Or we can save immediately:

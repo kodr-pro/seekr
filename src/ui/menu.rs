@@ -97,6 +97,7 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         " Sessions ",
         " Models ",
         " Providers ",
+        " Skills ",
         " Settings ",
         " Help ",
     ];
@@ -105,8 +106,9 @@ fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
         MenuTab::Sessions => 0,
         MenuTab::Models => 1,
         MenuTab::Providers => 2,
-        MenuTab::Settings => 3,
-        MenuTab::Help => 4,
+        MenuTab::Skills => 3,
+        MenuTab::Settings => 4,
+        MenuTab::Help => 5,
     };
 
     let tabs = Tabs::new(titles)
@@ -137,6 +139,7 @@ fn render_content(frame: &mut Frame, area: Rect, app: &App) {
         MenuTab::Sessions => render_sessions(frame, area, app),
         MenuTab::Models => render_models(frame, area, app),
         MenuTab::Providers => render_providers(frame, area, app),
+        MenuTab::Skills => render_skills(frame, area, app),
         MenuTab::Settings => render_settings(frame, area, app),
         MenuTab::Help => render_help(frame, area, app),
     }
@@ -354,6 +357,60 @@ fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
     );
     frame.render_widget(help_para, chunks[1]);
 } // render_providers
+
+fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
+    let mut items = Vec::new();
+
+    // Local Skills
+    if let Some(ref mgr) = app.manager {
+        for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
+            let meta = skill.metadata();
+            let line = Line::from(vec![
+                Span::styled("📦 ", Style::default().fg(Color::Yellow)),
+                Span::styled(meta.name.clone(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!(" v{}", meta.version)),
+                Span::styled(format!(" - {} tools", skill.tools().len()), Style::default().fg(Color::DarkGray)),
+            ]);
+            items.push(ListItem::new(line));
+        }
+    }
+
+    // MCP Servers
+    if let Some(ref cfg) = app.config {
+        for mcp in &cfg.mcp_servers {
+            let status_dot = if mcp.enabled {
+                Span::styled("● ", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("○ ", Style::default().fg(Color::DarkGray))
+            };
+
+            let line = Line::from(vec![
+                status_dot,
+                Span::styled("MCP: ", Style::default().fg(Color::Cyan)),
+                Span::styled(&mcp.name, Style::default().add_modifier(Modifier::BOLD)),
+                if mcp.auto_install {
+                    Span::styled(" [auto]", Style::default().fg(Color::Magenta))
+                } else {
+                    Span::raw("")
+                },
+                Span::styled(format!(" - {}", mcp.command), Style::default().fg(Color::DarkGray)),
+            ]);
+            items.push(ListItem::new(line));
+        }
+    }
+
+    if items.is_empty() {
+        items.push(ListItem::new(" No skills found."));
+    }
+
+    let list = List::new(items)
+        .block(Block::default().title(" Agent Skills & MCP Servers ").borders(Borders::NONE))
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
+        .highlight_symbol(">> ");
+
+    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
+    frame.render_stateful_widget(list, area, &mut state);
+}
 
 fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
     let config = match app.config.as_ref() {
