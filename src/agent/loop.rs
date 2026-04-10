@@ -3,11 +3,13 @@ use crate::api::client::ApiClient;
 use crate::api::stream::StreamEvent;
 use crate::api::types::*;
 use crate::config::AppConfig;
+use crate::lsp::LspManager;
 use crate::session::Session;
 use crate::tools;
 use crate::tools::SkillRegistry;
 use crate::tools::task::TaskManager;
 use anyhow::Result;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -81,6 +83,7 @@ pub struct AgentLoop {
     auto_approve: bool,
     iteration: u32,
     role: AgentRole,
+    lsp_manager: Arc<LspManager>,
 }
 
 impl AgentLoop {
@@ -105,6 +108,9 @@ impl AgentLoop {
         session.tool_registry = Some(registry);
         session.messages.push(ChatMessage::system(&system_prompt));
 
+        let working_dir = PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
+        let lsp_manager = Arc::new(LspManager::new(working_dir));
+
         Self {
             client,
             config,
@@ -115,6 +121,7 @@ impl AgentLoop {
             auto_approve,
             iteration: 0,
             role,
+            lsp_manager,
         }
     } // new
 
@@ -136,6 +143,9 @@ impl AgentLoop {
         session.tool_registry = Some(registry);
         let auto_approve = config.agent.auto_approve_tools;
 
+        let working_dir = PathBuf::from(shellexpand::tilde(&config.agent.working_directory).into_owned());
+        let lsp_manager = Arc::new(LspManager::new(working_dir));
+
         Ok(Self {
             client,
             config,
@@ -146,6 +156,7 @@ impl AgentLoop {
             auto_approve,
             iteration: 0,
             role,
+            lsp_manager,
         })
     } // resume
 
@@ -484,6 +495,7 @@ impl AgentLoop {
                         }
                     };
                     let config_clone = self.config.clone();
+                    let lsp_manager_clone = self.lsp_manager.clone();
 
                     let thread_id = join_set.len() + 1;
                     let total_threads = tool_calls.len();
@@ -493,6 +505,7 @@ impl AgentLoop {
                             task_manager: tm_clone,
                             registry: registry_clone,
                             config: config_clone,
+                            lsp_manager: lsp_manager_clone,
                         };
                         let (result, activity) = tools::execute_tool(
                             &name,

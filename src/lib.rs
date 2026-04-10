@@ -7,6 +7,7 @@ pub mod daemon;
 pub mod doctor;
 pub mod errors;
 pub mod event_handler;
+pub mod lsp;
 pub mod manager;
 pub mod session;
 pub mod tools;

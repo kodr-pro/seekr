@@ -3,6 +3,7 @@ pub mod shell;
 pub mod task;
 pub mod web;
 pub mod agent;
+pub mod lsp;
 
 use crate::api::types::ToolDefinition;
 use anyhow::Result;
@@ -12,6 +13,7 @@ use std::sync::Arc;
 
 pub use crate::tools::task::{ActivityEntry, ActivityStatus, TaskManager};
 use crate::config::AppConfig;
+use crate::lsp::LspManager;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
@@ -24,6 +26,7 @@ pub struct ExecutionContext {
     pub task_manager: TaskManager,
     pub registry: Arc<SkillRegistry>,
     pub config: AppConfig,
+    pub lsp_manager: Arc<LspManager>,
 }
 
 #[async_trait]
@@ -268,6 +271,9 @@ impl Skill for CoreSkill {
             Arc::new(task::CreateTaskTool),
             Arc::new(task::UpdateTaskTool),
             Arc::new(agent::SubAgentTool::new()),
+            Arc::new(lsp::LspDefinitionTool),
+            Arc::new(lsp::LspReferencesTool),
+            Arc::new(lsp::LspHoverTool),
         ]
     } // tools
 } // impl Skill for CoreSkill
