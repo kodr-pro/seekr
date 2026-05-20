@@ -1,5 +1,4 @@
 use reqwest::StatusCode;
-use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -61,30 +60,6 @@ pub enum ToolError {
     #[error("Shell execution failed: {0}")]
     ShellExecution(String),
 
-    #[error("File not found: {0}")]
-    FileNotFound(PathBuf),
-
-    #[error("Invalid arguments: {0}")]
-    InvalidArgs(String),
-
     #[error("File edit failed: {0}")]
     EditFailed(String),
-}
-
-#[derive(Error, Debug)]
-pub enum AppError {
-    #[error("API error: {0}")]
-    Api(#[from] ApiError),
-
-    #[error("Config error: {0}")]
-    Config(#[from] ConfigError),
-
-    #[error("Tool error: {0}")]
-    Tool(#[from] ToolError),
-
-    #[error("Stream error: {0}")]
-    Stream(String),
-
-    #[error("Internal error: {0}")]
-    Internal(String),
 }

@@ -224,6 +224,11 @@ impl Tool for WriteFileTool {
         let resolved_path = resolve_and_verify_path(path, &context.task_manager)?;
         let result = write_file(&resolved_path, content).await?;
 
+        if let Some(config) = &context.task_manager.config {
+            let working_dir = std::path::PathBuf::from(&config.agent.working_directory);
+            crate::repo_map::invalidate_cache(&working_dir);
+        }
+
         Ok((result, summary))
     } // execute
 } // impl WriteFileTool
@@ -281,6 +286,11 @@ impl Tool for EditFileTool {
 
         let resolved_path = resolve_and_verify_path(path, &context.task_manager)?;
         let result = edit_file(&resolved_path, old, new).await?;
+
+        if let Some(config) = &context.task_manager.config {
+            let working_dir = std::path::PathBuf::from(&config.agent.working_directory);
+            crate::repo_map::invalidate_cache(&working_dir);
+        }
 
         Ok((result, summary))
     } // execute

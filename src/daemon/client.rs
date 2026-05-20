@@ -114,6 +114,26 @@ impl DaemonClient {
         Ok(())
     }
 
+    pub async fn send_continue(&self) -> anyhow::Result<()> {
+        self.auth_request(
+            self.http
+                .post(format!("{}/command/continue", self.base_url)),
+        )
+        .send()
+        .await?;
+        Ok(())
+    }
+
+    pub async fn send_answer_now(&self) -> anyhow::Result<()> {
+        self.auth_request(
+            self.http
+                .post(format!("{}/command/answer_now", self.base_url)),
+        )
+        .send()
+        .await?;
+        Ok(())
+    }
+
     pub async fn subscribe_events(
         &self,
         tx: mpsc::UnboundedSender<AgentEvent>,

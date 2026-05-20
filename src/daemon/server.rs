@@ -185,7 +185,7 @@ fn is_process_running(pid: u32) -> bool {
 pub async fn start_server() -> anyhow::Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], 8765));
 
-    if let Err(_) = tokio::net::TcpListener::bind(addr).await {
+    if tokio::net::TcpListener::bind(addr).await.is_err() {
         let pid = read_pid_file();
         match pid {
             Some(pid) if is_process_running(pid) => {
@@ -253,6 +253,8 @@ async fn start_server_with_listener(
         .route("/command/shutdown", post(shutdown_handler))
         .route("/command/check_connection", post(check_connection_handler))
         .route("/command/shell", post(shell_input_handler))
+        .route("/command/continue", post(continue_handler))
+        .route("/command/answer_now", post(answer_now_handler))
         .layer(cors)
         .layer(middleware::from_fn(auth_middleware))
         .with_state(state);
@@ -522,5 +524,25 @@ async fn shell_input_handler(
         "Sent"
     } else {
         "No process waiting for input"
+    }
+}
+
+async fn continue_handler(State(state): State<DaemonState>) -> &'static str {
+    let tx_guard = state.cmd_tx.lock().await;
+    if let Some(tx) = tx_guard.as_ref() {
+        let _ = tx.send(AgentCommand::Continue);
+        "Sent"
+    } else {
+        "Agent not started"
+    }
+}
+
+async fn answer_now_handler(State(state): State<DaemonState>) -> &'static str {
+    let tx_guard = state.cmd_tx.lock().await;
+    if let Some(tx) = tx_guard.as_ref() {
+        let _ = tx.send(AgentCommand::AnswerNow);
+        "Sent"
+    } else {
+        "Agent not started"
     }
 }

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use tree_sitter::{Language, Node, Parser, Query, QueryCursor};
@@ -8,7 +7,6 @@ struct LangConfig {
     language: Language,
     extensions: &'static [&'static str],
     symbol_query: &'static str,
-    name: &'static str,
 }
 
 static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
@@ -30,7 +28,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (macro_definition name: (identifier) @symbol)
                 ]
             "#,
-            name: "Rust",
         },
         LangConfig {
             language: tree_sitter_python::LANGUAGE.into(),
@@ -41,7 +38,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (class_definition name: (identifier) @symbol)
                 ]
             "#,
-            name: "Python",
         },
         LangConfig {
             language: tree_sitter_go::LANGUAGE.into(),
@@ -53,7 +49,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (type_declaration (type_spec name: (type_identifier) @symbol))
                 ]
             "#,
-            name: "Go",
         },
         LangConfig {
             language: tree_sitter_javascript::LANGUAGE.into(),
@@ -65,7 +60,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (method_definition name: (property_identifier) @symbol)
                 ]
             "#,
-            name: "JavaScript",
         },
         LangConfig {
             language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
@@ -79,7 +73,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (enum_declaration name: (identifier) @symbol)
                 ]
             "#,
-            name: "TypeScript",
         },
         LangConfig {
             language: tree_sitter_typescript::LANGUAGE_TSX.into(),
@@ -93,7 +86,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (enum_declaration name: (identifier) @symbol)
                 ]
             "#,
-            name: "TSX",
         },
         LangConfig {
             language: tree_sitter_c::LANGUAGE.into(),
@@ -105,7 +97,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (type_definition declarator: (type_identifier) @symbol)
                 ]
             "#,
-            name: "C",
         },
         LangConfig {
             language: tree_sitter_cpp::LANGUAGE.into(),
@@ -118,7 +109,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (namespace_definition name: (identifier) @symbol)
                 ]
             "#,
-            name: "C++",
         },
         LangConfig {
             language: tree_sitter_java::LANGUAGE.into(),
@@ -132,7 +122,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (constructor_declaration name: (identifier) @symbol)
                 ]
             "#,
-            name: "Java",
         },
         LangConfig {
             language: tree_sitter_ruby::LANGUAGE.into(),
@@ -145,7 +134,6 @@ static LANGUAGES: LazyLock<Vec<LangConfig>> = LazyLock::new(|| {
                   (module name: (constant) @symbol)
                 ]
             "#,
-            name: "Ruby",
         },
     ]
 });
@@ -365,21 +353,6 @@ pub fn invalidate_cache(working_dir: &Path) {
     if let Some(path) = cache_path(&key) {
         let _ = std::fs::remove_file(path);
     }
-}
-
-pub fn get_language_stats(working_dir: &Path) -> HashMap<String, usize> {
-    let files = walk_source_files(working_dir);
-    let mut stats: HashMap<String, usize> = HashMap::new();
-
-    for file_path in &files {
-        if let Some(lang) = lang_for_file(file_path) {
-            *stats.entry(lang.name.to_string()).or_insert(0) += 1;
-        }
-    }
-
-    let mut stats_vec: Vec<_> = stats.into_iter().collect();
-    stats_vec.sort_by_key(|b| std::cmp::Reverse(b.1));
-    stats_vec.into_iter().collect()
 }
 
 #[cfg(test)]

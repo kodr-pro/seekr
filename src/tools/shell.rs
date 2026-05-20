@@ -280,6 +280,12 @@ pub async fn shell_command(
                     final_res.truncate(16_000);
                     final_res.push_str("\n... [output truncated]");
                 }
+
+                if let Some(config) = &context.task_manager.config {
+                    let working_dir = std::path::PathBuf::from(&config.agent.working_directory);
+                    crate::repo_map::invalidate_cache(&working_dir);
+                }
+
                 return Ok((final_res, summary));
             }
         }

@@ -32,6 +32,7 @@ pub struct JsonRpcNotification {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeParams {
     pub protocol_version: String,
     pub capabilities: ClientCapabilities,
@@ -39,12 +40,14 @@ pub struct InitializeParams {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Implementation {
     pub name: String,
     pub version: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct ClientCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub roots: Option<RootsCapabilities>,
@@ -53,11 +56,13 @@ pub struct ClientCapabilities {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct RootsCapabilities {
     pub list_changed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InitializeResult {
     pub protocol_version: String,
     pub capabilities: ServerCapabilities,
@@ -65,6 +70,7 @@ pub struct InitializeResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ServerCapabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
@@ -77,11 +83,13 @@ pub struct ServerCapabilities {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ToolsCapability {
     pub list_changed: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListToolsResult {
     pub tools: Vec<McpToolDefinition>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -89,6 +97,7 @@ pub struct ListToolsResult {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct McpToolDefinition {
     pub name: String,
     pub description: String,
@@ -119,8 +128,8 @@ pub enum McpContent {
     Resource { resource: Value },
 }
 
-// Resources
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Resource {
     pub uri: String,
     pub name: String,
@@ -129,6 +138,7 @@ pub struct Resource {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListResourcesResult {
     pub resources: Vec<Resource>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -136,11 +146,13 @@ pub struct ListResourcesResult {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReadResourceResult {
     pub contents: Vec<ResourceContent>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceContent {
     pub uri: String,
     pub mime_type: Option<String>,
@@ -155,7 +167,6 @@ pub enum ResourceData {
     Blob { blob: String },
 }
 
-// Prompts
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Prompt {
     pub name: String,
@@ -173,6 +184,7 @@ pub struct PromptArgument {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListPromptsResult {
     pub prompts: Vec<Prompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,7 +214,6 @@ pub enum PromptContent {
     Resource { resource: Value },
 }
 
-// Logging
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LoggingMessageNotification {
     pub level: String,

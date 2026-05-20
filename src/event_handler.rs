@@ -1,4 +1,3 @@
-use crate::agent::AgentCommand;
 use crate::api::client::ApiClient;
 use crate::app::{App, AppMode, ChatEntry, Focus};
 use crate::config::AppConfig;
@@ -11,7 +10,7 @@ pub async fn handle_event(app: &mut App, ev: &Event) -> Result<bool> {
         AppMode::Main | AppMode::AwaitingContinue => Ok(handle_main_event(app, ev).await),
         AppMode::QuitConfirm => Ok(handle_quit_confirm(app, ev)),
         AppMode::Help => {
-            if let Event::Key(_) = ev {
+            if matches!(ev, Event::Key(_)) {
                 app.mode = AppMode::Main;
             }
             Ok(false)
@@ -43,10 +42,8 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
         }
 
         match app.setup_state.current_step {
-            0 => {
-                if key.code == KeyCode::Enter {
-                    app.setup_state.current_step = 1;
-                }
+            0 if key.code == KeyCode::Enter => {
+                app.setup_state.current_step = 1;
             }
             1 => match key.code {
                 KeyCode::Up => {
@@ -215,20 +212,16 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                 }
                 _ => {}
             },
-            6 => {
-                if key.code == KeyCode::Enter {
-                    app.setup_state.current_step = 2;
-                    app.setup_state.error_message = None;
-                }
+            6 if key.code == KeyCode::Enter => {
+                app.setup_state.current_step = 2;
+                app.setup_state.error_message = None;
             }
-            7 => {
-                if key.code == KeyCode::Enter {
-                    app.mode = AppMode::Main;
-                    app.ui.show_reasoning = true;
-                    app.chat_entries
-                        .push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
-                    app.start_agent();
-                }
+            7 if key.code == KeyCode::Enter => {
+                app.mode = AppMode::Main;
+                app.ui.show_reasoning = true;
+                app.chat_entries
+                    .push(ChatEntry::SystemInfo("Welcome to Seekr!".to_string()));
+                app.start_agent();
             }
             _ => {}
         }
@@ -251,15 +244,17 @@ pub async fn handle_main_event(app: &mut App, ev: &Event) -> bool {
                     app.mode = AppMode::Main;
                     app.agent.is_streaming = true;
                     app.ui.user_scrolled = false;
-                    if let Some(ref tx) = app.agent.cmd_tx {
-                        tx.send(AgentCommand::Continue).ok();
-                    }
+                    let daemon_client = crate::daemon::client::DaemonClient::new();
+                    tokio::spawn(async move {
+                        let _ = daemon_client.send_continue().await;
+                    });
                 }
                 KeyCode::Char('a') | KeyCode::Char('A') => {
                     app.mode = AppMode::Main;
-                    if let Some(ref tx) = app.agent.cmd_tx {
-                        tx.send(AgentCommand::AnswerNow).ok();
-                    }
+                    let daemon_client = crate::daemon::client::DaemonClient::new();
+                    tokio::spawn(async move {
+                        let _ = daemon_client.send_answer_now().await;
+                    });
                 }
                 _ => {}
             }
@@ -333,22 +328,16 @@ fn handle_editing_provider_keys(app: &mut App, code: &KeyCode) {
             app.input.insert(app.cursor_pos, *c);
             app.cursor_pos += 1;
         }
-        KeyCode::Backspace => {
-            if app.cursor_pos > 0 {
-                app.input.remove(app.cursor_pos - 1);
-                app.cursor_pos -= 1;
-            }
+        KeyCode::Backspace if app.cursor_pos > 0 => {
+            app.input.remove(app.cursor_pos - 1);
+            app.cursor_pos -= 1;
         }
-        KeyCode::Delete => {
-            if app.cursor_pos < app.input.len() {
-                app.input.remove(app.cursor_pos);
-            }
+        KeyCode::Delete if app.cursor_pos < app.input.len() => {
+            app.input.remove(app.cursor_pos);
         }
         KeyCode::Left => app.cursor_pos = app.cursor_pos.saturating_sub(1),
-        KeyCode::Right => {
-            if app.cursor_pos < app.input.len() {
-                app.cursor_pos += 1;
-            }
+        KeyCode::Right if app.cursor_pos < app.input.len() => {
+            app.cursor_pos += 1;
         }
         _ => {}
     }
@@ -362,22 +351,16 @@ fn handle_input_focus_keys(app: &mut App, code: &KeyCode, modifiers: &KeyModifie
             app.input.insert(app.cursor_pos, *c);
             app.cursor_pos += 1;
         }
-        KeyCode::Backspace => {
-            if app.cursor_pos > 0 {
-                app.input.remove(app.cursor_pos - 1);
-                app.cursor_pos -= 1;
-            }
+        KeyCode::Backspace if app.cursor_pos > 0 => {
+            app.input.remove(app.cursor_pos - 1);
+            app.cursor_pos -= 1;
         }
-        KeyCode::Delete => {
-            if app.cursor_pos < app.input.len() {
-                app.input.remove(app.cursor_pos);
-            }
+        KeyCode::Delete if app.cursor_pos < app.input.len() => {
+            app.input.remove(app.cursor_pos);
         }
         KeyCode::Left => app.cursor_pos = app.cursor_pos.saturating_sub(1),
-        KeyCode::Right => {
-            if app.cursor_pos < app.input.len() {
-                app.cursor_pos += 1;
-            }
+        KeyCode::Right if app.cursor_pos < app.input.len() => {
+            app.cursor_pos += 1;
         }
         KeyCode::Home => app.cursor_pos = 0,
         KeyCode::End => app.cursor_pos = app.input.len(),

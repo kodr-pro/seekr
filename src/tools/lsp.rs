@@ -5,6 +5,16 @@ use async_trait::async_trait;
 use serde_json::json;
 use std::path::PathBuf;
 
+fn lsp_server_for_ext(ext: &str) -> Result<(&'static str, Vec<&'static str>)> {
+    match ext {
+        "rs" => Ok(("rust-analyzer", vec![])),
+        "py" => Ok(("pyright-langserver", vec!["--stdio"])),
+        "go" => Ok(("gopls", vec![])),
+        "js" | "ts" => Ok(("typescript-language-server", vec!["--stdio"])),
+        _ => Err(anyhow!("Unsupported file extension: {}", ext)),
+    }
+}
+
 pub struct LspDefinitionTool;
 
 #[async_trait]
@@ -52,13 +62,7 @@ impl Tool for LspDefinitionTool {
         let path = PathBuf::from(path_str);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let (cmd, args_list) = match ext {
-            "rs" => ("rust-analyzer", vec![]),
-            "py" => ("pyright-langserver", vec!["--stdio"]),
-            "go" => ("gopls", vec![]),
-            "js" | "ts" => ("typescript-language-server", vec!["--stdio"]),
-            _ => return Err(anyhow!("Unsupported file extension: {}", ext)),
-        };
+        let (cmd, args_list) = lsp_server_for_ext(ext)?;
 
         let client_mutex = context.lsp_manager.get_client(ext, cmd, &args_list).await?;
         let mut client = client_mutex.lock().await;
@@ -128,13 +132,7 @@ impl Tool for LspReferencesTool {
         let path = PathBuf::from(path_str);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let (cmd, args_list) = match ext {
-            "rs" => ("rust-analyzer", vec![]),
-            "py" => ("pyright-langserver", vec!["--stdio"]),
-            "go" => ("gopls", vec![]),
-            "js" | "ts" => ("typescript-language-server", vec!["--stdio"]),
-            _ => return Err(anyhow!("Unsupported file extension: {}", ext)),
-        };
+        let (cmd, args_list) = lsp_server_for_ext(ext)?;
 
         let client_mutex = context.lsp_manager.get_client(ext, cmd, &args_list).await?;
         let mut client = client_mutex.lock().await;
@@ -205,13 +203,7 @@ impl Tool for LspHoverTool {
         let path = PathBuf::from(path_str);
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let (cmd, args_list) = match ext {
-            "rs" => ("rust-analyzer", vec![]),
-            "py" => ("pyright-langserver", vec!["--stdio"]),
-            "go" => ("gopls", vec![]),
-            "js" | "ts" => ("typescript-language-server", vec!["--stdio"]),
-            _ => return Err(anyhow!("Unsupported file extension: {}", ext)),
-        };
+        let (cmd, args_list) = lsp_server_for_ext(ext)?;
 
         let client_mutex = context.lsp_manager.get_client(ext, cmd, &args_list).await?;
         let mut client = client_mutex.lock().await;

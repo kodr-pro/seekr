@@ -272,14 +272,19 @@ impl App {
         let (evt_tx, evt_rx) = mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            let _ = daemon_client.start_agent(sid).await;
-            let _ = daemon_client.subscribe_events(evt_tx).await;
+            if let Err(e) = daemon_client.start_agent(sid).await {
+                let _ = evt_tx.send(AgentEvent::Error(format!("Failed to start agent: {}", e)));
+                return;
+            }
+            if let Err(e) = daemon_client.subscribe_events(evt_tx.clone()).await {
+                let _ = evt_tx.send(AgentEvent::Error(format!("SSE connection failed: {}", e)));
+            }
         });
 
-        self.agent.cmd_tx = None; // App no longer sends commands directly via MPSC
+        self.agent.cmd_tx = None;
         self.agent.event_rx = Some(evt_rx);
         self.agent.provider_connected = vec![false; self.config.as_ref().unwrap().providers.len()];
-    } // start_agent
+    }
 
     pub fn resume_session(&mut self, session_id: String) {
         self.session.session_id = Some(session_id.clone());

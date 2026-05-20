@@ -176,19 +176,23 @@ impl AgentLoop {
         // Discover MCP capabilities
         let mut mcp_resources_list = Vec::new();
         if let Some(registry) = self.session.tool_registry.clone() {
-            let _ = registry
-                .load_mcp_tools(
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                registry.load_mcp_tools(
                     &self.mcp_manager,
                     &self.config.mcp_servers,
                     Some(task_manager.clone()),
-                )
-                .await;
+                ),
+            )
+            .await;
 
-            // List resources for discovery
-            if let Ok(resources) = self
-                .mcp_manager
-                .list_all_resources(&self.config.mcp_servers, Some(task_manager.clone()))
-                .await
+            if let Ok(resources) = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                self.mcp_manager
+                    .list_all_resources(&self.config.mcp_servers, Some(task_manager.clone())),
+            )
+            .await
+            .unwrap_or(Ok(Vec::new()))
             {
                 for (server, res) in resources {
                     mcp_resources_list.push((server, res.name, res.uri));
