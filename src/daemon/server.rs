@@ -1,6 +1,8 @@
 use axum::{
     Json, Router,
     extract::State,
+    http::{HeaderMap, StatusCode},
+    middleware::{self, Next},
     response::sse::{Event, Sse},
     routing::{get, post},
 };
@@ -10,7 +12,7 @@ use std::{convert::Infallible, net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::BroadcastStream;
-use tower_http::cors::CorsLayer;
+use tower_http::cors::{Any, CorsLayer};
 
 use crate::agent::{AgentCommand, AgentEvent, loop_mod::AgentLoop};
 use crate::config::AppConfig;
@@ -46,11 +48,184 @@ pub struct ShellInputReq {
     pub input: String,
 }
 
+pub fn pid_file_path() -> Option<std::path::PathBuf> {
+    dirs::runtime_dir()
+        .or_else(dirs::cache_dir)
+        .map(|d| d.join("seekr").join("daemon.pid"))
+}
+
+pub fn read_pid_file() -> Option<u32> {
+    let path = pid_file_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    content.trim().parse().ok()
+}
+
+pub fn write_pid_file() -> std::io::Result<()> {
+    let path = pid_file_path().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "Cannot determine runtime directory")
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, std::process::id().to_string())
+}
+
+pub fn remove_pid_file() {
+    if let Some(path) = pid_file_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+pub fn token_file_path() -> Option<std::path::PathBuf> {
+    dirs::runtime_dir()
+        .or_else(dirs::cache_dir)
+        .map(|d| d.join("seekr").join("daemon.token"))
+}
+
+pub fn generate_auth_token() -> String {
+    use std::fmt::Write;
+    let mut token = [0u8; 32];
+    getrandom::fill(&mut token).unwrap_or_else(|_| {
+        for (i, byte) in token.iter_mut().enumerate() {
+            *byte = ((i as u64).wrapping_mul(std::process::id() as u64)
+                ^ std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos() as u64) as u8;
+        }
+    });
+    let mut hex = String::with_capacity(64);
+    for byte in &token {
+        write!(hex, "{:02x}", byte).unwrap();
+    }
+    hex
+}
+
+pub fn write_token_file(token: &str) -> std::io::Result<()> {
+    let path = token_file_path().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "Cannot determine runtime directory")
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&path, token)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::metadata(&path)?.permissions();
+        if perms.mode() != 0o600 {
+            let mut perms = perms;
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&path, perms)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn read_token_file() -> Option<String> {
+    let path = token_file_path()?;
+    let content = std::fs::read_to_string(path).ok()?;
+    let token = content.trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+pub fn remove_token_file() {
+    if let Some(path) = token_file_path() {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+async fn auth_middleware(
+    headers: HeaderMap,
+    req: axum::extract::Request,
+    next: Next,
+) -> Result<axum::response::Response, StatusCode> {
+    if req.uri().path() == "/health" {
+        return Ok(next.run(req).await);
+    }
+
+    let expected = match read_token_file() {
+        Some(t) => t,
+        None => return Ok(next.run(req).await),
+    };
+
+    let auth_header = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if auth_header == format!("Bearer {}", expected) {
+        Ok(next.run(req).await)
+    } else {
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+fn is_process_running(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::kill(pid as i32, 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+}
+
 pub async fn start_server() -> anyhow::Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 8765));
+
+    if let Err(_) = tokio::net::TcpListener::bind(addr).await {
+        let pid = read_pid_file();
+        match pid {
+            Some(pid) if is_process_running(pid) => {
+                anyhow::bail!(
+                    "Port 8765 is already in use by seekr daemon (PID {}). \
+                     Run `seekr daemon stop` to shut it down.",
+                    pid
+                );
+            }
+            _ => {
+                eprintln!(
+                    "Port 8765 is in use (possibly a stale seekr daemon). \
+                     Removing stale PID file and retrying..."
+                );
+                remove_pid_file();
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|_| anyhow::anyhow!("Port 8765 is still in use after retry."))?;
+        start_server_with_listener(listener).await
+    } else {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        start_server_with_listener(listener).await
+    }
+}
+
+async fn start_server_with_listener(
+    listener: tokio::net::TcpListener,
+) -> anyhow::Result<()> {
+    write_pid_file()?;
+
+    let auth_token = generate_auth_token();
+    write_token_file(&auth_token)?;
+
     let config = AppConfig::load().unwrap_or_else(|_| AppConfig::default());
     let manager = std::sync::Arc::new(SeekrManager::new(config.clone()));
 
-    // Broadcast channel for distributing AgentEvents to all connected clients (SSE)
     let (evt_broadcast, _) = broadcast::channel(1000);
 
     let state = DaemonState {
@@ -61,8 +236,16 @@ pub async fn start_server() -> anyhow::Result<()> {
         evt_broadcast,
     };
 
+    let localhost_origin = "http://127.0.0.1:8765"
+        .parse::<axum::http::HeaderValue>()
+        .expect("hardcoded localhost origin is valid");
+    let cors = CorsLayer::new()
+        .allow_origin(localhost_origin)
+        .allow_methods(Any)
+        .allow_headers(Any);
+
     let app = Router::new()
-        .route("/health", get(|| async { "OK" }))
+        .route("/health", get(health_handler))
         .route("/events", get(sse_handler))
         .route("/start", post(start_handler))
         .route("/chat", post(chat_handler))
@@ -70,16 +253,28 @@ pub async fn start_server() -> anyhow::Result<()> {
         .route("/command/shutdown", post(shutdown_handler))
         .route("/command/check_connection", post(check_connection_handler))
         .route("/command/shell", post(shell_input_handler))
-        .layer(CorsLayer::permissive())
+        .layer(cors)
+        .layer(middleware::from_fn(auth_middleware))
         .with_state(state);
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 8765));
-    println!("Seekr daemon listening on {}", addr);
+    println!("Seekr daemon listening on {}", listener.local_addr()?);
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    remove_pid_file();
+    remove_token_file();
     Ok(())
+}
+
+async fn health_handler() -> &'static str {
+    "OK"
+}
+
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c().await.ok();
+    remove_pid_file();
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

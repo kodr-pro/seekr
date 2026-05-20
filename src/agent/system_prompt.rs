@@ -21,7 +21,6 @@ pub fn build_system_prompt(
 
     let mut project_rules = String::new();
 
-    // Check for project-specific rules in .seekr/rules.md
     let expanded_wd = shellexpand::tilde(working_directory);
     let rules_path = std::path::Path::new(expanded_wd.as_ref())
         .join(".seekr")
@@ -31,6 +30,21 @@ pub fn build_system_prompt(
     {
         project_rules = format!("\n## Project-Specific Rules & Context\n\n{}\n", content);
     }
+
+    let repo_map_section = {
+        let wd_path = std::path::Path::new(expanded_wd.as_ref());
+        let map = crate::repo_map::generate_repo_map(wd_path);
+        if map.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n## Repository Map\n\
+                 Below is a condensed outline of the codebase's symbols (functions, classes, structs, etc.). \
+                 Use this to navigate efficiently.\n\n{}\n",
+                map
+            )
+        }
+    };
 
     let intro = match role {
         AgentRole::Main => {
@@ -47,11 +61,13 @@ pub fn build_system_prompt(
     let prompt = format!(
         r#"{intro}
 {project_rules}
+{repo_map_section}
 {mcp_context}
 ## CRITICAL: Plan before you act
 "#,
         intro = intro,
         project_rules = project_rules,
+        repo_map_section = repo_map_section,
         mcp_context = mcp_context
     );
 

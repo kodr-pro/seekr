@@ -10,6 +10,7 @@ pub mod event_handler;
 pub mod lsp;
 pub mod manager;
 pub mod mcp;
+pub mod repo_map;
 pub mod session;
 pub mod tools;
 pub mod ui;
