@@ -4,6 +4,20 @@ use serde_json::json;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use std::sync::Once;
+
+static STATE_ISOLATION: Once = Once::new();
+
+fn isolate_state_dir() {
+    STATE_ISOLATION.call_once(|| {
+        let dir = std::env::temp_dir()
+            .join(format!("seekr-jockey-test-state-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe { std::env::set_var("SEEKR_STATE_DIR", &dir) };
+    });
+}
+
 use seekr::api::client::ApiClient;
 use seekr::config::{AppConfig, JockeyConfig, ProviderConfig};
 use seekr::jev::client::{JevClient, JevConfig};
@@ -13,6 +27,7 @@ use seekr::jockey::worker::Worker;
 use seekr::sandbox::git::GitSandbox;
 
 async fn init_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+    isolate_state_dir();
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     run(&root, &["init", "--quiet"]).await;

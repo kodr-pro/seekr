@@ -7,8 +7,15 @@ use seekr::jockey::cli;
 use seekr::jockey::driver::{RunOutcome, RunState};
 
 #[derive(Parser, Debug)]
-#[command(version, about = "Jev Jockey — autonomous, cost-guarded coding agent", long_about = None)]
+#[command(
+    version,
+    about = "Jev Jockey — autonomous, cost-guarded coding agent",
+    long_about = None
+)]
 struct Cli {
+    /// Repository to work in (default: current directory)
+    path: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -17,15 +24,14 @@ struct Cli {
 enum Commands {
     /// Start an autonomous run (TUI by default; headless when piped or --headless)
     Run {
-        /// Goal for the frontier planner (omit with --plan)
+        /// Repository to work in (default: current directory)
+        path: Option<std::path::PathBuf>,
+        /// Goal for the frontier planner ('-' reads stdin; omit with --plan)
         #[arg(short, long)]
         goal: Option<String>,
         /// Load a TaskDag JSON file instead of frontier planning
         #[arg(short, long)]
         plan: Option<std::path::PathBuf>,
-        /// Repository to work in (default: cwd)
-        #[arg(short, long)]
-        repo: Option<std::path::PathBuf>,
         /// Force headless mode
         #[arg(long)]
         headless: bool,
@@ -38,15 +44,26 @@ enum Commands {
         /// Permit autonomous writes without the Jev gate (fail-closed default)
         #[arg(long)]
         allow_degraded: bool,
+        /// Emit raw JSONL events instead of human output (headless only)
+        #[arg(long)]
+        json: bool,
     },
     /// List previous runs
     Runs,
     /// Resume an interrupted run
     Resume { run_id: String },
+    /// Show a run's event log (most recent last)
+    Logs {
+        run_id: String,
+        #[arg(short, long, default_value = "40")]
+        lines: usize,
+    },
     /// Merge a finished run's branch back and clean up its worktree
     Merge { run_id: String },
     /// Remove a run's worktree, keeping its branch
     Clean { run_id: String },
+    /// Delete a run's state (and worktree); the branch is kept
+    Rm { run_id: String },
     /// Environment and configuration diagnostics
     Doctor,
     /// Print a TaskDag JSON for a goal without running it
@@ -58,6 +75,17 @@ enum Commands {
         #[arg(long)]
         auto: bool,
     },
+    /// Generate shell completions
+    Completions { shell: clap_complete::Shell },
+}
+
+fn resolve_repo(
+    path: Option<&std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    match path {
+        Some(p) => Ok(p.canonicalize().unwrap_or_else(|_| p.clone())),
+        None => Ok(std::env::current_dir()?),
+    }
 }
 
 #[tokio::main]
@@ -66,8 +94,33 @@ async fn main() -> Result<()> {
     let config = AppConfig::load().unwrap_or_default();
 
     match cli.command {
-        None | Some(Commands::Run { .. }) => {
-            if let Some(Commands::Run {
+        None => {
+            let repo = resolve_repo(cli.path.as_ref())?;
+            if std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
+            {
+                seekr::ui::jockey::run_tui_new(config, repo).await
+            } else {
+                eprintln!(
+                    "seekr: no terminal available.\n\
+                     Try:  seekr .                      (in a terminal)\n\
+                           seekr run . --goal \"...\" --headless\n\
+                           seekr --help"
+                );
+                Ok(())
+            }
+        }
+        Some(Commands::Run {
+            path,
+            goal,
+            plan,
+            headless,
+            answers,
+            auto,
+            allow_degraded,
+            json,
+        }) => {
+            let repo = resolve_repo(path.as_ref())?;
+            run_command(
                 goal,
                 plan,
                 repo,
@@ -75,22 +128,10 @@ async fn main() -> Result<()> {
                 answers,
                 auto,
                 allow_degraded,
-            }) = cli.command
-            {
-                run_command(
-                    goal,
-                    plan,
-                    repo,
-                    headless,
-                    answers,
-                    auto,
-                    allow_degraded,
-                    config,
-                )
-                .await
-            } else {
-                seekr::ui::jockey::run_tui_new(config).await
-            }
+                json,
+                config,
+            )
+            .await
         }
         Some(Commands::Runs) => {
             for (id, status) in RunState::list_runs() {
@@ -106,18 +147,40 @@ async fn main() -> Result<()> {
             );
             resume_headless(state, config).await
         }
+        Some(Commands::Logs { run_id, lines }) => {
+            let dir = RunState::state_dir(&run_id).ok_or_else(|| {
+                anyhow::anyhow!("cannot determine state directory")
+            })?;
+            let raw = std::fs::read_to_string(dir.join("events.jsonl"))?;
+            let all: Vec<&str> = raw.lines().collect();
+            for line in all.iter().rev().take(lines).rev() {
+                match serde_json::from_str::<serde_json::Value>(line) {
+                    Ok(v) => println!("{v}"),
+                    Err(_) => println!("{line}"),
+                }
+            }
+            Ok(())
+        }
         Some(Commands::Merge { run_id }) => cli::merge_run(&run_id).await,
         Some(Commands::Clean { run_id }) => cli::clean_run(&run_id).await,
+        Some(Commands::Rm { run_id }) => cli::rm_run(&run_id).await,
         Some(Commands::Doctor) => cli::doctor().await,
         Some(Commands::Plan { goal, repo, auto }) => {
-            let repo = match repo {
-                Some(p) => p.canonicalize().unwrap_or(p),
-                None => std::env::current_dir()?,
-            };
+            let repo = resolve_repo(repo.as_ref())?;
             let roles = cli::resolve_roles(&config)?;
             let dag = cli::plan_interactive(&roles, &goal, &repo, &[], auto, 2)
                 .await?;
             println!("{}", serde_json::to_string_pretty(&dag)?);
+            Ok(())
+        }
+        Some(Commands::Completions { shell }) => {
+            let mut cmd = <Cli as clap::CommandFactory>::command();
+            clap_complete::generate(
+                shell,
+                &mut cmd,
+                "seekr",
+                &mut std::io::stdout(),
+            );
             Ok(())
         }
     }
@@ -127,21 +190,28 @@ async fn main() -> Result<()> {
 async fn run_command(
     goal: Option<String>,
     plan: Option<std::path::PathBuf>,
-    repo: Option<std::path::PathBuf>,
+    repo: std::path::PathBuf,
     headless: bool,
     answers: Vec<String>,
     auto: bool,
     allow_degraded: bool,
+    json: bool,
     mut config: AppConfig,
 ) -> Result<()> {
     if allow_degraded {
         config.jockey.allow_degraded = true;
     }
-    let repo = match repo {
-        Some(p) => p.canonicalize().unwrap_or(p),
-        None => std::env::current_dir()?,
-    };
     let roles = cli::resolve_roles(&config)?;
+
+    let goal = match goal {
+        Some(g) if g == "-" => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf)?;
+            Some(buf.trim().to_string())
+        }
+        other => other,
+    };
 
     let (goal, dag) = match (goal, plan) {
         (_, Some(plan_path)) => {
@@ -163,7 +233,9 @@ async fn run_command(
                     .await?;
             (goal, dag)
         }
-        (None, None) => anyhow::bail!("provide --goal or --plan"),
+        (None, None) => {
+            anyhow::bail!("provide --goal (or '-' for stdin) or --plan")
+        }
     };
 
     let interactive = !headless
@@ -174,7 +246,13 @@ async fn run_command(
             .await
     } else {
         let run_id = cli::new_run_id();
-        cli::run_headless(&config, &roles, &goal, dag, &repo, run_id).await?;
+        if json {
+            cli::run_headless_json(&config, &roles, &goal, dag, &repo, run_id)
+                .await?;
+        } else {
+            cli::run_headless(&config, &roles, &goal, dag, &repo, run_id)
+                .await?;
+        }
         Ok(())
     }
 }

@@ -72,6 +72,7 @@ semver = "1.0.27"
 axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["cors"] }
 clap = { version = "4.6.0", features = ["derive"] }
+clap_complete = "4"
 futures-util = "0.3.32"
 tokio-util = { version = "0.7.18", features = ["io"] }
 reqwest-eventsource = "0.6.0"

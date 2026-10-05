@@ -92,8 +92,10 @@ pub struct JockeyApp {
 
 const LOG_CAP: usize = 400;
 
-pub async fn run_tui_new(config: AppConfig) -> anyhow::Result<()> {
-    let repo = std::env::current_dir()?;
+pub async fn run_tui_new(
+    config: AppConfig,
+    repo: std::path::PathBuf,
+) -> anyhow::Result<()> {
     let roles = match crate::jockey::cli::resolve_roles(&config) {
         Ok(roles) => Some(roles),
         Err(e) => {
@@ -533,6 +535,13 @@ impl JockeyApp {
 
         match self.mode.clone() {
             Mode::Intake => match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => {
+                    if self.quit_confirm {
+                        return true;
+                    }
+                    self.quit_confirm = true;
+                    self.status = "press q again to quit".into();
+                }
                 KeyCode::Enter => {
                     if self.input.trim().is_empty() {
                         self.status = "goal cannot be empty".into();
@@ -602,7 +611,13 @@ impl JockeyApp {
                         return true;
                     }
                     self.quit_confirm = true;
-                    self.status = "press q again to detach (run continues in background of this process; Ctrl+C kills)".into();
+                    if let Some(run_id) = &self.run_id {
+                        self.status = format!(
+                            "press q again to quit and interrupt the run — resume later with: seekr resume {run_id}"
+                        );
+                    } else {
+                        self.status = "press q again to quit".into();
+                    }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.log_scroll = self.log_scroll.saturating_add(1)
@@ -942,6 +957,13 @@ async fn run_loop(mut app: JockeyApp) -> anyhow::Result<()> {
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, cursor::Show)?;
     terminal.show_cursor()?;
+    if app.mode == Mode::Grinding
+        && let Some(run_id) = &app.run_id
+    {
+        println!(
+            "interrupted — the run state is saved; resume with: seekr resume {run_id}"
+        );
+    }
     if let Some(worktree) = &app.worktree {
         println!("worktree: {}", worktree.display());
     }

@@ -189,6 +189,59 @@ pub async fn run_headless(
     Ok(outcome)
 }
 
+/// Headless run emitting raw JSONL events (for scripting and piping).
+pub async fn run_headless_json(
+    config: &AppConfig,
+    roles: &Roles,
+    goal: &str,
+    dag: TaskDag,
+    repo_root: &Path,
+    run_id: String,
+) -> Result<RunOutcome> {
+    let sandbox = GitSandbox::create(repo_root, &run_id).await?;
+    eprintln!("run {} on branch {}", run_id, sandbox.branch());
+
+    let worker = Worker::new(
+        roles.worker.0.clone(),
+        roles.worker.1.clone(),
+        config.jockey.worker_temperature,
+        config.jockey.worker_max_tokens,
+        std::env::var("SEEKR_WORKER_REASONING").ok(),
+    );
+    let mut governor = Governor::new(
+        config,
+        worker,
+        roles.frontier.clone(),
+        roles.jev.clone(),
+        sandbox,
+        goal.to_string(),
+        dag,
+        run_id.clone(),
+    )?;
+    let mut rx = governor.take_event_rx();
+
+    let printer = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let Ok(line) = serde_json::to_string(&event) {
+                println!("{line}");
+            }
+        }
+    });
+
+    let outcome = governor.run_to_completion().await?;
+    printer.abort();
+    if let Ok(line) = serde_json::to_string(&serde_json::json!({
+        "type": "summary",
+        "run_id": governor.state.run_id,
+        "status": governor.state.status,
+        "ledger": governor.state.ledger,
+        "branch": governor.state.branch,
+    })) {
+        println!("{line}");
+    }
+    Ok(outcome)
+}
+
 pub fn print_event(event: &JockeyEvent) {
     use crate::jockey::ledger::JockeyEvent::*;
     match event {
@@ -357,6 +410,20 @@ pub async fn cleanup_worktree(state: &RunState) {
         ])
         .output()
         .await;
+}
+
+/// `seekr rm <run_id>`: delete run state and worktree; the branch survives.
+pub async fn rm_run(run_id: &str) -> Result<()> {
+    let state = RunState::load(run_id).context("run not found")?;
+    cleanup_worktree(&state).await;
+    if let Some(dir) = RunState::state_dir(run_id) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+    println!(
+        "removed state for {run_id}; branch {} kept (delete manually if unwanted)",
+        state.branch
+    );
+    Ok(())
 }
 
 /// `seekr clean <run_id>`: dispose the worktree, keep the branch.

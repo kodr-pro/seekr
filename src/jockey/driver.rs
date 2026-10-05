@@ -50,6 +50,11 @@ pub struct RunState {
 
 impl RunState {
     pub fn state_dir(run_id: &str) -> Option<PathBuf> {
+        if let Ok(custom) = std::env::var("SEEKR_STATE_DIR")
+            && !custom.trim().is_empty()
+        {
+            return Some(PathBuf::from(custom).join("jockey").join(run_id));
+        }
         dirs::state_dir()
             .or_else(dirs::data_dir)
             .map(|d| d.join("seekr").join("jockey").join(run_id))

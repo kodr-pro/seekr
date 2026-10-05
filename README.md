@@ -80,21 +80,28 @@ Env: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_MODEL`,
 ## Use
 
 ```sh
-seekr                     # TUI: goal → clarify → plan review → grind dashboard
-seekr run --goal "..."    # autonomous run (TUI in a terminal, headless when piped)
-seekr run --plan dag.json --repo /path --headless --auto
-seekr plan --goal "..."   # print a TaskDag JSON without running
+seekr .                   # TUI in this repo: goal → clarify → plan review → grind dashboard
+seekr /path/to/repo       # same, elsewhere
+seekr run . --goal "..."  # autonomous run (TUI in a terminal, headless when piped)
+seekr run . --goal - < goal.txt          # goal from stdin
+seekr run . --plan dag.json --auto       # pre-planned DAG, no clarifications
+seekr run . --goal "..." --headless --json | jq -c 'select(.type=="step_completed")'
+seekr plan --goal "..."   # print a TaskDag JSON without running it
 seekr runs                # list runs (state + status)
+seekr logs <run-id>       # inspect a run's event log (--lines N)
 seekr resume <run-id>     # resume an interrupted run
 seekr merge <run-id>      # merge the run's branch back, clean its worktree
 seekr clean <run-id>      # drop the worktree, keep the branch
+seekr rm <run-id>         # delete run state + worktree (branch kept)
 seekr doctor              # config/roles/jev/git diagnostics
+seekr completions zsh     # shell completions (bash|zsh|fish|...)
 ```
 
 In the TUI: **Ctrl+G** opens the control center (runs browser with
 attach/resume/merge/clean, provider CRUD with live key tests and worker/
 frontier role assignment, `[jj]` settings editor, key reference). **?**
-shows help anywhere, **Ctrl+C twice** quits. The grind dashboard shows a
+shows help anywhere, **Ctrl+C twice** quits (a run interrupted this way
+can be resumed with `seekr resume <id>`). The grind dashboard shows a
 tree-style DAG with a progress gauge, live scope/novelty telemetry,
 per-tier token share gauges, and a scrollable activity log.
 
