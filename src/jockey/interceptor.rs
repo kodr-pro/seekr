@@ -83,9 +83,19 @@ impl Interceptor {
             };
         }
 
-        if action.tool == crate::jockey::worker::TOOL_READ_FILE
-            || action.tool == crate::jockey::worker::TOOL_FINISH_STEP
-        {
+        // Every tool that cannot mutate the workspace is free: reads,
+        // searches, listings, diagnostics, todos, web fetches, finish.
+        if matches!(
+            action.tool.as_str(),
+            crate::jockey::worker::TOOL_READ_FILE
+                | crate::jockey::worker::TOOL_GREP
+                | crate::jockey::worker::TOOL_GLOB
+                | crate::jockey::worker::TOOL_LIST
+                | crate::jockey::worker::TOOL_TODO
+                | crate::jockey::worker::TOOL_DIAGNOSTICS
+                | crate::jockey::worker::TOOL_WEB_FETCH
+                | crate::jockey::worker::TOOL_FINISH_STEP
+        ) {
             return Review {
                 verdict: InterceptVerdict::Approved {
                     scope_p: None,

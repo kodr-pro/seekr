@@ -542,8 +542,17 @@ impl Governor {
 
             let mut prompt_context = live_context.clone();
             if actions_done + 4 >= MAX_ACTIONS_PER_ATTEMPT {
+                let no_mutations = records.is_empty();
+                let nudge = if no_mutations {
+                    "WRAP UP: you are near the action cap for this attempt and have made NO file changes yet. Make the edit now (write_file/edit_file on an allowed path), verify, then call finish_step."
+                } else {
+                    "WRAP UP: you are near the action cap for this attempt. Finish the current change and call finish_step when the invariants hold."
+                };
+                prompt_context.push(nudge.to_string());
+            }
+            if actions_done >= 6 && records.is_empty() {
                 prompt_context.push(
-                    "WRAP UP: you are near the action cap for this attempt. Finish the current change and call finish_step when the invariants hold.".to_string(),
+                    "REMINDER: reading and searching is not progress. You have not modified any file in this attempt. Implement the step now with edit_file/write_file.".to_string(),
                 );
             }
 
@@ -653,19 +662,19 @@ impl Governor {
                     && let Some(path) =
                         action.args.get("path").and_then(|p| p.as_str())
                     && let Ok(resolved) = sandbox.resolve_for_read(path)
-                        && let Ok(meta) = std::fs::metadata(&resolved)
-                        && let Ok(modified) = meta.modified()
-                        && let Some((idx, len, prev_modified)) =
-                            read_cache.get(path)
-                        && modified == *prev_modified
-                    {
-                        actions_done += 1;
-                        live_context.push(format!(
+                    && let Ok(meta) = std::fs::metadata(&resolved)
+                    && let Ok(modified) = meta.modified()
+                    && let Some((idx, len, prev_modified)) =
+                        read_cache.get(path)
+                    && modified == *prev_modified
+                {
+                    actions_done += 1;
+                    live_context.push(format!(
                             "ACTION {}: read_file {path} -> (unchanged since ACTION {idx}, {len} bytes; do not re-read)",
                             actions_done
                         ));
-                        continue;
-                    }
+                    continue;
+                }
 
                 let failed =
                     self.attempts.get(step_id).cloned().unwrap_or_default();
@@ -777,7 +786,7 @@ impl Governor {
                         );
                         if reason.contains("out of scope") {
                             guidance.push_str(&format!(
-                                "\nThat work seems to belong to a DIFFERENT step of the plan. Do ONLY this step's invariants: {}",
+                                "\nThat work seems to belong to a DIFFERENT step of the plan. Do ONLY this step's invariants: {}\nRe-propose a SMALLER edit focused on this step — do not stop making changes.",
                                 invariants.join(" | ")
                             ));
                         }

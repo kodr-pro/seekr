@@ -158,7 +158,7 @@ fn default_jj_worker_max_tokens() -> u32 {
     8192
 }
 fn default_jj_scope_threshold() -> f64 {
-    0.85
+    0.80
 }
 fn default_jj_novelty_floor() -> f64 {
     1.0
