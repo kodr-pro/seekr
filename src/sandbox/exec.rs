@@ -56,6 +56,25 @@ pub fn blocklist_violation(command: &str, blocklist: &[String]) -> Option<String
         .cloned()
 }
 
+/// True for commands that only inspect the workspace and cannot mutate it.
+/// These bypass the Jev scope gate (same trust level as read_file).
+pub fn is_readonly_command(command: &str) -> bool {
+    let trimmed = command.trim();
+    let first = trimmed.split_whitespace().next().unwrap_or("");
+    let readonly_binaries = [
+        "pwd", "ls", "cat", "head", "tail", "grep", "find", "wc", "test", "echo", "which",
+        "true", "false", "stat", "file", "du", "sort", "uniq", "diff", "rg",
+    ];
+    if readonly_binaries.contains(&first) {
+        return true;
+    }
+    if first == "git" {
+        let second = trimmed.split_whitespace().nth(1).unwrap_or("");
+        return matches!(second, "status" | "diff" | "log" | "show" | "ls-files" | "branch");
+    }
+    false
+}
+
 /// Runs `sh -c <command>` pinned to `cwd` with a hard wall-clock budget.
 /// Output is captured (never inherited), truncated, and ANSI-stripped.
 pub async fn run_command(

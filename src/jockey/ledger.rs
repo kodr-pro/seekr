@@ -34,13 +34,17 @@ impl CostLedger {
     }
 
     pub fn add_jev(&mut self, result: &crate::jev::JevResult) {
-        if result.cached {
+        self.add_jev_usage(result.cached, &result.usage);
+    }
+
+    pub fn add_jev_usage(&mut self, cached: bool, usage: &crate::jev::client::JevUsage) {
+        if cached {
             self.jev_cache_hits += 1;
         } else {
             self.jev_calls += 1;
         }
-        self.jev_input_tokens += result.usage.input_tokens;
-        self.jev_output_tokens += result.usage.output_tokens;
+        self.jev_input_tokens += usage.input_tokens;
+        self.jev_output_tokens += usage.output_tokens;
     }
 }
 
@@ -64,6 +68,8 @@ pub enum JockeyEvent {
         step_id: String,
         tool: String,
         brief: String,
+        #[serde(default)]
+        args: Option<serde_json::Value>,
     },
     ActionApproved {
         tool: String,

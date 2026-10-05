@@ -220,6 +220,15 @@ impl JevClient {
         });
         let url = format!("{}/v1/systemone", self.config.base_url);
 
+        if std::env::var("SEEKR_JEV_DEBUG").is_ok()
+            && let Ok(dir) = std::env::temp_dir().canonicalize()
+        {
+            let _ = std::fs::write(
+                dir.join("seekr-jev-last-request.json"),
+                serde_json::to_string_pretty(&body).unwrap_or_default(),
+            );
+        }
+
         let response = self.send_with_retry(&url, &body).await?;
         let wire: WireResponse = response.json().await?;
 

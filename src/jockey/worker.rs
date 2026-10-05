@@ -232,11 +232,12 @@ fn build_messages(
 under a governor that reviews every action before it runs.\n\
 Hard rules:\n\
 1. Modify ONLY files under the step's allowed paths. Reads outside them are allowed when needed for context.\n\
-2. Make the smallest change that satisfies the step invariants. Do not refactor, rename, or 'improve' anything else.\n\
-3. Use read_file before editing a file you have not seen in this context.\n\
-4. run_command is for deterministic checks only (build/test/lint). Never run interactive, network-installing, or destructive commands.\n\
-5. Call finish_step exactly when you believe every invariant holds. Its summary must state how each invariant is satisfied.\n\
-6. Every reply must contain exactly one tool call.\n",
+2. File paths are ALWAYS relative to the workspace root (e.g. 'src/lib.rs'). NEVER use absolute paths.\n\
+3. Make the smallest change that satisfies the step invariants. Do not refactor, rename, or 'improve' anything else.\n\
+4. Use read_file before editing a file you have not seen in this context.\n\
+5. run_command is for deterministic checks only (build/test/lint/inspect). Never run interactive, network-installing, or destructive commands.\n\
+6. Call finish_step exactly when you believe every invariant holds. Its summary must state how each invariant is satisfied.\n\
+7. Every reply must contain exactly one tool call.\n",
     );
     if let Some(reason) = repair {
         system.push_str(&format!(

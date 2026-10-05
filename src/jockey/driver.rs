@@ -489,6 +489,7 @@ impl Governor {
                 tool: String::new(),
                 args: json!({}),
             });
+            let action = relativize_action(action, &self.state.worktree);
 
             if action.tool == TOOL_FINISH_STEP {
                 return (self.verify(step_id).await, records);
@@ -499,27 +500,55 @@ impl Governor {
                 step_id: step_id.to_string(),
                 tool: action.tool.clone(),
                 brief: brief.clone(),
+                args: Some(action.args.clone()),
             });
 
             let failed = self.attempts.get(step_id).cloned().unwrap_or_default();
             let deterministic = self.deterministic_check(&action, sandbox);
             let step_view = self.step_view(step_id);
-            let verdict = self
-                .interceptor
-                .review(&action, &step_view, &failed, deterministic)
-                .await;
+            let review = match (
+                &action.tool,
+                action
+                    .args
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .map(crate::sandbox::exec::is_readonly_command),
+            ) {
+                (t, Some(true)) if t == TOOL_RUN_COMMAND && deterministic.is_none() => {
+                    crate::jockey::interceptor::Review {
+                        verdict: InterceptVerdict::Approved {
+                            scope_p: None,
+                            novelty: None,
+                        },
+                        jev_usage: None,
+                    }
+                }
+                _ => self.interceptor.review(&action, &step_view, &failed, deterministic).await,
+            };
+            if let Some(usage) = &review.jev_usage {
+                self.state.ledger.add_jev_usage(false, usage);
+                self.emit(JockeyEvent::Usage {
+                    ledger: self.state.ledger.clone(),
+                });
+            }
 
-            match verdict {
+            match review.verdict {
                 InterceptVerdict::Approved { scope_p, novelty } => {
                     self.emit(JockeyEvent::ActionApproved {
                         tool: action.tool.clone(),
                         scope_p,
                         novelty,
                     });
-                    let is_mutating = matches!(
-                        action.tool.as_str(),
-                        TOOL_WRITE_FILE | TOOL_EDIT_FILE | TOOL_RUN_COMMAND
-                    );
+                    let is_mutating = match action.tool.as_str() {
+                        TOOL_WRITE_FILE | TOOL_EDIT_FILE => true,
+                        TOOL_RUN_COMMAND => action
+                            .args
+                            .get("command")
+                            .and_then(|c| c.as_str())
+                            .map(|c| !crate::sandbox::exec::is_readonly_command(c))
+                            .unwrap_or(true),
+                        _ => false,
+                    };
                     let (ok, result) = self.execute_action(&action, sandbox).await;
                     self.emit(JockeyEvent::ActionExecuted {
                         tool: action.tool.clone(),
@@ -985,6 +1014,22 @@ enum TriageVerdict {
     SyntaxFix,
     ReadContext,
     Deadlock,
+}
+
+/// Rewrites absolute worktree-rooted paths in action arguments to
+/// workspace-relative form, keeping fingerprints and Jev state canonical.
+fn relativize_action(mut action: WorkerAction, root: &Path) -> WorkerAction {
+    let prefix = format!("{}/", root.display());
+    let relative = action
+        .args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .and_then(|p| p.strip_prefix(&prefix))
+        .map(|s| s.to_string());
+    if let (Some(stripped), Some(obj)) = (relative, action.args.as_object_mut()) {
+        obj.insert("path".to_string(), json!(stripped));
+    }
+    action
 }
 
 fn truncate_str(s: &str, max: usize) -> &str {
