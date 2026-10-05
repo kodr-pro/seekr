@@ -268,7 +268,7 @@ async fn resume_headless(state: RunState, config: AppConfig) -> Result<()> {
         roles.worker.1.clone(),
         config.jockey.worker_temperature,
         config.jockey.worker_max_tokens,
-        std::env::var("SEEKR_WORKER_REASONING").ok(),
+        cli::worker_reasoning(&config),
     );
     let mut governor = seekr::jockey::driver::Governor::attach(
         &config,

@@ -33,6 +33,8 @@ fn prompt() -> WorkerPrompt {
         attempt: 1,
         max_attempts: 3,
         context: vec![],
+        todos: vec![],
+        tools_enabled: vec![],
     }
 }
 
@@ -169,6 +171,8 @@ async fn live_worker_against_local_model() {
         attempt: 1,
         max_attempts: 3,
         context: vec![],
+        todos: vec![],
+        tools_enabled: vec![],
     };
     let turn = worker.propose(&prompt).await.unwrap();
     println!("actions: {:?}", turn.actions);

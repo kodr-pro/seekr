@@ -54,6 +54,10 @@ scraper = "0.22"
 # For unique IDs
 uuid = { version = "1", features = ["v4"] }
 
+# For grep/glob tools
+regex = "1"
+glob = "0.3"
+
 # For Jev cache keys
 sha2 = "0.10"
 

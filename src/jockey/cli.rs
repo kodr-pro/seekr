@@ -67,6 +67,14 @@ blocked unless allow_degraded is set"
     })
 }
 
+/// Reasoning-effort for worker calls: env override beats config default.
+pub fn worker_reasoning(config: &AppConfig) -> Option<String> {
+    std::env::var("SEEKR_WORKER_REASONING")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| config.jockey.worker_reasoning.clone())
+}
+
 pub fn new_run_id() -> String {
     format!("jj-{}", chrono::Utc::now().format("%Y%m%d-%H%M%S"))
         + &uuid::Uuid::new_v4().simple().to_string()[..6]
@@ -163,7 +171,7 @@ pub async fn run_headless(
         roles.worker.1.clone(),
         config.jockey.worker_temperature,
         config.jockey.worker_max_tokens,
-        std::env::var("SEEKR_WORKER_REASONING").ok(),
+        worker_reasoning(config),
     );
     let mut governor = Governor::new(
         config,
@@ -206,7 +214,7 @@ pub async fn run_headless_json(
         roles.worker.1.clone(),
         config.jockey.worker_temperature,
         config.jockey.worker_max_tokens,
-        std::env::var("SEEKR_WORKER_REASONING").ok(),
+        worker_reasoning(config),
     );
     let mut governor = Governor::new(
         config,

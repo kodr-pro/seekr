@@ -23,7 +23,6 @@ use crate::sandbox::run_command;
 
 const MAX_ACTIONS_PER_ATTEMPT: usize = 16;
 const MAX_REJECTIONS_PER_ATTEMPT: usize = 6;
-const MAX_READ_CHARS: usize = 20_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GovernorError {
@@ -502,6 +501,31 @@ impl Governor {
         let mut rejections = 0usize;
         let mut live_context: Vec<String> = context.to_vec();
         let mut records: Vec<AttemptRecord> = Vec::new();
+        let mut todos: Vec<(String, String)> = Vec::new();
+        let mut read_cache: std::collections::HashMap<
+            String,
+            (usize, u64, std::time::SystemTime),
+        > = std::collections::HashMap::new();
+
+        let mut tools_enabled: Vec<String> =
+            vec![crate::jockey::worker::TOOL_DIAGNOSTICS.to_string()];
+        if self.jj.allow_subagent {
+            tools_enabled
+                .push(crate::jockey::worker::TOOL_SUBAGENT.to_string());
+        }
+        if self.jj.allow_web {
+            tools_enabled
+                .push(crate::jockey::worker::TOOL_WEB_FETCH.to_string());
+        }
+
+        let tool_ctx = crate::jockey::tools::ToolCtx {
+            sandbox: sandbox.clone(),
+            worktree: self.state.worktree.clone(),
+            blocklist: self.shell_blocklist.clone(),
+            verification_timeout: self.jj.verification_timeout_secs,
+            read_lines: self.jj.worker_read_lines,
+            allow_web: self.jj.allow_web,
+        };
 
         loop {
             if actions_done >= MAX_ACTIONS_PER_ATTEMPT
@@ -513,6 +537,13 @@ impl Governor {
                         actions_done, rejections
                     )),
                     records,
+                );
+            }
+
+            let mut prompt_context = live_context.clone();
+            if actions_done + 4 >= MAX_ACTIONS_PER_ATTEMPT {
+                prompt_context.push(
+                    "WRAP UP: you are near the action cap for this attempt. Finish the current change and call finish_step when the invariants hold.".to_string(),
                 );
             }
 
@@ -528,7 +559,9 @@ impl Governor {
                     .collect(),
                 attempt,
                 max_attempts: self.jj.max_attempts_per_step,
-                context: live_context.clone(),
+                context: prompt_context,
+                todos: todos.clone(),
+                tools_enabled: tools_enabled.clone(),
             };
 
             let turn = match self.worker.propose(&prompt).await {
@@ -546,117 +579,279 @@ impl Governor {
                 ledger: self.state.ledger.clone(),
             });
 
-            let action =
-                turn.actions.into_iter().next().unwrap_or(WorkerAction {
-                    id: String::new(),
-                    tool: String::new(),
-                    args: json!({}),
-                });
-            let action = relativize_action(action, &self.state.worktree);
-
-            if action.tool == TOOL_FINISH_STEP {
-                return (self.verify(step_id).await, records);
-            }
-
-            let brief = crate::jockey::interceptor::action_brief(&action);
-            self.emit(JockeyEvent::ActionProposed {
-                step_id: step_id.to_string(),
-                tool: action.tool.clone(),
-                brief: brief.clone(),
-                args: Some(action.args.clone()),
-            });
-
-            let failed =
-                self.attempts.get(step_id).cloned().unwrap_or_default();
-            let deterministic = self.deterministic_check(&action, sandbox);
-            let step_view = self.step_view(step_id);
-            let review = match (
-                &action.tool,
-                action
-                    .args
-                    .get("command")
-                    .and_then(|c| c.as_str())
-                    .map(crate::sandbox::exec::is_readonly_command),
-            ) {
-                (t, Some(true))
-                    if t == TOOL_RUN_COMMAND && deterministic.is_none() =>
-                {
-                    crate::jockey::interceptor::Review {
-                        verdict: InterceptVerdict::Approved {
-                            scope_p: None,
-                            novelty: None,
-                        },
-                        jev_usage: None,
-                    }
+            for action in turn.actions {
+                let action = relativize_action(action, &self.state.worktree);
+                if action.tool == TOOL_FINISH_STEP {
+                    return (self.verify(step_id).await, records);
                 }
-                _ => {
-                    self.interceptor
-                        .review(&action, &step_view, &failed, deterministic)
-                        .await
-                }
-            };
-            if let Some(usage) = &review.jev_usage {
-                self.state.ledger.add_jev_usage(false, usage);
-                self.emit(JockeyEvent::Usage {
-                    ledger: self.state.ledger.clone(),
-                });
-            }
 
-            match review.verdict {
-                InterceptVerdict::Approved { scope_p, novelty } => {
-                    self.emit(JockeyEvent::ActionApproved {
+                let brief = crate::jockey::interceptor::action_brief(&action);
+
+                if action.tool == crate::jockey::worker::TOOL_TODO {
+                    actions_done += 1;
+                    todos = action
+                        .args
+                        .get("todos")
+                        .and_then(|t| t.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|item| {
+                                    let content = item
+                                        .get("content")?
+                                        .as_str()?
+                                        .to_string();
+                                    let status = item
+                                        .get("status")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("pending")
+                                        .to_string();
+                                    Some((content, status))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    live_context.push(format!(
+                        "ACTION {}: todo list updated ({} items)",
+                        actions_done,
+                        todos.len()
+                    ));
+                    continue;
+                }
+
+                if action.tool == crate::jockey::worker::TOOL_SUBAGENT {
+                    actions_done += 1;
+                    self.emit(JockeyEvent::ActionProposed {
+                        step_id: step_id.to_string(),
                         tool: action.tool.clone(),
-                        scope_p,
-                        novelty,
+                        brief: brief.clone(),
+                        args: Some(action.args.clone()),
                     });
-                    let is_mutating = match action.tool.as_str() {
-                        TOOL_WRITE_FILE | TOOL_EDIT_FILE => true,
-                        TOOL_RUN_COMMAND => action
-                            .args
-                            .get("command")
-                            .and_then(|c| c.as_str())
-                            .map(|c| {
-                                !crate::sandbox::exec::is_readonly_command(c)
-                            })
-                            .unwrap_or(true),
-                        _ => false,
-                    };
-                    let (ok, result) =
-                        self.execute_action(&action, sandbox).await;
+                    let report = self.run_subagent(&action, &tool_ctx).await;
+                    let (ok, text) = report;
                     self.emit(JockeyEvent::ActionExecuted {
                         tool: action.tool.clone(),
                         ok,
-                        brief: truncate_str(&result, 200).to_string(),
+                        brief: truncate_str(&text, 200).to_string(),
                     });
-                    actions_done += 1;
-                    if is_mutating && ok {
-                        records.push(AttemptRecord {
-                            fingerprint: crate::jockey::interceptor::Interceptor::fingerprint(&action),
-                            brief,
-                        });
-                    }
                     live_context.push(format!(
-                        "ACTION {}: {} -> {}",
+                        "ACTION {}: subagent report:\n{}",
                         actions_done,
-                        crate::jockey::interceptor::action_brief(&action),
-                        truncate_str(&result, 4000)
+                        truncate_str(&text, 6000)
                     ));
+                    continue;
                 }
-                InterceptVerdict::Rejected { reason } => {
-                    rejections += 1;
-                    self.emit(JockeyEvent::ActionRejected {
-                        tool: action.tool.clone(),
-                        reason: reason.clone(),
+
+                self.emit(JockeyEvent::ActionProposed {
+                    step_id: step_id.to_string(),
+                    tool: action.tool.clone(),
+                    brief: brief.clone(),
+                    args: Some(action.args.clone()),
+                });
+
+                // read dedup: skip re-reading unchanged files
+                if action.tool == TOOL_READ_FILE
+                    && let Some(path) =
+                        action.args.get("path").and_then(|p| p.as_str())
+                    && let Ok(resolved) = sandbox.resolve_for_read(path)
+                        && let Ok(meta) = std::fs::metadata(&resolved)
+                        && let Ok(modified) = meta.modified()
+                        && let Some((idx, len, prev_modified)) =
+                            read_cache.get(path)
+                        && modified == *prev_modified
+                    {
+                        actions_done += 1;
+                        live_context.push(format!(
+                            "ACTION {}: read_file {path} -> (unchanged since ACTION {idx}, {len} bytes; do not re-read)",
+                            actions_done
+                        ));
+                        continue;
+                    }
+
+                let failed =
+                    self.attempts.get(step_id).cloned().unwrap_or_default();
+                let deterministic = self.deterministic_check(&action, sandbox);
+                let step_view = self.step_view(step_id);
+                let review = match (
+                    &action.tool,
+                    action
+                        .args
+                        .get("command")
+                        .and_then(|c| c.as_str())
+                        .map(crate::sandbox::exec::is_readonly_command),
+                ) {
+                    (t, Some(true))
+                        if t == TOOL_RUN_COMMAND && deterministic.is_none() =>
+                    {
+                        crate::jockey::interceptor::Review {
+                            verdict: InterceptVerdict::Approved {
+                                scope_p: None,
+                                novelty: None,
+                            },
+                            jev_usage: None,
+                        }
+                    }
+                    _ => {
+                        self.interceptor
+                            .review(&action, &step_view, &failed, deterministic)
+                            .await
+                    }
+                };
+                if let Some(usage) = &review.jev_usage {
+                    self.state.ledger.add_jev_usage(false, usage);
+                    self.emit(JockeyEvent::Usage {
+                        ledger: self.state.ledger.clone(),
                     });
-                    live_context.push(format!(
-                        "REJECTED ACTION {}: {} because: {}",
-                        rejections,
-                        crate::jockey::interceptor::action_brief(&action),
-                        reason
-                    ));
+                }
+
+                match review.verdict {
+                    InterceptVerdict::Approved { scope_p, novelty } => {
+                        self.emit(JockeyEvent::ActionApproved {
+                            tool: action.tool.clone(),
+                            scope_p,
+                            novelty,
+                        });
+                        let is_mutating = match action.tool.as_str() {
+                            TOOL_WRITE_FILE | TOOL_EDIT_FILE => true,
+                            TOOL_RUN_COMMAND => action
+                                .args
+                                .get("command")
+                                .and_then(|c| c.as_str())
+                                .map(|c| {
+                                    !crate::sandbox::exec::is_readonly_command(
+                                        c,
+                                    )
+                                })
+                                .unwrap_or(true),
+                            _ => false,
+                        };
+                        let (ok, result) = self
+                            .execute_action(&action, sandbox, &tool_ctx)
+                            .await;
+                        if action.tool == TOOL_READ_FILE
+                            && let Some(path) =
+                                action.args.get("path").and_then(|p| p.as_str())
+                            && let Ok(resolved) = sandbox.resolve_for_read(path)
+                            && let (Ok(meta), Ok(modified)) = (
+                                std::fs::metadata(&resolved),
+                                std::fs::metadata(&resolved)
+                                    .and_then(|m| m.modified()),
+                            )
+                        {
+                            read_cache.insert(
+                                path.to_string(),
+                                (actions_done + 1, meta.len(), modified),
+                            );
+                        }
+                        self.emit(JockeyEvent::ActionExecuted {
+                            tool: action.tool.clone(),
+                            ok,
+                            brief: truncate_str(&result, 200).to_string(),
+                        });
+                        actions_done += 1;
+                        if is_mutating && ok {
+                            records.push(AttemptRecord {
+                                fingerprint:
+                                    crate::jockey::interceptor::Interceptor::fingerprint(&action),
+                                brief,
+                            });
+                        }
+                        live_context.push(format!(
+                            "ACTION {}: {} -> {}",
+                            actions_done,
+                            crate::jockey::interceptor::action_brief(&action),
+                            truncate_str(&result, 4000)
+                        ));
+                        compact_context(&mut live_context);
+                    }
+                    InterceptVerdict::Rejected { reason } => {
+                        rejections += 1;
+                        self.emit(JockeyEvent::ActionRejected {
+                            tool: action.tool.clone(),
+                            reason: reason.clone(),
+                        });
+                        let mut guidance = format!(
+                            "REJECTED ACTION {}: {} because: {}",
+                            rejections,
+                            crate::jockey::interceptor::action_brief(&action),
+                            reason
+                        );
+                        if reason.contains("out of scope") {
+                            guidance.push_str(&format!(
+                                "\nThat work seems to belong to a DIFFERENT step of the plan. Do ONLY this step's invariants: {}",
+                                invariants.join(" | ")
+                            ));
+                        }
+                        live_context.push(guidance);
+                    }
                 }
             }
         }
+    }
+
+    /// Read-only explorer subagent: bounded loop, read/search tools only,
+    /// terminal `report`. Returns its findings for the main context.
+    async fn run_subagent(
+        &mut self,
+        action: &WorkerAction,
+        tool_ctx: &crate::jockey::tools::ToolCtx,
+    ) -> (bool, String) {
+        let Some(task) = action.args.get("task").and_then(|t| t.as_str())
+        else {
+            return (false, "subagent: missing task".to_string());
+        };
+        let system = "You are a READ-ONLY explorer subagent inside a coding workspace. \
+You have read_file, grep, glob, list, and report tools — nothing else; you cannot modify anything. \
+Gather precisely what the task asks using grep/glob first (cheap), reading only what you must. \
+Then call report ONCE with a dense, factual answer (max 400 words, include file paths and signatures).";
+        let defs = Worker::subagent_definitions();
+        let tools: Vec<String> =
+            defs.iter().map(|d| d.function.name.clone()).collect();
+        let mut history: Vec<String> = Vec::new();
+        for _round in 0..8 {
+            let full_task = if history.is_empty() {
+                format!(
+                    "TASK: {task}\n\nCall read/grep/glob tools now, or report when you have the answer."
+                )
+            } else {
+                format!(
+                    "TASK: {task}\n\nYour actions so far:\n{}\nContinue with tools or call report now.",
+                    history.join("\n")
+                )
+            };
+            let turn = match self
+                .worker
+                .propose_subagent(system, &full_task, &tools, defs.clone())
+                .await
+            {
+                Ok(t) => t,
+                Err(e) => return (false, format!("subagent failed: {e}")),
+            };
+            self.state.ledger.add_worker(turn.usage.as_ref());
+            for act in turn.actions {
+                if act.tool == crate::jockey::worker::TOOL_REPORT {
+                    let summary = act
+                        .args
+                        .get("summary")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("(empty report)")
+                        .to_string();
+                    return (true, summary);
+                }
+                let (ok, result) = tool_ctx.execute(&act).await;
+                history.push(format!(
+                    "{} {} -> {}",
+                    act.tool,
+                    crate::jockey::interceptor::action_brief(&act),
+                    truncate_str(&result, 1500)
+                ));
+                let _ = ok;
+            }
+        }
+        (
+            false,
+            "subagent exhausted its 8 action rounds without reporting"
+                .to_string(),
+        )
     }
 
     fn step_view(&self, step_id: &str) -> DagStep {
@@ -692,131 +887,10 @@ impl Governor {
     async fn execute_action(
         &self,
         action: &WorkerAction,
-        sandbox: &PathSandbox,
+        _sandbox: &PathSandbox,
+        tool_ctx: &crate::jockey::tools::ToolCtx,
     ) -> (bool, String) {
-        match action.tool.as_str() {
-            TOOL_READ_FILE => {
-                let Some(path) =
-                    action.args.get("path").and_then(|p| p.as_str())
-                else {
-                    return (false, "read_file: missing path".to_string());
-                };
-                match sandbox.resolve_for_read(path) {
-                    Ok(resolved) => match std::fs::read_to_string(&resolved) {
-                        Ok(content) => {
-                            let brief = if content.len() > MAX_READ_CHARS {
-                                format!(
-                                    "{}\n... (truncated {} chars)",
-                                    &content[..MAX_READ_CHARS],
-                                    content.len()
-                                )
-                            } else {
-                                content
-                            };
-                            (true, brief)
-                        }
-                        Err(e) => (false, format!("read failed: {e}")),
-                    },
-                    Err(e) => (false, e.to_string()),
-                }
-            }
-            TOOL_WRITE_FILE => {
-                let (Some(path), Some(content)) = (
-                    action.args.get("path").and_then(|p| p.as_str()),
-                    action.args.get("content").and_then(|c| c.as_str()),
-                ) else {
-                    return (
-                        false,
-                        "write_file: missing path/content".to_string(),
-                    );
-                };
-                match sandbox.resolve_for_write(path) {
-                    Ok(resolved) => {
-                        if let Some(parent) = resolved.parent()
-                            && std::fs::create_dir_all(parent).is_err()
-                        {
-                            return (
-                                false,
-                                format!("cannot create dirs for {path}"),
-                            );
-                        }
-                        match std::fs::write(&resolved, content) {
-                            Ok(()) => (
-                                true,
-                                format!(
-                                    "wrote {path} ({} bytes)",
-                                    content.len()
-                                ),
-                            ),
-                            Err(e) => (false, format!("write failed: {e}")),
-                        }
-                    }
-                    Err(e) => (false, e.to_string()),
-                }
-            }
-            TOOL_EDIT_FILE => {
-                let (Some(path), Some(old), Some(new)) = (
-                    action.args.get("path").and_then(|p| p.as_str()),
-                    action.args.get("old_string").and_then(|p| p.as_str()),
-                    action.args.get("new_string").and_then(|p| p.as_str()),
-                ) else {
-                    return (
-                        false,
-                        "edit_file: missing path/old_string/new_string"
-                            .to_string(),
-                    );
-                };
-                match sandbox.resolve_for_write(path) {
-                    Ok(resolved) => match std::fs::read_to_string(&resolved) {
-                        Ok(content) => {
-                            if !content.contains(old) {
-                                (
-                                    false,
-                                    format!(
-                                        "edit_file: old_string not found in {path}"
-                                    ),
-                                )
-                            } else {
-                                let updated = content.replacen(old, new, 1);
-                                match std::fs::write(&resolved, updated) {
-                                    Ok(()) => (true, format!("edited {path}")),
-                                    Err(e) => {
-                                        (false, format!("write failed: {e}"))
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => (false, format!("read failed: {e}")),
-                    },
-                    Err(e) => (false, e.to_string()),
-                }
-            }
-            TOOL_RUN_COMMAND => {
-                let Some(command) =
-                    action.args.get("command").and_then(|c| c.as_str())
-                else {
-                    return (false, "run_command: missing command".to_string());
-                };
-                let outcome = run_command(
-                    &self.state.worktree,
-                    command,
-                    self.jj.verification_timeout_secs,
-                    &self.shell_blocklist,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    crate::sandbox::CommandOutcome {
-                        success: false,
-                        exit_code: None,
-                        timed_out: false,
-                        stdout: String::new(),
-                        stderr: format!("spawn failed: {e}"),
-                    }
-                });
-                (outcome.success, outcome.combined())
-            }
-            _ => (false, format!("unknown tool {}", action.tool)),
-        }
+        tool_ctx.execute(action).await
     }
 
     async fn verify(&mut self, step_id: &str) -> AttemptOutcome {
@@ -1028,13 +1102,27 @@ impl Governor {
         }
 
         let system = "You are the escalation tier of an autonomous coding agent. A small local \
-model is stuck on ONE step. You get the step, its invariants, the relevant files, and the exact \
-failure. Reply with EITHER:\n\
+model is stuck on ONE step. You get the step, its invariants, the relevant files, the worker's \
+recent actions, and the exact failure. Reply with EITHER:\n\
 (1) a unified diff in a ```diff fence (paths relative to repo root) that fixes the step, OR\n\
 (2) a paragraph starting with GUIDANCE: giving the local model concrete, actionable instructions.\n\
 Never restate the problem; fix or direct. Keep it minimal.\n";
+        let action_log = self
+            .attempts
+            .get(step_id)
+            .map(|records| {
+                records
+                    .iter()
+                    .rev()
+                    .take(10)
+                    .rev()
+                    .map(|r| format!("- {}", r.brief))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_else(|| "(no recorded mutating actions)".to_string());
         let user = format!(
-            "STEP [{step_id}]: {description}\nINVARIANTS:\n{}\n\nFILES:\n{files_block}\n\nFAILURE:\n{}",
+            "STEP [{step_id}]: {description}\nINVARIANTS:\n{}\n\nFILES:\n{files_block}\n\nWORKER MUTATING ACTIONS SO FAR:\n{action_log}\n\nFAILURE:\n{}",
             invariants
                 .iter()
                 .map(|i| format!("- {i}"))
@@ -1142,6 +1230,31 @@ fn relativize_action(mut action: WorkerAction, root: &Path) -> WorkerAction {
         obj.insert("path".to_string(), json!(stripped));
     }
     action
+}
+
+/// Keeps the newest 3 action results verbatim; older ones collapse to a
+/// one-line header past the budget so the worker context stays bounded.
+fn compact_context(context: &mut [String]) {
+    const BUDGET: usize = 24_000;
+    let total: usize = context.iter().map(|c| c.len()).sum();
+    if total <= BUDGET {
+        return;
+    }
+    let action_idx: Vec<usize> = context
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.starts_with("ACTION "))
+        .map(|(i, _)| i)
+        .collect();
+    let keep_full: std::collections::HashSet<usize> =
+        action_idx.iter().rev().take(3).copied().collect();
+    for i in action_idx {
+        if !keep_full.contains(&i) && context[i].len() > 300 {
+            let first_line =
+                context[i].lines().next().unwrap_or("").to_string();
+            context[i] = format!("{first_line} …(compacted)");
+        }
+    }
 }
 
 fn truncate_str(s: &str, max: usize) -> &str {

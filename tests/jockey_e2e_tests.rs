@@ -472,3 +472,74 @@ async fn fail_closed_when_jev_unavailable_blocks_writes() {
     );
     sandbox.dispose().await.unwrap();
 }
+
+#[tokio::test]
+async fn parallel_reads_todo_and_grep_flow() {
+    let (_tmp, root) = init_repo().await;
+    let worker_server = MockServer::start().await;
+    let jev_server = MockServer::start().await;
+    isolate_state_dir();
+
+    // turn 1: batched parallel reads + grep in ONE reply, plus a todo update
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"src/lib.rs\"}"}},
+                {"id": "c2", "type": "function", "function": {"name": "grep", "arguments": "{\"pattern\": \"original\"}"}},
+                {"id": "c3", "type": "function", "function": {"name": "todo", "arguments": "{\"todos\": [{\"content\": \"patch lib.rs\", \"status\": \"in_progress\"}]}"}}]}}],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}
+        })))
+        .up_to_n_times(1_u64)
+        .mount(&worker_server)
+        .await;
+    // turn 2: the write
+    mount_worker_reply(
+        &worker_server,
+        "write_file",
+        json!({"path": "src/lib.rs", "content": "pub fn changed() {}\n"}),
+        1,
+    )
+    .await;
+    // turn 3: finish
+    mount_worker_reply(
+        &worker_server,
+        "finish_step",
+        json!({"summary": "done"}),
+        5,
+    )
+    .await;
+    mount_jev_superset(&jev_server, 0.95, "syntax_fix").await;
+
+    let (client, model) = api_client(&worker_server, "worker");
+    let worker = Worker::new(client, model, 0.2, 1024, None);
+    let sandbox = GitSandbox::create(&root, "e2e-parallel").await.unwrap();
+    let config = AppConfig::default();
+
+    let (outcome, events) = drive(
+        &config,
+        worker,
+        None,
+        jev_client(&jev_server),
+        sandbox.clone(),
+        one_step_dag(vec!["src"], "true"),
+    )
+    .await;
+
+    assert_eq!(outcome, RunOutcome::Success);
+    let read_events = events
+        .iter()
+        .filter(|e| matches!(e, seekr::jockey::JockeyEvent::ActionExecuted { tool, .. } if tool == "read_file"))
+        .count();
+    let grep_events = events
+        .iter()
+        .filter(|e| matches!(e, seekr::jockey::JockeyEvent::ActionProposed { tool, .. } if tool == "grep"))
+        .count();
+    assert!(read_events >= 1, "parallel read executed");
+    assert!(grep_events >= 1, "grep executed");
+    assert_eq!(
+        std::fs::read_to_string(sandbox.worktree().join("src/lib.rs")).unwrap(),
+        "pub fn changed() {}\n"
+    );
+    sandbox.dispose().await.unwrap();
+}

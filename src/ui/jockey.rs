@@ -88,6 +88,10 @@ pub struct JockeyApp {
     attached_readonly: bool,
     tail_rx: Option<mpsc::UnboundedReceiver<JockeyEvent>>,
     tick: u64,
+    attempt_actions: usize,
+    attempt_rejections: usize,
+    step_started_at: Option<std::time::Instant>,
+    step_elapsed: std::time::Duration,
 }
 
 const LOG_CAP: usize = 400;
@@ -168,6 +172,10 @@ impl JockeyApp {
             attached_readonly: false,
             tail_rx: None,
             tick: 0,
+            attempt_actions: 0,
+            attempt_rejections: 0,
+            step_started_at: None,
+            step_elapsed: std::time::Duration::ZERO,
         }
     }
 
@@ -276,7 +284,7 @@ impl JockeyApp {
                 roles.worker.1.clone(),
                 config.jockey.worker_temperature,
                 config.jockey.worker_max_tokens,
-                std::env::var("SEEKR_WORKER_REASONING").ok(),
+                crate::jockey::cli::worker_reasoning(&config),
             );
             let governor = Governor::new(
                 &config,
@@ -368,12 +376,14 @@ impl JockeyApp {
                 self.push_log(Line::from(spans));
             }
             ActionRejected { tool, reason } => {
+                self.attempt_rejections += 1;
                 self.push_log(Line::from(vec![
                     Span::styled(format!("  ✗ {tool} "), red),
                     Span::styled(reason.clone(), yellow),
                 ]));
             }
             ActionExecuted { ok, brief, .. } => {
+                self.attempt_actions += 1;
                 let (mark, style) =
                     if *ok { ("✔", green) } else { ("✘", red) };
                 let mut line = vec![Span::styled(format!("  {mark} "), style)];
@@ -381,6 +391,19 @@ impl JockeyApp {
                     line.push(Span::styled(first_line(brief), yellow));
                 }
                 self.push_log(Line::from(line));
+                if !self.telemetry.is_empty() {
+                    let mut telemetry = self.telemetry.clone();
+                    telemetry.push(Line::from(Span::styled(
+                        format!(
+                            "actions {} this attempt · {} rejected · {} elapsed",
+                            self.attempt_actions,
+                            self.attempt_rejections,
+                            elapsed_str(self.step_elapsed)
+                        ),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                    self.telemetry = telemetry;
+                }
             }
             VerificationStarted { command, .. } => {
                 self.push_log(Line::styled(
@@ -863,7 +886,7 @@ impl JockeyApp {
                 roles.worker.1.clone(),
                 config.jockey.worker_temperature,
                 config.jockey.worker_max_tokens,
-                std::env::var("SEEKR_WORKER_REASONING").ok(),
+                crate::jockey::cli::worker_reasoning(&config),
             );
             let governor = Governor::attach(
                 &config,
@@ -897,6 +920,15 @@ impl JockeyApp {
 
 fn short(s: &str) -> String {
     s.chars().take(7).collect()
+}
+
+fn elapsed_str(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 fn first_line(s: &str) -> String {
@@ -947,6 +979,9 @@ async fn run_loop(mut app: JockeyApp) -> anyhow::Result<()> {
             }
             _ = tick.tick() => {
                 app.tick = app.tick.wrapping_add(1);
+                if let Some(started) = app.step_started_at {
+                    app.step_elapsed = started.elapsed();
+                }
             }
         }
         if let Err(e) = terminal.draw(|f| render(f, &mut app)) {

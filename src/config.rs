@@ -123,6 +123,20 @@ pub struct JockeyConfig {
     /// Allow autonomous writes when Jev is unavailable (fail-closed default).
     #[serde(default)]
     pub allow_degraded: bool,
+    /// Reasoning-effort hint for the worker model ("none" avoids thinking
+    /// tokens and empty replies on Ollama models like qwen3.5).
+    #[serde(default = "default_jj_worker_reasoning")]
+    pub worker_reasoning: Option<String>,
+    /// Default line window for read_file results.
+    #[serde(default = "default_jj_read_limit")]
+    pub worker_read_lines: u32,
+    /// Allow the worker to fetch web pages (fail-closed default; fetched
+    /// content is fenced as untrusted and Jev still gates all writes).
+    #[serde(default)]
+    pub allow_web: bool,
+    /// Allow the worker to spawn read-only explorer subagents.
+    #[serde(default = "default_true")]
+    pub allow_subagent: bool,
 }
 
 fn default_jj_attempts() -> u32 {
@@ -149,6 +163,12 @@ fn default_jj_scope_threshold() -> f64 {
 fn default_jj_novelty_floor() -> f64 {
     1.0
 }
+fn default_jj_worker_reasoning() -> Option<String> {
+    Some("none".to_string())
+}
+fn default_jj_read_limit() -> u32 {
+    400
+}
 
 impl Default for JockeyConfig {
     fn default() -> Self {
@@ -164,6 +184,10 @@ impl Default for JockeyConfig {
             scope_threshold: default_jj_scope_threshold(),
             novelty_reject_at_or_below: default_jj_novelty_floor(),
             allow_degraded: false,
+            worker_reasoning: default_jj_worker_reasoning(),
+            worker_read_lines: default_jj_read_limit(),
+            allow_web: false,
+            allow_subagent: true,
         }
     }
 }
