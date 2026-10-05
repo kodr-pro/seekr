@@ -48,6 +48,11 @@ impl PathSandbox {
         self.allowed.is_empty()
     }
 
+    /// Canonical allowed prefixes for display in worker prompts.
+    pub fn allowed(&self) -> &[PathBuf] {
+        &self.allowed
+    }
+
     /// Resolves an untrusted path string for a read: must exist and be a
     /// real path inside the worktree.
     pub fn resolve_for_read(&self, untrusted: &str) -> Result<PathBuf, SandboxError> {

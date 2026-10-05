@@ -19,6 +19,7 @@ pub enum SandboxError {
 /// all work happens in a linked worktree on branch `jj/<task-id>`,
 /// checkpoints are commits, and rollback is `reset --hard` + `clean -fd`
 /// (which also removes untracked files the worker created).
+#[derive(Clone, Debug)]
 pub struct GitSandbox {
     repo_root: PathBuf,
     worktree: PathBuf,

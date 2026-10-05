@@ -237,11 +237,13 @@ impl JevClient {
                 JevError::InvalidResponse(format!("answer '{name}' failed validation: {e}"))
             })?;
         }
-        if result.answers.len() != questions.len() {
+        if let Some(missing) = questions
+            .questions
+            .keys()
+            .find(|k| !result.answers.contains_key(*k))
+        {
             return Err(JevError::InvalidResponse(format!(
-                "expected {} answers, got {}",
-                questions.len(),
-                result.answers.len()
+                "missing answer for question '{missing}'"
             )));
         }
 
