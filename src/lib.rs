@@ -8,6 +8,7 @@ pub mod doctor;
 pub mod errors;
 pub mod event_handler;
 pub mod jev;
+pub mod jockey;
 pub mod lsp;
 pub mod manager;
 pub mod mcp;

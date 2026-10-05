@@ -179,6 +179,7 @@ pub async fn handle_setup_event(app: &mut App, ev: &Event) -> Result<bool> {
                                     show_reasoning: true,
                                 },
                                 mcp_servers: Vec::new(),
+                                jockey: crate::config::JockeyConfig::default(),
                             };
 
                             match config.save() {

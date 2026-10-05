@@ -90,6 +90,85 @@ impl Default for UiConfig {
 } // default
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JockeyConfig {
+    /// Named provider used for the local worker model (OpenAI-compatible).
+    #[serde(default)]
+    pub worker_provider: Option<String>,
+    /// Named provider used for Phase 0 planning and escalations.
+    #[serde(default)]
+    pub frontier_provider: Option<String>,
+    /// Local attempts per DAG step before escalation.
+    #[serde(default = "default_jj_attempts")]
+    pub max_attempts_per_step: u32,
+    /// Hard ceiling on frontier calls per run (plan + escalations).
+    #[serde(default = "default_jj_frontier_calls")]
+    pub max_frontier_calls: u32,
+    /// Wall-clock budget for a single verification command.
+    #[serde(default = "default_jj_verification_timeout")]
+    pub verification_timeout_secs: u64,
+    /// Wall-clock budget per DAG step (all attempts).
+    #[serde(default = "default_jj_step_timeout")]
+    pub step_timeout_secs: u64,
+    /// Sampling controls for the worker model.
+    #[serde(default = "default_jj_worker_temperature")]
+    pub worker_temperature: f64,
+    #[serde(default = "default_jj_worker_max_tokens")]
+    pub worker_max_tokens: u32,
+    /// Jev scope gate: P(in_scope) must be at least this to approve an action.
+    #[serde(default = "default_jj_scope_threshold")]
+    pub scope_threshold: f64,
+    /// Jev loop gate: novelty score at or below this is a degenerate repeat.
+    #[serde(default = "default_jj_novelty_floor")]
+    pub novelty_reject_at_or_below: f64,
+    /// Allow autonomous writes when Jev is unavailable (fail-closed default).
+    #[serde(default)]
+    pub allow_degraded: bool,
+}
+
+fn default_jj_attempts() -> u32 {
+    3
+}
+fn default_jj_frontier_calls() -> u32 {
+    5
+}
+fn default_jj_verification_timeout() -> u64 {
+    600
+}
+fn default_jj_step_timeout() -> u64 {
+    3600
+}
+fn default_jj_worker_temperature() -> f64 {
+    0.2
+}
+fn default_jj_worker_max_tokens() -> u32 {
+    8192
+}
+fn default_jj_scope_threshold() -> f64 {
+    0.85
+}
+fn default_jj_novelty_floor() -> f64 {
+    1.0
+}
+
+impl Default for JockeyConfig {
+    fn default() -> Self {
+        Self {
+            worker_provider: None,
+            frontier_provider: None,
+            max_attempts_per_step: default_jj_attempts(),
+            max_frontier_calls: default_jj_frontier_calls(),
+            verification_timeout_secs: default_jj_verification_timeout(),
+            step_timeout_secs: default_jj_step_timeout(),
+            worker_temperature: default_jj_worker_temperature(),
+            worker_max_tokens: default_jj_worker_max_tokens(),
+            scope_threshold: default_jj_scope_threshold(),
+            novelty_reject_at_or_below: default_jj_novelty_floor(),
+            allow_degraded: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub providers: Vec<ProviderConfig>,
     pub active_provider: usize,
@@ -97,6 +176,8 @@ pub struct AppConfig {
     pub ui: UiConfig,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub jockey: JockeyConfig,
 }
 
 impl Default for AppConfig {
@@ -107,6 +188,7 @@ impl Default for AppConfig {
             agent: AgentConfig::default(),
             ui: UiConfig::default(),
             mcp_servers: Vec::new(),
+            jockey: JockeyConfig::default(),
         }
     }
 } // default
@@ -127,6 +209,14 @@ impl AppConfig {
             self.active_provider = 0;
         }
         &mut self.providers[self.active_provider]
+    }
+
+    /// Provider lookup by configured name (case-insensitive, trimmed).
+    pub fn provider_by_name(&self, name: &str) -> Option<&ProviderConfig> {
+        let wanted = name.trim().to_lowercase();
+        self.providers
+            .iter()
+            .find(|p| p.name.trim().to_lowercase() == wanted)
     }
 
     pub fn config_path() -> Result<PathBuf, ConfigError> {
@@ -173,6 +263,7 @@ impl AppConfig {
                     agent: old.agent,
                     ui: old.ui,
                     mcp_servers: Vec::new(),
+                    jockey: JockeyConfig::default(),
                 };
 
                 // When migrating, keys from old config will be moved to keyring on next save automatically if the user modifies anything. Or we can save immediately:

@@ -23,6 +23,13 @@ pub struct ApiClient {
     provider: Arc<dyn Provider>,
 }
 
+/// Non-streaming completion result with token usage when the provider reports it.
+#[derive(Clone, Debug)]
+pub struct CompletionOutcome {
+    pub content: String,
+    pub usage: Option<Usage>,
+}
+
 impl ApiClient {
     pub fn new(config: &AppConfig) -> Self {
         Self::new_for_provider(config, config.current_provider())
@@ -239,6 +246,89 @@ impl ApiClient {
             }
         }
     } // chat_completion
+
+    /// Non-streaming completion returning content plus token usage, with
+    /// explicit sampling controls for programmatic callers (planner, worker).
+    pub async fn chat_completion_with_usage(
+        &self,
+        messages: Vec<ChatMessage>,
+        model: &str,
+        temperature: Option<f64>,
+        max_tokens: Option<u32>,
+    ) -> Result<CompletionOutcome, ApiError> {
+        let is_anthropic = self.provider.name() == "Anthropic";
+
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages,
+            temperature,
+            max_tokens,
+            top_p: None,
+            stream: false,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop: None,
+            response_format: None,
+            tools: None,
+            tool_choice: None,
+        };
+
+        let request_body = self.provider.format_request(&request);
+        let headers = self.provider.auth_headers(&self.api_key);
+
+        let url = if is_anthropic {
+            format!("{}/messages", self.base_url)
+        } else {
+            format!("{}/chat/completions", self.base_url)
+        };
+
+        let response = self
+            .send_request_with_retry(|| {
+                self.http
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&request_body)
+            })
+            .await?;
+
+        let result: serde_json::Value = response.json().await?;
+        let usage = result.get("usage").and_then(|u| {
+            Some(Usage {
+                prompt_tokens: u.get("prompt_tokens")?.as_u64()? as u32,
+                completion_tokens: u.get("completion_tokens")?.as_u64()? as u32,
+                total_tokens: u.get("total_tokens")?.as_u64()? as u32,
+            })
+        });
+
+        if is_anthropic {
+            if let Some(content_array) = result["content"].as_array() {
+                for content_block in content_array {
+                    if content_block["type"] == "text"
+                        && let Some(text) = content_block["text"].as_str()
+                    {
+                        return Ok(CompletionOutcome {
+                            content: text.to_string(),
+                            usage,
+                        });
+                    }
+                }
+            }
+            Err(ApiError::MissingContent(
+                "Anthropic response content".to_string(),
+            ))
+        } else {
+            if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
+                Ok(CompletionOutcome {
+                    content: content.to_string(),
+                    usage,
+                })
+            } else {
+                Err(ApiError::MissingContent(
+                    "OpenAI message content".to_string(),
+                ))
+            }
+        }
+    } // chat_completion_with_usage
 
     /// Retrieves a list of available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<String>, ApiError> {

@@ -30,6 +30,14 @@ impl Provider for OpenAiProvider {
             body["max_tokens"] = json!(tokens);
         }
 
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = json!(temperature);
+        }
+
+        if request.stream {
+            body["stream_options"] = json!({ "include_usage": true });
+        }
+
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {

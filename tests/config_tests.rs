@@ -94,6 +94,7 @@ show_reasoning = false
         agent: old.agent,
         ui: old.ui,
         mcp_servers: vec![],
+        jockey: Default::default(),
     };
 
     assert_eq!(config.providers[0].key, "old-key");
