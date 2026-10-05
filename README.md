@@ -1,4 +1,4 @@
-# Jev Jockey
+# Seekr
 
 An autonomous, cost-guarded coding agent. You describe a goal; a frontier
 model turns it into a rigid task DAG; a cheap local model grinds through
@@ -29,7 +29,7 @@ make every run reversible.
    │   finish_step → verification command → checkpoint commit
    │            │        fail → rollback (reset --hard + clean -fd)
    │            ▼
-   │   Phase 4: Triage (Jev choice)
+   │   Phase 4: Triage (Jev Jockey)
    │   syntax_fix → retry with stderr
    │   read_context → inject the file the error points at
    │   deadlock / attempts exhausted → escalate to frontier
