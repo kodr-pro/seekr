@@ -33,7 +33,9 @@ pub enum ConfigError {
     #[error("Keyring error: {0}")]
     Keyring(String),
 
-    #[error("Keyring error: {0}. Please run this command to set the key manually:\n\n  {1}")]
+    #[error(
+        "Keyring error: {0}. Please run this command to set the key manually:\n\n  {1}"
+    )]
     KeyringWithCommand(String, String),
 
     #[error("Migration failed: {0}")]

@@ -12,7 +12,8 @@ impl Provider for GeminiProvider {
 
     fn auth_headers(&self, api_key: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         // Gemini's OpenAI-compatible endpoint uses Bearer token
         if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", api_key)) {
             headers.insert(AUTHORIZATION, val);

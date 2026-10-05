@@ -18,10 +18,16 @@ impl CommandOutcome {
     pub fn combined(&self) -> String {
         let mut out = String::new();
         if !self.stdout.is_empty() {
-            out.push_str(&format!("--- stdout ---\n{}\n", truncate(&self.stdout)));
+            out.push_str(&format!(
+                "--- stdout ---\n{}\n",
+                truncate(&self.stdout)
+            ));
         }
         if !self.stderr.is_empty() {
-            out.push_str(&format!("--- stderr ---\n{}\n", truncate(&self.stderr)));
+            out.push_str(&format!(
+                "--- stderr ---\n{}\n",
+                truncate(&self.stderr)
+            ));
         }
         if self.timed_out {
             out.push_str("--- killed: command exceeded its time budget ---\n");
@@ -49,7 +55,10 @@ fn truncate(s: &str) -> &str {
 
 /// Rejects commands matching the configured blocklist (substring match,
 /// matching the interactive agent's policy).
-pub fn blocklist_violation(command: &str, blocklist: &[String]) -> Option<String> {
+pub fn blocklist_violation(
+    command: &str,
+    blocklist: &[String],
+) -> Option<String> {
     blocklist
         .iter()
         .find(|pattern| command.contains(pattern.as_str()))
@@ -62,15 +71,19 @@ pub fn is_readonly_command(command: &str) -> bool {
     let trimmed = command.trim();
     let first = trimmed.split_whitespace().next().unwrap_or("");
     let readonly_binaries = [
-        "pwd", "ls", "cat", "head", "tail", "grep", "find", "wc", "test", "echo", "which",
-        "true", "false", "stat", "file", "du", "sort", "uniq", "diff", "rg",
+        "pwd", "ls", "cat", "head", "tail", "grep", "find", "wc", "test",
+        "echo", "which", "true", "false", "stat", "file", "du", "sort", "uniq",
+        "diff", "rg",
     ];
     if readonly_binaries.contains(&first) {
         return true;
     }
     if first == "git" {
         let second = trimmed.split_whitespace().nth(1).unwrap_or("");
-        return matches!(second, "status" | "diff" | "log" | "show" | "ls-files" | "branch");
+        return matches!(
+            second,
+            "status" | "diff" | "log" | "show" | "ls-files" | "branch"
+        );
     }
     false
 }
@@ -104,19 +117,20 @@ pub async fn run_command(
         .spawn()?;
 
     let timeout = std::time::Duration::from_secs(timeout_secs.max(1));
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(e)) => return Err(e),
-        Err(_) => {
-            return Ok(CommandOutcome {
-                success: false,
-                exit_code: None,
-                timed_out: true,
-                stdout: String::new(),
-                stderr: "command timed out".to_string(),
-            });
-        }
-    };
+    let output =
+        match tokio::time::timeout(timeout, child.wait_with_output()).await {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                return Ok(CommandOutcome {
+                    success: false,
+                    exit_code: None,
+                    timed_out: true,
+                    stdout: String::new(),
+                    stderr: "command timed out".to_string(),
+                });
+            }
+        };
 
     Ok(CommandOutcome {
         success: output.status.success(),
@@ -156,7 +170,10 @@ mod tests {
     #[tokio::test]
     async fn runs_command_in_cwd_and_captures() {
         let tmp = tempfile::tempdir().unwrap();
-        let out = run_command(tmp.path(), "echo hello && echo err >&2", 10, &[]).await.unwrap();
+        let out =
+            run_command(tmp.path(), "echo hello && echo err >&2", 10, &[])
+                .await
+                .unwrap();
         assert!(out.success);
         assert_eq!(out.stdout.trim(), "hello");
         assert_eq!(out.stderr.trim(), "err");
@@ -175,14 +192,9 @@ mod tests {
     #[tokio::test]
     async fn blocklist_denies_destructive_patterns() {
         let blocklist = vec!["rm -rf /".to_string(), "mkfs".to_string()];
-        let out = run_command(
-            Path::new("/"),
-            "rm -rf /",
-            5,
-            &blocklist,
-        )
-        .await
-        .unwrap();
+        let out = run_command(Path::new("/"), "rm -rf /", 5, &blocklist)
+            .await
+            .unwrap();
         assert!(!out.success);
         assert!(out.stderr.contains("blocked by sandbox policy"));
     }

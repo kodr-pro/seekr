@@ -22,7 +22,9 @@ pub enum Question {
     },
 }
 
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize,
+)]
 pub struct NoulCriteria {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub yes: Option<Value>,
@@ -31,7 +33,9 @@ pub struct NoulCriteria {
 }
 
 /// Ordered (sorted-key) question set; the ordering keeps cache keys canonical.
-#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize,
+)]
 pub struct QuestionSet {
     pub questions: BTreeMap<String, Question>,
 }
@@ -61,7 +65,11 @@ pub fn instructions(question: &str, focus: &str) -> Value {
 }
 
 /// P(yes) judgment. `yes`/`no` describe each arm of the criteria.
-pub fn noul(instructions: Value, yes: Option<Value>, no: Option<Value>) -> Question {
+pub fn noul(
+    instructions: Value,
+    yes: Option<Value>,
+    no: Option<Value>,
+) -> Question {
     Question::Noul {
         instructions,
         criteria: Some(NoulCriteria { yes, no }),
@@ -69,7 +77,10 @@ pub fn noul(instructions: Value, yes: Option<Value>, no: Option<Value>) -> Quest
 }
 
 /// Single-label judgment with a full probability distribution.
-pub fn choice(instructions: Value, criteria: BTreeMap<String, Value>) -> Question {
+pub fn choice(
+    instructions: Value,
+    criteria: BTreeMap<String, Value>,
+) -> Question {
     Question::Choice {
         instructions,
         criteria,
@@ -77,9 +88,14 @@ pub fn choice(instructions: Value, criteria: BTreeMap<String, Value>) -> Questio
 }
 
 /// Rubric judgment over ordinal levels (0..=n-1); requires at least 2 levels.
-pub fn score(instructions: Value, levels: Vec<Value>) -> Result<Question, String> {
+pub fn score(
+    instructions: Value,
+    levels: Vec<Value>,
+) -> Result<Question, String> {
     if levels.len() < 2 {
-        return Err("score questions require at least 2 rubric levels".to_string());
+        return Err(
+            "score questions require at least 2 rubric levels".to_string()
+        );
     }
     Ok(Question::Score {
         instructions,
@@ -97,7 +113,10 @@ mod tests {
             .add(
                 "in_scope",
                 noul(
-                    instructions("Is the edit in scope?", "The invariant governs."),
+                    instructions(
+                        "Is the edit in scope?",
+                        "The invariant governs.",
+                    ),
                     Some(json!("It stays within the step.")),
                     Some(json!("It strays beyond the step.")),
                 ),
@@ -123,9 +142,18 @@ mod tests {
 
         let wire = serde_json::to_value(&set).unwrap();
         assert_eq!(wire["questions"]["in_scope"]["type"], "noul");
-        assert_eq!(wire["questions"]["in_scope"]["criteria"]["yes"], "It stays within the step.");
+        assert_eq!(
+            wire["questions"]["in_scope"]["criteria"]["yes"],
+            "It stays within the step."
+        );
         assert_eq!(wire["questions"]["triage"]["type"], "choice");
-        assert_eq!(wire["questions"]["novelty"]["criteria"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            wire["questions"]["novelty"]["criteria"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
 
         let back: QuestionSet = serde_json::from_value(wire).unwrap();
         assert_eq!(back, set);

@@ -195,9 +195,9 @@ impl Default for AppConfig {
 
 impl AppConfig {
     pub fn current_provider(&self) -> &ProviderConfig {
-        self.providers
-            .get(self.active_provider)
-            .unwrap_or_else(|| self.providers.first().expect("Config has no providers"))
+        self.providers.get(self.active_provider).unwrap_or_else(|| {
+            self.providers.first().expect("Config has no providers")
+        })
     }
 
     pub fn current_provider_mut(&mut self) -> &mut ProviderConfig {
@@ -220,8 +220,11 @@ impl AppConfig {
     }
 
     pub fn config_path() -> Result<PathBuf, ConfigError> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| ConfigError::Path("Could not determine config directory".to_string()))?;
+        let config_dir = dirs::config_dir().ok_or_else(|| {
+            ConfigError::Path(
+                "Could not determine config directory".to_string(),
+            )
+        })?;
         Ok(config_dir.join("seekr").join("config.toml"))
     } // config_path
 
@@ -231,51 +234,54 @@ impl AppConfig {
 
     pub fn load() -> Result<Self> {
         let path = Self::config_path().map_err(|e| anyhow::anyhow!(e))?;
-        let contents = std::fs::read_to_string(&path).map_err(ConfigError::Io)?;
+        let contents =
+            std::fs::read_to_string(&path).map_err(ConfigError::Io)?;
 
-        let mut config: AppConfig = if let Ok(config) = toml::from_str(&contents) {
-            config
-        } else {
-            // Try parsing as old format
-            #[derive(Deserialize)]
-            struct OldApiConfig {
-                key: String,
-                model: String,
-                base_url: String,
-            }
-            #[derive(Deserialize)]
-            struct OldAppConfig {
-                api: OldApiConfig,
-                agent: AgentConfig,
-                ui: UiConfig,
-            }
-
-            if let Ok(old) = toml::from_str::<OldAppConfig>(&contents) {
-                let config = AppConfig {
-                    providers: vec![ProviderConfig {
-                        name: "Default".to_string(),
-                        key: old.api.key,
-                        base_url: old.api.base_url,
-                        model: old.api.model,
-                        timeout: None,
-                    }],
-                    active_provider: 0,
-                    agent: old.agent,
-                    ui: old.ui,
-                    mcp_servers: Vec::new(),
-                    jockey: JockeyConfig::default(),
-                };
-
-                // When migrating, keys from old config will be moved to keyring on next save automatically if the user modifies anything. Or we can save immediately:
-                let _ = config.save();
+        let mut config: AppConfig =
+            if let Ok(config) = toml::from_str(&contents) {
                 config
             } else {
-                return Err(ConfigError::MigrationFailed(
-                    "Failed to parse config.toml - format may be corrupted".to_string(),
-                )
-                .into());
-            }
-        };
+                // Try parsing as old format
+                #[derive(Deserialize)]
+                struct OldApiConfig {
+                    key: String,
+                    model: String,
+                    base_url: String,
+                }
+                #[derive(Deserialize)]
+                struct OldAppConfig {
+                    api: OldApiConfig,
+                    agent: AgentConfig,
+                    ui: UiConfig,
+                }
+
+                if let Ok(old) = toml::from_str::<OldAppConfig>(&contents) {
+                    let config = AppConfig {
+                        providers: vec![ProviderConfig {
+                            name: "Default".to_string(),
+                            key: old.api.key,
+                            base_url: old.api.base_url,
+                            model: old.api.model,
+                            timeout: None,
+                        }],
+                        active_provider: 0,
+                        agent: old.agent,
+                        ui: old.ui,
+                        mcp_servers: Vec::new(),
+                        jockey: JockeyConfig::default(),
+                    };
+
+                    // When migrating, keys from old config will be moved to keyring on next save automatically if the user modifies anything. Or we can save immediately:
+                    let _ = config.save();
+                    config
+                } else {
+                    return Err(ConfigError::MigrationFailed(
+                        "Failed to parse config.toml - format may be corrupted"
+                            .to_string(),
+                    )
+                    .into());
+                }
+            };
 
         // Load keys from environment or keyring (legacy fallback)
         for provider in &mut config.providers {
@@ -324,13 +330,17 @@ impl AppConfig {
                     .collect::<String>();
                 let entry_name = format!("seekr_api_key_{}", normalized_name);
 
-                if let Some(password) = keyring::Entry::new("seekr", &entry_name)
-                    .and_then(|entry| entry.get_password())
-                    .ok()
-                    .filter(|p| !p.trim().is_empty())
+                if let Some(password) =
+                    keyring::Entry::new("seekr", &entry_name)
+                        .and_then(|entry| entry.get_password())
+                        .ok()
+                        .filter(|p| !p.trim().is_empty())
                 {
                     provider.key = password;
-                    tracing::debug!("Loaded legacy key from keyring for {}", entry_name);
+                    tracing::debug!(
+                        "Loaded legacy key from keyring for {}",
+                        entry_name
+                    );
                 }
             }
         }
@@ -344,7 +354,8 @@ impl AppConfig {
             std::fs::create_dir_all(parent).map_err(ConfigError::Io)?;
         }
 
-        let contents = toml::to_string_pretty(self).map_err(ConfigError::Serialization)?;
+        let contents =
+            toml::to_string_pretty(self).map_err(ConfigError::Serialization)?;
         std::fs::write(&path, contents).map_err(ConfigError::Io)?;
 
         // Set file permissions to 600 (read/write by owner only) on Unix-like systems
@@ -370,7 +381,8 @@ impl AppConfig {
             // Anthropic official API
             "https://api.anthropic.com/v1".to_string()
         } else if model.contains("gemini") {
-            "https://generativelanguage.googleapis.com/v1beta/openai/".to_string()
+            "https://generativelanguage.googleapis.com/v1beta/openai/"
+                .to_string()
         } else if model.contains("nvidia/") {
             // NVIDIA NIM API
             "https://integrate.api.nvidia.com/v1".to_string()

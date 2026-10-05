@@ -36,7 +36,10 @@ fn prompt() -> WorkerPrompt {
     }
 }
 
-fn completion_body(content: &str, tool_calls: serde_json::Value) -> serde_json::Value {
+fn completion_body(
+    content: &str,
+    tool_calls: serde_json::Value,
+) -> serde_json::Value {
     json!({
         "choices": [{"message": {"role": "assistant", "content": content, "tool_calls": tool_calls}}],
         "usage": {"prompt_tokens": 50, "completion_tokens": 10, "total_tokens": 60}
@@ -72,13 +75,15 @@ async fn worker_repairs_invalid_tool_arguments_once() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(completion_body(
-            "",
-            json!([{"id": "call_1", "type": "function", "function": {
-                "name": "write_file",
-                "arguments": "{path: src/x.rs, content: broken"  // invalid JSON
-            }}]),
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            completion_body(
+                "",
+                json!([{"id": "call_1", "type": "function", "function": {
+                    "name": "write_file",
+                    "arguments": "{path: src/x.rs, content: broken"  // invalid JSON
+                }}]),
+            ),
+        ))
         .up_to_n_times(1)
         .mount(&server)
         .await;
@@ -104,13 +109,15 @@ async fn worker_rejects_unknown_tool() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(completion_body(
-            "",
-            json!([{"id": "call_1", "type": "function", "function": {
-                "name": "delete_everything",
-                "arguments": "{}"
-            }}]),
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            completion_body(
+                "",
+                json!([{"id": "call_1", "type": "function", "function": {
+                    "name": "delete_everything",
+                    "arguments": "{}"
+                }}]),
+            ),
+        ))
         .mount(&server)
         .await;
 
@@ -123,10 +130,9 @@ async fn worker_errors_when_no_tool_call() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(completion_body(
-            "I would rather explain than act.",
-            json!([]),
-        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            completion_body("I would rather explain than act.", json!([])),
+        ))
         .mount(&server)
         .await;
 
@@ -156,7 +162,8 @@ async fn live_worker_against_local_model() {
     let prompt = WorkerPrompt {
         goal: "Verify the workspace tooling".into(),
         step_id: "probe".into(),
-        step_description: "List the files in the repository root using the read tool".into(),
+        step_description:
+            "List the files in the repository root using the read tool".into(),
         invariants: vec!["one read_file call is proposed".into()],
         allowed_paths: vec!["src/".into()],
         attempt: 1,

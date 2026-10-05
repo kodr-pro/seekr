@@ -37,7 +37,11 @@ impl CostLedger {
         self.add_jev_usage(result.cached, &result.usage);
     }
 
-    pub fn add_jev_usage(&mut self, cached: bool, usage: &crate::jev::client::JevUsage) {
+    pub fn add_jev_usage(
+        &mut self,
+        cached: bool,
+        usage: &crate::jev::client::JevUsage,
+    ) {
         if cached {
             self.jev_cache_hits += 1;
         } else {
@@ -221,7 +225,8 @@ mod tests {
             step_id: "s1".into(),
             attempt: 1,
         });
-        let content = std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        let content =
+            std::fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
         assert_eq!(content.lines().count(), 2);
         assert!(content.contains("run_started"));
     }

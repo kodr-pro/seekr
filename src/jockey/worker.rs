@@ -85,7 +85,12 @@ impl Worker {
     }
 
     pub fn tool_definitions() -> Vec<ToolDefinition> {
-        fn def(name: &str, description: &str, props: Value, required: &[&str]) -> ToolDefinition {
+        fn def(
+            name: &str,
+            description: &str,
+            props: Value,
+            required: &[&str],
+        ) -> ToolDefinition {
             ToolDefinition {
                 tool_type: "function".to_string(),
                 function: crate::api::types::FunctionDefinition {
@@ -142,7 +147,10 @@ impl Worker {
 
     /// One bounded-context proposal. Returns parsed actions; performs at
     /// most one repair round when the model emits invalid tool arguments.
-    pub async fn propose(&self, prompt: &WorkerPrompt) -> Result<WorkerTurn, WorkerError> {
+    pub async fn propose(
+        &self,
+        prompt: &WorkerPrompt,
+    ) -> Result<WorkerTurn, WorkerError> {
         let messages = build_messages(prompt, None);
         let turn = self.complete(&messages).await?;
         match self.parse_actions(turn) {
@@ -186,10 +194,12 @@ impl Worker {
             let args: Value = if call.function.arguments.trim().is_empty() {
                 json!({})
             } else {
-                serde_json::from_str(&call.function.arguments).map_err(|e| WorkerError::NoAction(format!(
-                    "tool '{name}' arguments are not valid JSON ({e}): {}",
-                    truncate(&call.function.arguments)
-                )))?
+                serde_json::from_str(&call.function.arguments).map_err(|e| {
+                    WorkerError::NoAction(format!(
+                        "tool '{name}' arguments are not valid JSON ({e}): {}",
+                        truncate(&call.function.arguments)
+                    ))
+                })?
             };
             actions.push(WorkerAction {
                 id: call.id.clone(),
@@ -258,7 +268,9 @@ Hard rules:\n\
     if prompt.allowed_paths.is_empty() {
         user.push_str("\nALLOWED PATHS: none — this step is read-only; writing is denied.\n");
     } else {
-        user.push_str("\nALLOWED PATHS (writes permitted only beneath these):\n");
+        user.push_str(
+            "\nALLOWED PATHS (writes permitted only beneath these):\n",
+        );
         for p in &prompt.allowed_paths {
             user.push_str(&format!("- {p}\n"));
         }
@@ -286,7 +298,10 @@ mod tests {
     fn tool_definitions_are_wellformed() {
         let defs = Worker::tool_definitions();
         assert_eq!(defs.len(), 5);
-        assert!(defs.iter().all(|d| d.function.parameters["type"] == "object"));
+        assert!(
+            defs.iter()
+                .all(|d| d.function.parameters["type"] == "object")
+        );
     }
 
     #[test]

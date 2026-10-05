@@ -6,7 +6,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use seekr::api::client::ApiClient;
 use seekr::config::{AppConfig, JockeyConfig, ProviderConfig};
-use seekr::jev::client::{JevConfig, JevClient};
+use seekr::jev::client::{JevClient, JevConfig};
 use seekr::jockey::dag::{DagStep, StepStatus, TaskDag};
 use seekr::jockey::driver::{Governor, RunOutcome};
 use seekr::jockey::worker::Worker;
@@ -20,7 +20,8 @@ async fn init_repo() -> (tempfile::TempDir, std::path::PathBuf) {
     run(&root, &["config", "user.name", "jj"]).await;
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(root.join("src/lib.rs"), "pub fn original() {}\n").unwrap();
-    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+    std::fs::write(root.join("Cargo.toml"), "[package]\nname = \"x\"\n")
+        .unwrap();
     run(&root, &["add", "-A"]).await;
     run(&root, &["commit", "--quiet", "-m", "init"]).await;
     (tmp, root)
@@ -77,7 +78,12 @@ fn tool_call(name: &str, args: serde_json::Value) -> serde_json::Value {
     }])
 }
 
-async fn mount_worker_reply(server: &MockServer, tool: &str, args: serde_json::Value, times: usize) {
+async fn mount_worker_reply(
+    server: &MockServer,
+    tool: &str,
+    args: serde_json::Value,
+    times: usize,
+) {
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -124,7 +130,6 @@ async fn mount_jev_triage(server: &MockServer, verdict: &str) {
         .await;
 }
 
-
 fn one_step_dag(allowed: Vec<&str>, verify: &str) -> TaskDag {
     TaskDag {
         goal: "test goal".into(),
@@ -133,7 +138,10 @@ fn one_step_dag(allowed: Vec<&str>, verify: &str) -> TaskDag {
             description: "make the marker exist".into(),
             depends_on: vec![],
             invariants: vec!["verification passes".into()],
-            allowed_paths: allowed.into_iter().map(std::path::PathBuf::from).collect(),
+            allowed_paths: allowed
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
             verification_command: Some(verify.into()),
             status: StepStatus::Pending,
         }],
@@ -150,7 +158,17 @@ async fn drive(
 ) -> (RunOutcome, Vec<seekr::jockey::JockeyEvent>) {
     let frontier = frontier.map(|c| (c, "mock-model".to_string()));
     let run_id = format!("test-{}", uuid::Uuid::new_v4().simple());
-    let mut governor = Governor::new(config, worker, frontier, jev, sandbox, "test goal".into(), dag, run_id).unwrap();
+    let mut governor = Governor::new(
+        config,
+        worker,
+        frontier,
+        jev,
+        sandbox,
+        "test goal".into(),
+        dag,
+        run_id,
+    )
+    .unwrap();
     let mut rx = governor.take_event_rx();
     let outcome = governor.run_to_completion().await.unwrap();
     let mut events = Vec::new();
@@ -181,7 +199,13 @@ async fn out_of_scope_write_rejected_without_disk_mutation() {
         1,
     )
     .await;
-    mount_worker_reply(&worker_server, "finish_step", json!({"summary": "done"}), 5).await;
+    mount_worker_reply(
+        &worker_server,
+        "finish_step",
+        json!({"summary": "done"}),
+        5,
+    )
+    .await;
     mount_jev_superset(&jev_server, 0.95, "syntax_fix").await;
 
     let (client, model) = api_client(&worker_server, "worker");
@@ -215,7 +239,10 @@ async fn out_of_scope_write_rejected_without_disk_mutation() {
             if reason.contains("outside the step's allowed_paths")
     )));
     let status = run(sandbox.worktree(), &["status", "--porcelain"]).await;
-    assert!(status.trim().is_empty(), "checkpoint must leave a clean tree");
+    assert!(
+        status.trim().is_empty(),
+        "checkpoint must leave a clean tree"
+    );
     sandbox.dispose().await.unwrap();
 }
 
@@ -233,7 +260,13 @@ async fn verification_failure_retries_with_loop_rejection_then_recovers() {
         1,
     )
     .await;
-    mount_worker_reply(&worker_server, "finish_step", json!({"summary": "done"}), 1).await;
+    mount_worker_reply(
+        &worker_server,
+        "finish_step",
+        json!({"summary": "done"}),
+        1,
+    )
+    .await;
     // attempt 2: proposes the IDENTICAL write again -> fingerprint loop reject,
     // then a different action that satisfies verification
     mount_worker_reply(
@@ -250,16 +283,24 @@ async fn verification_failure_retries_with_loop_rejection_then_recovers() {
         1,
     )
     .await;
-    mount_worker_reply(&worker_server, "finish_step", json!({"summary": "fixed"}), 5).await;
+    mount_worker_reply(
+        &worker_server,
+        "finish_step",
+        json!({"summary": "fixed"}),
+        5,
+    )
+    .await;
 
     mount_jev_superset(&jev_server, 0.95, "syntax_fix").await;
 
     let (client, model) = api_client(&worker_server, "worker");
     let worker = Worker::new(client, model, 0.2, 1024, None);
     let sandbox = GitSandbox::create(&root, "e2e-b").await.unwrap();
-    let mut config = AppConfig::default();
-    config.jockey = JockeyConfig {
-        max_attempts_per_step: 3,
+    let config = AppConfig {
+        jockey: JockeyConfig {
+            max_attempts_per_step: 3,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -278,10 +319,12 @@ async fn verification_failure_retries_with_loop_rejection_then_recovers() {
         e,
         seekr::jockey::JockeyEvent::VerificationFailed { .. }
     )));
-    assert!(events.iter().any(|e| matches!(
-        e,
-        seekr::jockey::JockeyEvent::RolledBack { .. }
-    )));
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            seekr::jockey::JockeyEvent::RolledBack { .. }
+        ))
+    );
     assert!(events.iter().any(|e| matches!(
         e,
         seekr::jockey::JockeyEvent::ActionRejected { reason, .. } if reason.contains("loop detected")
@@ -306,7 +349,13 @@ async fn exhausted_attempts_escalate_and_fail_cleanly() {
     let jev_server = MockServer::start().await;
 
     // worker: declares the step done without ever fixing it
-    mount_worker_reply(&worker_server, "finish_step", json!({"summary": "done"}), 100).await;
+    mount_worker_reply(
+        &worker_server,
+        "finish_step",
+        json!({"summary": "done"}),
+        100,
+    )
+    .await;
     mount_jev_triage(&jev_server, "syntax_fix").await;
 
     // frontier: one guidance round that does not help
@@ -325,9 +374,11 @@ async fn exhausted_attempts_escalate_and_fail_cleanly() {
     let worker = Worker::new(client, model, 0.2, 1024, None);
     let (frontier_client, _) = api_client(&frontier_server, "frontier");
     let sandbox = GitSandbox::create(&root, "e2e-c").await.unwrap();
-    let mut config = AppConfig::default();
-    config.jockey = JockeyConfig {
-        max_attempts_per_step: 2,
+    let config = AppConfig {
+        jockey: JockeyConfig {
+            max_attempts_per_step: 2,
+            ..Default::default()
+        },
         ..Default::default()
     };
 
@@ -342,10 +393,11 @@ async fn exhausted_attempts_escalate_and_fail_cleanly() {
     .await;
 
     assert!(matches!(outcome, RunOutcome::Failed(_)));
-    assert!(events.iter().any(|e| matches!(
-        e,
-        seekr::jockey::JockeyEvent::Escalated { .. }
-    )));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, seekr::jockey::JockeyEvent::Escalated { .. }))
+    );
     assert!(events.iter().any(|e| matches!(
         e,
         seekr::jockey::JockeyEvent::FrontierGuidance { .. }
@@ -355,7 +407,10 @@ async fn exhausted_attempts_escalate_and_fail_cleanly() {
         "nothing may persist after a failed run"
     );
     let status = run(sandbox.worktree(), &["status", "--porcelain"]).await;
-    assert!(status.trim().is_empty(), "worktree must be rolled back clean");
+    assert!(
+        status.trim().is_empty(),
+        "worktree must be rolled back clean"
+    );
     sandbox.dispose().await.unwrap();
 }
 

@@ -26,10 +26,16 @@ pub struct PathSandbox {
 }
 
 impl PathSandbox {
-    pub fn new(root: &Path, allowed_paths: &[PathBuf]) -> Result<Self, SandboxError> {
-        let root = root
-            .canonicalize()
-            .map_err(|e| SandboxError::Io(std::io::Error::new(e.kind(), format!("{}: {e}", root.display()))))?;
+    pub fn new(
+        root: &Path,
+        allowed_paths: &[PathBuf],
+    ) -> Result<Self, SandboxError> {
+        let root = root.canonicalize().map_err(|e| {
+            SandboxError::Io(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", root.display()),
+            ))
+        })?;
         if !allowed_paths.iter().all(|p| !p.as_os_str().is_empty()) {
             return Err(SandboxError::Invalid("empty allowlist entry".into()));
         }
@@ -55,7 +61,10 @@ impl PathSandbox {
 
     /// Resolves an untrusted path string for a read: must exist and be a
     /// real path inside the worktree.
-    pub fn resolve_for_read(&self, untrusted: &str) -> Result<PathBuf, SandboxError> {
+    pub fn resolve_for_read(
+        &self,
+        untrusted: &str,
+    ) -> Result<PathBuf, SandboxError> {
         let anchored = Self::anchor(&self.root, Path::new(untrusted.trim()))?;
         let canonical = anchored.canonicalize().map_err(|_| {
             SandboxError::Invalid(format!("path does not exist: {untrusted}"))
@@ -70,7 +79,10 @@ impl PathSandbox {
     /// exist yet, but its deepest existing ancestor (canonicalized) must be
     /// inside the worktree, and the effective target must fall under an
     /// allowed prefix. Fails closed on any resolution doubt.
-    pub fn resolve_for_write(&self, untrusted: &str) -> Result<PathBuf, SandboxError> {
+    pub fn resolve_for_write(
+        &self,
+        untrusted: &str,
+    ) -> Result<PathBuf, SandboxError> {
         if self.is_read_only() {
             return Err(SandboxError::NotAllowed(format!(
                 "step is read-only; write to '{untrusted}' denied"
@@ -79,24 +91,30 @@ impl PathSandbox {
         let anchored = Self::anchor(&self.root, Path::new(untrusted.trim()))?;
 
         let (existing_ancestor, remainder) = split_existing(&anchored)?;
-        let canonical_ancestor = existing_ancestor.canonicalize().map_err(|_| {
-            SandboxError::Invalid(format!("cannot resolve parent of: {untrusted}"))
-        })?;
+        let canonical_ancestor =
+            existing_ancestor.canonicalize().map_err(|_| {
+                SandboxError::Invalid(format!(
+                    "cannot resolve parent of: {untrusted}"
+                ))
+            })?;
         if !canonical_ancestor.starts_with(&self.root) {
             return Err(SandboxError::NotUnderRoot(untrusted.to_string()));
         }
         let effective = canonical_ancestor.join(&remainder);
         let normalized = normalize_no_escape(&effective, &self.root)?;
 
-        if anchored.exists() {
-            if let Ok(canonical_target) = anchored.canonicalize() {
-                if !canonical_target.starts_with(&self.root) {
-                    return Err(SandboxError::NotUnderRoot(untrusted.to_string()));
-                }
-            }
+        if anchored.exists()
+            && let Ok(canonical_target) = anchored.canonicalize()
+            && !canonical_target.starts_with(&self.root)
+        {
+            return Err(SandboxError::NotUnderRoot(untrusted.to_string()));
         }
 
-        if !self.allowed.iter().any(|prefix| normalized.starts_with(prefix)) {
+        if !self
+            .allowed
+            .iter()
+            .any(|prefix| normalized.starts_with(prefix))
+        {
             return Err(SandboxError::NotAllowed(untrusted.to_string()));
         }
         Ok(normalized)
@@ -106,7 +124,9 @@ impl PathSandbox {
         let joined = if untrusted.is_absolute() {
             let normalized = normalize_absolute(untrusted)?;
             if !normalized.starts_with(root) {
-                return Err(SandboxError::NotUnderRoot(untrusted.display().to_string()));
+                return Err(SandboxError::NotUnderRoot(
+                    untrusted.display().to_string(),
+                ));
             }
             normalized
         } else {
@@ -118,7 +138,10 @@ impl PathSandbox {
 
 /// Lexically normalizes `..`/`.` without touching the filesystem and
 /// rejects any climb above `root`.
-fn normalize_no_escape(path: &Path, root: &Path) -> Result<PathBuf, SandboxError> {
+fn normalize_no_escape(
+    path: &Path,
+    root: &Path,
+) -> Result<PathBuf, SandboxError> {
     let mut stack: Vec<Component> = Vec::new();
     for component in path.components() {
         match component {
@@ -128,7 +151,9 @@ fn normalize_no_escape(path: &Path, root: &Path) -> Result<PathBuf, SandboxError
                     stack.pop();
                 }
                 _ => {
-                    return Err(SandboxError::NotUnderRoot(path.display().to_string()));
+                    return Err(SandboxError::NotUnderRoot(
+                        path.display().to_string(),
+                    ));
                 }
             },
             other => stack.push(other),
@@ -151,7 +176,11 @@ fn normalize_absolute(path: &Path) -> Result<PathBuf, SandboxError> {
                 Some(Component::Normal(_)) => {
                     stack.pop();
                 }
-                _ => return Err(SandboxError::NotUnderRoot(path.display().to_string())),
+                _ => {
+                    return Err(SandboxError::NotUnderRoot(
+                        path.display().to_string(),
+                    ));
+                }
             },
             other => stack.push(other),
         }
@@ -170,7 +199,9 @@ fn split_existing(path: &Path) -> Result<(PathBuf, PathBuf), SandboxError> {
         }
         match current.file_name() {
             Some(name) => remainder.push(name.to_os_string()),
-            None => return Err(SandboxError::Invalid(path.display().to_string())),
+            None => {
+                return Err(SandboxError::Invalid(path.display().to_string()));
+            }
         }
         if !current.pop() {
             let rem: PathBuf = remainder.iter().rev().collect();
@@ -297,14 +328,10 @@ mod tests {
         let root = tmp.path().canonicalize().unwrap();
         std::fs::create_dir_all(root.join("src")).unwrap();
         let sb = PathSandbox::new(&root, &[PathBuf::from("src")]).unwrap();
-        assert!(matches!(
-            sb.resolve_for_write("./src/ok.rs"),
-            Ok(_)
-        ));
+        assert!(sb.resolve_for_write("./src/ok.rs").is_ok());
         assert!(matches!(
             sb.resolve_for_write("src/../Cargo.toml"),
             Err(SandboxError::NotAllowed(_))
         ));
     }
 }
-

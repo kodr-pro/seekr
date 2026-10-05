@@ -54,7 +54,10 @@ fn wire_body() -> Value {
     })
 }
 
-fn client_for(server: &MockServer, cache: Option<std::path::PathBuf>) -> JevClient {
+fn client_for(
+    server: &MockServer,
+    cache: Option<std::path::PathBuf>,
+) -> JevClient {
     let cfg = JevConfig {
         base_url: server.uri(),
         api_key: "ts-test-key".to_string(),
@@ -87,7 +90,10 @@ async fn ask_batches_all_questions_and_parses_answers() {
 
     let client = client_for(&server, None);
     let result = client
-        .ask(&json!({"step": "add tests", "tool": "write_file"}), &sample_set())
+        .ask(
+            &json!({"step": "add tests", "tool": "write_file"}),
+            &sample_set(),
+        )
         .await
         .unwrap();
 
@@ -108,7 +114,9 @@ async fn ask_retries_on_500_then_succeeds() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
         .and(path("/v1/systemone"))
-        .respond_with(ResponseTemplate::new(500).set_body_string("upstream boom"))
+        .respond_with(
+            ResponseTemplate::new(500).set_body_string("upstream boom"),
+        )
         .up_to_n_times(2)
         .mount(&server)
         .await;
@@ -136,7 +144,9 @@ async fn ask_fails_closed_on_4xx() {
 
     let client = client_for(&server, None);
     let err = client.ask(&json!({}), &sample_set()).await.unwrap_err();
-    assert!(matches!(err, JevError::HttpStatus(code, _) if code.as_u16() == 401));
+    assert!(
+        matches!(err, JevError::HttpStatus(code, _) if code.as_u16() == 401)
+    );
 }
 
 #[tokio::test]
@@ -185,12 +195,22 @@ async fn ask_rejects_answer_count_mismatch() {
 #[ignore = "live: requires real TYPESAFE_API_KEY and network egress"]
 async fn live_smoke_against_typesafe() {
     let client = JevClient::from_env();
-    assert!(client.unavailable().is_none(), "TYPESAFE_API_KEY must be set");
+    assert!(
+        client.unavailable().is_none(),
+        "TYPESAFE_API_KEY must be set"
+    );
     let set = QuestionSet::new().add(
         "smoke",
-        noul(instructions("Is 2+2 equal to 4?", "Arithmetic."), None, None),
+        noul(
+            instructions("Is 2+2 equal to 4?", "Arithmetic."),
+            None,
+            None,
+        ),
     );
-    let result = client.ask(&json!({"probe": "seekr smoke test"}), &set).await.unwrap();
+    let result = client
+        .ask(&json!({"probe": "seekr smoke test"}), &set)
+        .await
+        .unwrap();
     let p = result.answers["smoke"].as_noul().unwrap();
     assert!(p > 0.5, "expected high P(yes), got {p}");
     println!(

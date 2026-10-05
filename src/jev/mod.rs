@@ -1,8 +1,10 @@
 pub mod client;
 pub mod questions;
 
-pub use client::{JevClient, JevConfig, JevError, JevResult, JevUsage, UnavailableReason};
-pub use questions::{instructions, choice, noul, score, Question, QuestionSet};
+pub use client::{
+    JevClient, JevConfig, JevError, JevResult, JevUsage, UnavailableReason,
+};
+pub use questions::{Question, QuestionSet, choice, instructions, noul, score};
 
 use std::collections::BTreeMap;
 
@@ -60,9 +62,7 @@ impl JevValue {
     /// e.g. `"0" -> 0.83`. Keys are validated to be unsigned integers.
     pub fn score_probabilities(&self) -> Option<&BTreeMap<String, f64>> {
         match self {
-            JevValue::Score {
-                probabilities, ..
-            } => Some(probabilities),
+            JevValue::Score { probabilities, .. } => Some(probabilities),
             _ => None,
         }
     }
@@ -73,7 +73,9 @@ impl JevValue {
         match self {
             JevValue::Noul { noul } => {
                 if !ok(*noul) {
-                    return Err(format!("noul probability out of range: {noul}"));
+                    return Err(format!(
+                        "noul probability out of range: {noul}"
+                    ));
                 }
             }
             JevValue::Choice {
@@ -82,16 +84,23 @@ impl JevValue {
                 probabilities,
             } => {
                 if !ok(*confidence) {
-                    return Err(format!("choice '{choice}' confidence out of range: {confidence}"));
+                    return Err(format!(
+                        "choice '{choice}' confidence out of range: {confidence}"
+                    ));
                 }
                 if probabilities.is_empty() {
-                    return Err(format!("choice '{choice}' has empty probabilities"));
+                    return Err(format!(
+                        "choice '{choice}' has empty probabilities"
+                    ));
                 }
                 for (label, p) in probabilities.iter() {
                     if !ok(*p) {
-                        return Err(format!("choice '{choice}' probability '{label}' out of range: {p}"));
+                        return Err(format!(
+                            "choice '{choice}' probability '{label}' out of range: {p}"
+                        ));
                     }
-                }            }
+                }
+            }
             JevValue::Score {
                 score,
                 confidence,
@@ -101,14 +110,20 @@ impl JevValue {
                     return Err(format!("score out of range: {score}"));
                 }
                 if !ok(*confidence) {
-                    return Err(format!("score confidence out of range: {confidence}"));
+                    return Err(format!(
+                        "score confidence out of range: {confidence}"
+                    ));
                 }
                 for (level, p) in probabilities.iter() {
                     if level.parse::<u8>().is_err() {
-                        return Err(format!("score level key '{level}' is not an integer"));
+                        return Err(format!(
+                            "score level key '{level}' is not an integer"
+                        ));
                     }
                     if !ok(*p) {
-                        return Err(format!("score level {level} probability out of range: {p}"));
+                        return Err(format!(
+                            "score level {level} probability out of range: {p}"
+                        ));
                     }
                 }
             }

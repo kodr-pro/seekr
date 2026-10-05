@@ -7,8 +7,8 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use super::questions::QuestionSet;
 use super::JevValue;
+use super::questions::QuestionSet;
 
 const DEFAULT_BASE_URL: &str = "https://api.typesafe.ai";
 const DEFAULT_MODEL: &str = "jev-1.13.0";
@@ -86,15 +86,15 @@ impl JevConfig {
         if let Ok(key) = std::env::var("TYPESAFE_API_KEY") {
             cfg.api_key = key.trim().to_string();
         }
-        if let Ok(url) = std::env::var("TYPESAFE_BASE_URL") {
-            if !url.trim().is_empty() {
-                cfg.base_url = url.trim().trim_end_matches('/').to_string();
-            }
+        if let Ok(url) = std::env::var("TYPESAFE_BASE_URL")
+            && !url.trim().is_empty()
+        {
+            cfg.base_url = url.trim().trim_end_matches('/').to_string();
         }
-        if let Ok(model) = std::env::var("JEV_MODEL") {
-            if !model.trim().is_empty() {
-                cfg.model = model.trim().to_string();
-            }
+        if let Ok(model) = std::env::var("JEV_MODEL")
+            && !model.trim().is_empty()
+        {
+            cfg.model = model.trim().to_string();
         }
         if let Ok(egress) = std::env::var("JEV_EGRESS") {
             cfg.egress_enabled = matches!(
@@ -184,18 +184,21 @@ impl JevClient {
     }
 
     fn cache_store(&self, key: &str, result: &JevResult) {
-        if let Some(dir) = self.config.cache_dir.as_ref() {
-            if std::fs::create_dir_all(dir).is_ok() {
-                if let Ok(body) = serde_json::to_string(result) {
-                    let _ = std::fs::write(dir.join(format!("{key}.json")), body);
-                }
-            }
+        if let Some(dir) = self.config.cache_dir.as_ref()
+            && std::fs::create_dir_all(dir).is_ok()
+            && let Ok(body) = serde_json::to_string(result)
+        {
+            let _ = std::fs::write(dir.join(format!("{key}.json")), body);
         }
     }
 
     /// Asks the full question set in a single batched call. Cache-first:
     /// identical (state, questions, model) never re-bills.
-    pub async fn ask(&self, state: &Value, questions: &QuestionSet) -> Result<JevResult, JevError> {
+    pub async fn ask(
+        &self,
+        state: &Value,
+        questions: &QuestionSet,
+    ) -> Result<JevResult, JevError> {
         if questions.is_empty() {
             return Err(JevError::InvalidResponse(
                 "question set must not be empty".to_string(),
@@ -243,7 +246,9 @@ impl JevClient {
         };
         for (name, value) in result.answers.iter_mut() {
             value.sanitize().map_err(|e| {
-                JevError::InvalidResponse(format!("answer '{name}' failed validation: {e}"))
+                JevError::InvalidResponse(format!(
+                    "answer '{name}' failed validation: {e}"
+                ))
             })?;
         }
         if let Some(missing) = questions
@@ -260,7 +265,11 @@ impl JevClient {
         Ok(result)
     }
 
-    async fn send_with_retry(&self, url: &str, body: &Value) -> Result<reqwest::Response, JevError> {
+    async fn send_with_retry(
+        &self,
+        url: &str,
+        body: &Value,
+    ) -> Result<reqwest::Response, JevError> {
         let mut last_err = None;
         for attempt in 0..=self.config.max_retries {
             let result = self
@@ -296,14 +305,16 @@ impl JevClient {
                                     .map(Duration::from_secs)
                             })
                             .map(|d| d.min(MAX_RETRY_AFTER));
-                        let error_body = response.text().await.unwrap_or_default();
+                        let error_body =
+                            response.text().await.unwrap_or_default();
                         last_err =
                             Some(JevError::HttpStatus(status, error_body));
                         if attempt == self.config.max_retries {
                             break;
                         }
                         let base = self.backoff_delay(attempt);
-                        let delay = retry_after.unwrap_or(base).min(MAX_RETRY_AFTER);
+                        let delay =
+                            retry_after.unwrap_or(base).min(MAX_RETRY_AFTER);
                         tokio::time::sleep(delay).await;
                         continue;
                     }
@@ -319,11 +330,15 @@ impl JevClient {
             }
             tokio::time::sleep(self.backoff_delay(attempt)).await;
         }
-        Err(last_err.unwrap_or_else(|| JevError::InvalidResponse("retry loop exhausted".into())))
+        Err(last_err.unwrap_or_else(|| {
+            JevError::InvalidResponse("retry loop exhausted".into())
+        }))
     }
 
     fn backoff_delay(&self, attempt: u32) -> Duration {
-        let base_ms = 500u64.saturating_mul(2u64.saturating_pow(attempt)).min(5000);
+        let base_ms = 500u64
+            .saturating_mul(2u64.saturating_pow(attempt))
+            .min(5000);
         let jitter = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.subsec_nanos() % 250)
@@ -394,7 +409,7 @@ mod tests {
     #[test]
     fn unavailable_is_fail_closed() {
         let mut cfg = JevConfig::default();
-        assert_eq!(cfg.egress_enabled, true);
+        assert!(cfg.egress_enabled);
         cfg.egress_enabled = false;
         let client = JevClient::new(cfg);
         assert_eq!(client.unavailable(), Some(UnavailableReason::EgressOff));
@@ -406,26 +421,33 @@ mod tests {
 
     #[tokio::test]
     async fn ask_rejects_empty_question_set_and_unavailable() {
-        let mut cfg = JevConfig::default();
-        cfg.api_key = "ts-test".to_string();
-        let client = JevClient::new(cfg);
+        let client = JevClient::new(JevConfig {
+            api_key: "ts-test".to_string(),
+            ..Default::default()
+        });
         let err = client
             .ask(&json!({}), &QuestionSet::new())
             .await
             .unwrap_err();
         assert!(matches!(err, JevError::InvalidResponse(_)));
 
-        let mut cfg = JevConfig::default();
-        cfg.api_key = "ts-test".to_string();
-        cfg.egress_enabled = false;
-        let client = JevClient::new(cfg);
+        let client = JevClient::new(JevConfig {
+            api_key: "ts-test".to_string(),
+            egress_enabled: false,
+            ..Default::default()
+        });
         let err = client.ask(&json!({}), &sample_set()).await.unwrap_err();
         assert!(matches!(err, JevError::EgressOff));
     }
 
     #[test]
     fn egress_env_is_fail_closed() {
-        let vars = ["JEV_EGRESS", "TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "JEV_MODEL"];
+        let vars = [
+            "JEV_EGRESS",
+            "TYPESAFE_API_KEY",
+            "TYPESAFE_BASE_URL",
+            "JEV_MODEL",
+        ];
         let saved: Vec<(String, Result<String, std::env::VarError>)> = vars
             .iter()
             .map(|v| (v.to_string(), std::env::var(v)))

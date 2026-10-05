@@ -1,6 +1,6 @@
+use seekr::jev::client::JevClient;
+use seekr::jev::{QuestionSet, instructions, noul};
 use serde_json::json;
-use seekr::jev::client::{JevConfig, JevClient};
-use seekr::jev::{instructions, noul, QuestionSet};
 
 #[tokio::main]
 async fn main() {
@@ -48,8 +48,11 @@ async fn main() {
         Err(e) => println!("scope_only  error: {e}"),
     }
     match client.ask(&state, &batched).await {
-        Ok(r) => println!("batched     = scope {:?} steering {:?}",
-            r.answers["scope"].as_noul(), r.answers["steering"].as_noul()),
+        Ok(r) => println!(
+            "batched     = scope {:?} steering {:?}",
+            r.answers["scope"].as_noul(),
+            r.answers["steering"].as_noul()
+        ),
         Err(e) => println!("batched error: {e}"),
     }
 }

@@ -77,7 +77,17 @@ async fn main() -> Result<()> {
                 allow_degraded,
             }) = cli.command
             {
-                run_command(goal, plan, repo, headless, answers, auto, allow_degraded, config).await
+                run_command(
+                    goal,
+                    plan,
+                    repo,
+                    headless,
+                    answers,
+                    auto,
+                    allow_degraded,
+                    config,
+                )
+                .await
             } else {
                 seekr::ui::jockey::run_tui_new(config).await
             }
@@ -105,7 +115,8 @@ async fn main() -> Result<()> {
                 None => std::env::current_dir()?,
             };
             let roles = cli::resolve_roles(&config)?;
-            let dag = cli::plan_interactive(&roles, &goal, &repo, &[], auto, 2).await?;
+            let dag = cli::plan_interactive(&roles, &goal, &repo, &[], auto, 2)
+                .await?;
             println!("{}", serde_json::to_string_pretty(&dag)?);
             Ok(())
         }
@@ -141,9 +152,15 @@ async fn run_command(
         (Some(goal), None) => {
             let parsed: Vec<(String, String)> = answers
                 .iter()
-                .filter_map(|a| a.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+                .filter_map(|a| {
+                    a.split_once('=').map(|(k, v)| {
+                        (k.trim().to_string(), v.trim().to_string())
+                    })
+                })
                 .collect();
-            let dag = cli::plan_interactive(&roles, &goal, &repo, &parsed, auto, 2).await?;
+            let dag =
+                cli::plan_interactive(&roles, &goal, &repo, &parsed, auto, 2)
+                    .await?;
             (goal, dag)
         }
         (None, None) => anyhow::bail!("provide --goal or --plan"),
@@ -153,7 +170,8 @@ async fn run_command(
         && std::io::stdin().is_terminal()
         && std::io::stdout().is_terminal();
     if interactive {
-        seekr::ui::jockey::run_tui_with_dag(config, roles, goal, dag, repo).await
+        seekr::ui::jockey::run_tui_with_dag(config, roles, goal, dag, repo)
+            .await
     } else {
         let run_id = cli::new_run_id();
         cli::run_headless(&config, &roles, &goal, dag, &repo, run_id).await?;
@@ -163,7 +181,10 @@ async fn run_command(
 
 async fn resume_headless(state: RunState, config: AppConfig) -> Result<()> {
     let roles = cli::resolve_roles(&config)?;
-    let sandbox = seekr::sandbox::git::GitSandbox::attach(&state.repo_root, &state.run_id)?;
+    let sandbox = seekr::sandbox::git::GitSandbox::attach(
+        &state.repo_root,
+        &state.run_id,
+    )?;
     let worker = seekr::jockey::worker::Worker::new(
         roles.worker.0.clone(),
         roles.worker.1.clone(),

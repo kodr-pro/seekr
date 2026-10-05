@@ -3,15 +3,18 @@ use std::io::stdout;
 
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+    enable_raw_mode,
 };
 use crossterm::{cursor, execute};
 use futures::StreamExt;
+use ratatui::Terminal;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap};
-use ratatui::Terminal;
+use ratatui::widgets::{
+    Block, Borders, List, ListItem, ListState, Paragraph, Wrap,
+};
 use tokio::sync::mpsc;
 
 use crate::config::AppConfig;
@@ -100,7 +103,11 @@ pub async fn run_tui_with_dag(
 }
 
 impl JockeyApp {
-    fn new(config: AppConfig, roles: Option<Roles>, repo: std::path::PathBuf) -> Self {
+    fn new(
+        config: AppConfig,
+        roles: Option<Roles>,
+        repo: std::path::PathBuf,
+    ) -> Self {
         Self {
             mode: Mode::Intake,
             config,
@@ -154,7 +161,9 @@ impl JockeyApp {
     fn start_planning(&mut self, tx: mpsc::UnboundedSender<UiMsg>) {
         let Some(roles) = self.roles.clone() else {
             self.mode = Mode::Done;
-            self.status = "no frontier provider configured; set [jj] frontier_provider".into();
+            self.status =
+                "no frontier provider configured; set [jj] frontier_provider"
+                    .into();
             return;
         };
         self.mode = Mode::Planning;
@@ -163,8 +172,12 @@ impl JockeyApp {
         let repo = self.repo.clone();
         let answers = self.answers.clone();
         tokio::spawn(async move {
-            let Some((frontier_client, frontier_model)) = roles.frontier.clone() else {
-                let _ = tx.send(UiMsg::PlanError("no frontier provider configured".into()));
+            let Some((frontier_client, frontier_model)) =
+                roles.frontier.clone()
+            else {
+                let _ = tx.send(UiMsg::PlanError(
+                    "no frontier provider configured".into(),
+                ));
                 return;
             };
             let planner = crate::jockey::planner::FrontierPlanner::new(
@@ -179,7 +192,9 @@ impl JockeyApp {
                     crate::jockey::planner::PlanOutcome::Ready(dag) => {
                         let _ = tx.send(UiMsg::Planned(dag));
                     }
-                    crate::jockey::planner::PlanOutcome::NeedsClarification(qs) => {
+                    crate::jockey::planner::PlanOutcome::NeedsClarification(
+                        qs,
+                    ) => {
                         let _ = tx.send(UiMsg::NeedsClarification(qs));
                     }
                 },
@@ -200,10 +215,11 @@ impl JockeyApp {
         self.status = "grinding…".into();
         tokio::spawn(async move {
             let run_id = crate::jockey::cli::new_run_id();
-            let _ = tx.send(UiMsg::RunEvent(Box::new(JockeyEvent::RunStarted {
-                run_id: run_id.clone(),
-                goal: goal.clone(),
-            })));
+            let _ =
+                tx.send(UiMsg::RunEvent(Box::new(JockeyEvent::RunStarted {
+                    run_id: run_id.clone(),
+                    goal: goal.clone(),
+                })));
             let sandbox = match GitSandbox::create(&repo, &run_id).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -265,16 +281,26 @@ impl JockeyApp {
         match event {
             RunStarted { run_id, .. } => {
                 self.run_id = Some(run_id.clone());
-                self.push_log(Line::styled(format!("run {run_id} started"), cyan));
+                self.push_log(Line::styled(
+                    format!("run {run_id} started"),
+                    cyan,
+                ));
             }
             PlanReady { .. } => {}
             StepStarted { step_id, attempt } => {
-                self.mark_step(step_id, "running", format!("attempt {attempt}"));
+                self.mark_step(
+                    step_id,
+                    "running",
+                    format!("attempt {attempt}"),
+                );
                 self.telemetry = vec![Line::styled(
                     format!("step {step_id} — attempt {attempt}"),
                     Style::default().add_modifier(Modifier::BOLD),
                 )];
-                self.push_log(Line::styled(format!("▶ {step_id} (attempt {attempt})"), dim));
+                self.push_log(Line::styled(
+                    format!("▶ {step_id} (attempt {attempt})"),
+                    dim,
+                ));
             }
             ActionProposed { tool, brief, .. } => {
                 self.push_log(Line::from(vec![
@@ -282,8 +308,13 @@ impl JockeyApp {
                     Span::raw(format!("{tool}: {brief}")),
                 ]));
             }
-            ActionApproved { tool, scope_p, novelty } => {
-                let mut spans = vec![Span::styled(format!("  ✓ {tool}"), green)];
+            ActionApproved {
+                tool,
+                scope_p,
+                novelty,
+            } => {
+                let mut spans =
+                    vec![Span::styled(format!("  ✓ {tool}"), green)];
                 if let Some(s) = scope_p {
                     spans.push(Span::styled(format!(" scope {s:.2}"), cyan));
                 }
@@ -299,7 +330,8 @@ impl JockeyApp {
                 ]));
             }
             ActionExecuted { ok, brief, .. } => {
-                let (mark, style) = if *ok { ("✔", green) } else { ("✘", red) };
+                let (mark, style) =
+                    if *ok { ("✔", green) } else { ("✘", red) };
                 let mut line = vec![Span::styled(format!("  {mark} "), style)];
                 if !*ok {
                     line.push(Span::styled(first_line(brief), yellow));
@@ -307,7 +339,10 @@ impl JockeyApp {
                 self.push_log(Line::from(line));
             }
             VerificationStarted { command, .. } => {
-                self.push_log(Line::styled(format!("  ⏳ verify: {command}"), dim));
+                self.push_log(Line::styled(
+                    format!("  ⏳ verify: {command}"),
+                    dim,
+                ));
             }
             VerificationPassed { duration_secs, .. } => {
                 self.push_log(Line::styled(
@@ -327,43 +362,70 @@ impl JockeyApp {
                     yellow,
                 ));
             }
-            Triage { verdict, confidence, .. } => {
+            Triage {
+                verdict,
+                confidence,
+                ..
+            } => {
                 self.push_log(Line::styled(
                     format!("  ⚕ triage: {verdict} ({confidence:.2})"),
                     cyan,
                 ));
             }
             Escalated { reason, .. } => {
-                self.push_log(Line::styled(format!("  ↑ escalate: {reason}"), yellow));
+                self.push_log(Line::styled(
+                    format!("  ↑ escalate: {reason}"),
+                    yellow,
+                ));
             }
             FrontierGuidance { brief, .. } => {
-                self.push_log(Line::styled(format!("  ↑ frontier: {brief}"), yellow));
+                self.push_log(Line::styled(
+                    format!("  ↑ frontier: {brief}"),
+                    yellow,
+                ));
             }
             StepCompleted { step_id, commit } => {
                 let brief_commit = short(commit);
                 self.mark_step(step_id, "verified", brief_commit.clone());
-                self.push_log(Line::styled(format!("✓ {step_id} checkpoint {brief_commit}"), green));
+                self.push_log(Line::styled(
+                    format!("✓ {step_id} checkpoint {brief_commit}"),
+                    green,
+                ));
             }
             StepFailed { step_id, reason } => {
                 self.mark_step(step_id, "failed", reason.clone());
-                self.push_log(Line::styled(format!("✗ {step_id} failed: {reason}"), red));
+                self.push_log(Line::styled(
+                    format!("✗ {step_id} failed: {reason}"),
+                    red,
+                ));
             }
             Usage { ledger } => {
                 self.ledger = Some(ledger.clone());
             }
-            RunCompleted { branch, worktree, ledger, .. } => {
+            RunCompleted {
+                branch,
+                worktree,
+                ledger,
+                ..
+            } => {
                 self.branch = Some(branch.clone());
                 self.worktree = Some(worktree.clone());
                 self.ledger = Some(ledger.clone());
                 self.mode = Mode::Done;
                 self.status = "run complete".into();
-                self.push_log(Line::styled(format!("✔ complete — branch {branch}"), green));
+                self.push_log(Line::styled(
+                    format!("✔ complete — branch {branch}"),
+                    green,
+                ));
             }
             RunFailed { reason, ledger } => {
                 self.ledger = Some(ledger.clone());
                 self.mode = Mode::Done;
                 self.status = format!("run failed: {reason}");
-                self.push_log(Line::styled(format!("✗ run failed: {reason}"), red));
+                self.push_log(Line::styled(
+                    format!("✗ run failed: {reason}"),
+                    red,
+                ));
             }
         }
     }
@@ -375,7 +437,11 @@ impl JockeyApp {
         }
     }
 
-    fn handle_key(&mut self, key: KeyEvent, tx: &mpsc::UnboundedSender<UiMsg>) -> bool {
+    fn handle_key(
+        &mut self,
+        key: KeyEvent,
+        tx: &mpsc::UnboundedSender<UiMsg>,
+    ) -> bool {
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && key.code == KeyCode::Char('c')
         {
@@ -401,31 +467,38 @@ impl JockeyApp {
                 KeyCode::Char(c) => self.input.push(c),
                 _ => {}
             },
-            Mode::Clarify => match key.code {
-                KeyCode::Enter => {
-                    let idx = self.clarify_index;
-                    if let Some(q) = self.clarifications.get(idx) {
-                        self.answers.push((q.id.clone(), self.clarify_input.trim().to_string()));
-                        self.clarify_input.clear();
-                        if idx + 1 < self.clarifications.len() {
-                            self.clarify_index += 1;
-                        } else {
-                            self.planner_answers_rounds += 1;
-                            if self.planner_answers_rounds >= 2 {
-                                self.status = "using best judgment with given answers".into();
+            Mode::Clarify => {
+                match key.code {
+                    KeyCode::Enter => {
+                        let idx = self.clarify_index;
+                        if let Some(q) = self.clarifications.get(idx) {
+                            self.answers.push((
+                                q.id.clone(),
+                                self.clarify_input.trim().to_string(),
+                            ));
+                            self.clarify_input.clear();
+                            if idx + 1 < self.clarifications.len() {
+                                self.clarify_index += 1;
+                            } else {
+                                self.planner_answers_rounds += 1;
+                                if self.planner_answers_rounds >= 2 {
+                                    self.status = "using best judgment with given answers".into();
+                                }
+                                self.start_planning(tx.clone());
                             }
-                            self.start_planning(tx.clone());
                         }
                     }
+                    KeyCode::Backspace => {
+                        self.clarify_input.pop();
+                    }
+                    KeyCode::Char(c) => self.clarify_input.push(c),
+                    _ => {}
                 }
-                KeyCode::Backspace => {
-                    self.clarify_input.pop();
-                }
-                KeyCode::Char(c) => self.clarify_input.push(c),
-                _ => {}
-            },
+            }
             Mode::Confirm => match key.code {
-                KeyCode::Char('y') | KeyCode::Enter => self.start_run(tx.clone()),
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    self.start_run(tx.clone())
+                }
                 KeyCode::Char('r') => self.start_planning(tx.clone()),
                 KeyCode::Char('e') => {
                     self.clarify_index = 0;
@@ -461,7 +534,9 @@ impl JockeyApp {
                 }
             },
             Mode::Done => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => return true,
+                KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
+                    return true;
+                }
                 KeyCode::Down | KeyCode::Char('j') => {
                     self.log_scroll = self.log_scroll.saturating_add(1)
                 }
@@ -486,7 +561,8 @@ impl JockeyApp {
             UiMsg::Planned(dag) => {
                 self.set_dag(*dag);
                 self.mode = Mode::Confirm;
-                self.status = "y start · r regenerate · e edit goal · q abort".into();
+                self.status =
+                    "y start · r regenerate · e edit goal · q abort".into();
             }
             UiMsg::PlanError(e) => {
                 self.mode = Mode::Intake;
@@ -508,7 +584,10 @@ fn short(s: &str) -> String {
 }
 
 fn first_line(s: &str) -> String {
-    s.lines().find(|l| !l.trim().is_empty()).unwrap_or("").to_string()
+    s.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .to_string()
 }
 
 async fn run_loop(mut app: JockeyApp) -> anyhow::Result<()> {
@@ -548,11 +627,7 @@ async fn run_loop(mut app: JockeyApp) -> anyhow::Result<()> {
     };
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        cursor::Show
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, cursor::Show)?;
     terminal.show_cursor()?;
     if let Some(worktree) = &app.worktree {
         println!("worktree: {}", worktree.display());
@@ -576,15 +651,25 @@ fn render(f: &mut ratatui::Frame, app: &mut JockeyApp) {
     let area = f.area();
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(3),
+            Constraint::Length(1),
+        ])
         .split(area);
 
     let title = Line::from(vec![
         Span::styled(
             " ⚡ Jev Jockey ",
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!(" seekr {} ", env!("CARGO_PKG_VERSION")), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!(" seekr {} ", env!("CARGO_PKG_VERSION")),
+            Style::default().fg(Color::DarkGray),
+        ),
         Span::styled(
             match app.mode {
                 Mode::Intake => "goal",
@@ -597,7 +682,10 @@ fn render(f: &mut ratatui::Frame, app: &mut JockeyApp) {
             Style::default().fg(Color::Yellow),
         ),
         Span::styled(
-            app.run_id.as_deref().map(|r| format!("  {r}")).unwrap_or_default(),
+            app.run_id
+                .as_deref()
+                .map(|r| format!("  {r}"))
+                .unwrap_or_default(),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -620,7 +708,11 @@ fn render(f: &mut ratatui::Frame, app: &mut JockeyApp) {
 fn render_intake(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(40), Constraint::Min(3), Constraint::Length(3)])
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Min(3),
+            Constraint::Length(3),
+        ])
         .split(area);
     let intro = Paragraph::new(vec![
         Line::from(Span::styled(
@@ -649,17 +741,29 @@ fn render_intake(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
         );
     } else {
         let input = Paragraph::new(format!("{}▏", app.input))
-            .block(Block::default().borders(Borders::ALL).title(" your goal (Enter to plan) "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" your goal (Enter to plan) "),
+            )
             .wrap(Wrap { trim: false });
         f.render_widget(input, chunks[1]);
         f.set_cursor_position((
-            chunks[1].x + 1 + (app.input.chars().count() as u16 % (chunks[1].width.saturating_sub(2))),
+            chunks[1].x
+                + 1
+                + (app.input.chars().count() as u16
+                    % (chunks[1].width.saturating_sub(2))),
             chunks[1].y + 1,
         ));
     }
-    let roles_hint = match (&app.config.jockey.worker_provider, &app.config.jockey.frontier_provider) {
+    let roles_hint = match (
+        &app.config.jockey.worker_provider,
+        &app.config.jockey.frontier_provider,
+    ) {
         (Some(w), Some(fr)) => format!("worker: {w} · frontier: {fr}"),
-        (Some(w), None) => format!("worker: {w} · frontier: NONE (planning needs --plan)"),
+        (Some(w), None) => {
+            format!("worker: {w} · frontier: NONE (planning needs --plan)")
+        }
         _ => "roles unset — configure [jj] in config.toml".to_string(),
     };
     f.render_widget(
@@ -686,10 +790,7 @@ fn render_clarify(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
             Span::styled("   ", Style::default())
         };
         let answered = app.answers.iter().find(|(id, _)| id == &q.id);
-        lines.push(Line::from(vec![
-            marker,
-            Span::raw(q.question.clone()),
-        ]));
+        lines.push(Line::from(vec![marker, Span::raw(q.question.clone())]));
         if let Some((_, a)) = answered {
             lines.push(Line::from(Span::styled(
                 format!("     → {a}"),
@@ -708,8 +809,11 @@ fn render_clarify(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
             .wrap(Wrap { trim: false }),
         chunks[0],
     );
-    let input = Paragraph::new(format!("{}▏", app.clarify_input))
-        .block(Block::default().borders(Borders::ALL).title(" answer (Enter for next) "));
+    let input = Paragraph::new(format!("{}▏", app.clarify_input)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" answer (Enter for next) "),
+    );
     f.render_widget(input, chunks[1]);
     f.set_cursor_position((
         chunks[1].x + 1 + app.clarify_input.chars().count() as u16,
@@ -722,11 +826,9 @@ fn render_confirm(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
     let text = dag.render_summary();
     let lines: Vec<Line> = text.lines().map(Line::from).collect();
     let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" task dag — y start · r regenerate · e edit goal · q abort "),
-        )
+        .block(Block::default().borders(Borders::ALL).title(
+            " task dag — y start · r regenerate · e edit goal · q abort ",
+        ))
         .scroll((app.confirm_scroll, 0))
         .wrap(Wrap { trim: false });
     f.render_widget(paragraph, area);
@@ -750,9 +852,18 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
             };
             ListItem::new(vec![
                 Line::from(vec![
-                    Span::styled(format!("{icon} "), Style::default().fg(color)),
-                    Span::styled(s.id.clone(), Style::default().add_modifier(Modifier::BOLD)),
-                    Span::styled(format!("  {}", s.detail), Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{icon} "),
+                        Style::default().fg(color),
+                    ),
+                    Span::styled(
+                        s.id.clone(),
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!("  {}", s.detail),
+                        Style::default().fg(Color::DarkGray),
+                    ),
                 ]),
                 Line::from(Span::styled(
                     format!("   {}", s.description),
@@ -763,7 +874,8 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
         .collect();
     app.step_list.select(None);
     f.render_stateful_widget(
-        List::new(items).block(Block::default().borders(Borders::ALL).title(" task dag ")),
+        List::new(items)
+            .block(Block::default().borders(Borders::ALL).title(" task dag ")),
         cols[0],
         &mut app.step_list,
     );
@@ -775,7 +887,10 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
 
     let mut telemetry: Vec<Line> = app.telemetry.clone();
     if telemetry.is_empty() {
-        telemetry.push(Line::from(Span::styled("waiting for first step", Style::default().fg(Color::DarkGray))));
+        telemetry.push(Line::from(Span::styled(
+            "waiting for first step",
+            Style::default().fg(Color::DarkGray),
+        )));
     }
     if let Some(l) = &app.ledger {
         telemetry.push(Line::from(String::new()));
@@ -807,10 +922,15 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
     let total = app.log.len();
     let max_scroll = total.saturating_sub(visible_height);
     let scroll = app.log_scroll.min(max_scroll as u16);
-    let shown: Vec<Line> = app.log.iter().skip(scroll as usize).cloned().collect();
+    let shown: Vec<Line> =
+        app.log.iter().skip(scroll as usize).cloned().collect();
     f.render_widget(
         Paragraph::new(shown)
-            .block(Block::default().borders(Borders::ALL).title(" activity (j/k scroll) "))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" activity (j/k scroll) "),
+            )
             .wrap(Wrap { trim: false }),
         right[1],
     );

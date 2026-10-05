@@ -3,7 +3,9 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum StepStatus {
     #[default]
@@ -64,7 +66,8 @@ impl TaskDag {
         if self.steps.is_empty() {
             return Err(DagError::Empty);
         }
-        let ids: BTreeSet<&str> = self.steps.iter().map(|s| s.id.as_str()).collect();
+        let ids: BTreeSet<&str> =
+            self.steps.iter().map(|s| s.id.as_str()).collect();
         if ids.len() != self.steps.len() {
             let mut seen = BTreeSet::new();
             for step in &self.steps {
@@ -81,7 +84,10 @@ impl TaskDag {
             }
             for dep in &step.depends_on {
                 if !ids.contains(dep.as_str()) {
-                    return Err(DagError::UnknownDependency(step.id.clone(), dep.clone()));
+                    return Err(DagError::UnknownDependency(
+                        step.id.clone(),
+                        dep.clone(),
+                    ));
                 }
             }
         }
@@ -98,7 +104,8 @@ impl TaskDag {
             .map(|(i, s)| (s.id.as_str(), i))
             .collect();
         let mut indegree = vec![0usize; self.steps.len()];
-        let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); self.steps.len()];
+        let mut dependents: Vec<Vec<usize>> =
+            vec![Vec::new(); self.steps.len()];
         for (i, step) in self.steps.iter().enumerate() {
             for dep in &step.depends_on {
                 if let Some(&j) = index.get(dep.as_str()) {
@@ -121,7 +128,10 @@ impl TaskDag {
             for &d in &dependents[i] {
                 indegree[d] -= 1;
                 if indegree[d] == 0 {
-                    let pos = queue.iter().position(|x| *x > d).unwrap_or(queue.len());
+                    let pos = queue
+                        .iter()
+                        .position(|x| *x > d)
+                        .unwrap_or(queue.len());
                     queue.insert(pos, d);
                 }
             }
@@ -146,9 +156,9 @@ impl TaskDag {
             .filter(|step| step.status == StepStatus::Pending)
             .filter(|step| {
                 step.depends_on.iter().all(|dep| {
-                    self.steps
-                        .iter()
-                        .any(|s| &s.id == dep && s.status == StepStatus::Completed)
+                    self.steps.iter().any(|s| {
+                        &s.id == dep && s.status == StepStatus::Completed
+                    })
                 })
             })
             .collect()
@@ -166,7 +176,9 @@ impl TaskDag {
     pub fn render_summary(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!("Goal: {}\n", self.goal));
-        let order = self.topological_order().unwrap_or((0..self.steps.len()).collect());
+        let order = self
+            .topological_order()
+            .unwrap_or((0..self.steps.len()).collect());
         for &i in &order {
             let step = &self.steps[i];
             let deps = if step.depends_on.is_empty() {
@@ -174,10 +186,8 @@ impl TaskDag {
             } else {
                 step.depends_on.join(",")
             };
-            let verify = step
-                .verification_command
-                .as_deref()
-                .unwrap_or("(none)");
+            let verify =
+                step.verification_command.as_deref().unwrap_or("(none)");
             out.push_str(&format!(
                 "  [{}] {} (after {}) verify: {}\n    invariant: {}\n",
                 step.id,
@@ -219,7 +229,8 @@ mod tests {
         let d = dag(vec![step("c", &["b"]), step("a", &[]), step("b", &["a"])]);
         assert_eq!(d.validate(), Ok(()));
         let order = d.topological_order().unwrap();
-        let names: Vec<&str> = order.iter().map(|i| d.steps[*i].id.as_str()).collect();
+        let names: Vec<&str> =
+            order.iter().map(|i| d.steps[*i].id.as_str()).collect();
         let pos = |n: &str| names.iter().position(|x| *x == n).unwrap();
         assert!(pos("a") < pos("b") && pos("b") < pos("c"));
     }
@@ -246,7 +257,8 @@ mod tests {
 
     #[test]
     fn ready_steps_respect_completion() {
-        let mut d = dag(vec![step("a", &[]), step("b", &["a"]), step("c", &["b"])]);
+        let mut d =
+            dag(vec![step("a", &[]), step("b", &["a"]), step("c", &["b"])]);
         assert_eq!(d.ready_steps().len(), 1);
         assert_eq!(d.ready_steps()[0].id, "a");
         d.step_mut("a").unwrap().status = StepStatus::Completed;

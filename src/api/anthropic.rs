@@ -12,8 +12,12 @@ impl Provider for AnthropicProvider {
 
     fn auth_headers(&self, api_key: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+        headers
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            "anthropic-version",
+            HeaderValue::from_static("2023-06-01"),
+        );
         headers.insert(
             "anthropic-beta",
             HeaderValue::from_static("messages-2023-12-15"),
@@ -52,8 +56,9 @@ impl Provider for AnthropicProvider {
                 }
                 if let Some(tool_calls) = &msg.tool_calls {
                     for tc in tool_calls {
-                        let input_val: Value = serde_json::from_str(&tc.function.arguments)
-                            .unwrap_or_else(|_| json!({}));
+                        let input_val: Value =
+                            serde_json::from_str(&tc.function.arguments)
+                                .unwrap_or_else(|_| json!({}));
                         content_blocks.push(json!({
                             "type": "tool_use",
                             "id": tc.id,
@@ -78,7 +83,8 @@ impl Provider for AnthropicProvider {
                 let mut merge_with_previous = false;
                 if let Some(last_msg) = anthropic_messages.last_mut()
                     && last_msg["role"] == "user"
-                    && let Some(content_array) = last_msg["content"].as_array_mut()
+                    && let Some(content_array) =
+                        last_msg["content"].as_array_mut()
                 {
                     content_array.push(tool_result_block.clone());
                     merge_with_previous = true;

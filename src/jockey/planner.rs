@@ -81,7 +81,12 @@ pub struct FrontierPlanner {
 }
 
 impl FrontierPlanner {
-    pub fn new(client: ApiClient, model: String, temperature: f64, max_tokens: u32) -> Self {
+    pub fn new(
+        client: ApiClient,
+        model: String,
+        temperature: f64,
+        max_tokens: u32,
+    ) -> Self {
         Self {
             client,
             model,
@@ -96,7 +101,8 @@ impl FrontierPlanner {
         clarifications: &[(String, String)],
         repo_tree: &str,
     ) -> Result<PlanResponse, PlannerError> {
-        let messages = self.build_messages(goal, clarifications, repo_tree, None);
+        let messages =
+            self.build_messages(goal, clarifications, repo_tree, None);
         let outcome = self.complete_and_parse(&messages, goal).await;
         match outcome {
             Ok(response) => Ok(response),
@@ -104,7 +110,12 @@ impl FrontierPlanner {
                 let repair_note = format!(
                     "Your previous reply was rejected: {first}. Reply again with ONLY the JSON object, no markdown fences, no commentary."
                 );
-                let messages = self.build_messages(goal, clarifications, repo_tree, Some(&repair_note));
+                let messages = self.build_messages(
+                    goal,
+                    clarifications,
+                    repo_tree,
+                    Some(&repair_note),
+                );
                 self.complete_and_parse(&messages, goal).await
             }
         }
@@ -134,7 +145,9 @@ Rules:\n\
 - Stay inside the repository. Never plan network-auth changes, secret access, or destructive git operations.\n",
         );
         if !repo_tree.trim().is_empty() {
-            system.push_str(&format!("\nRepository file tree (root-relative):\n{repo_tree}\n"));
+            system.push_str(&format!(
+                "\nRepository file tree (root-relative):\n{repo_tree}\n"
+            ));
         }
         if let Some(note) = repair_note {
             system.push_str(&format!("\nREPAIR: {note}\n"));
@@ -169,9 +182,12 @@ Rules:\n\
             )
             .await?;
         let reply: FrontierReply = parse_json_object(&content)
-            .ok_or_else(|| PlannerError::Parse("no JSON object found in reply".into()))
+            .ok_or_else(|| {
+                PlannerError::Parse("no JSON object found in reply".into())
+            })
             .and_then(|v| {
-                serde_json::from_value(v).map_err(|e| PlannerError::Parse(e.to_string()))
+                serde_json::from_value(v)
+                    .map_err(|e| PlannerError::Parse(e.to_string()))
             })?;
 
         if reply.needs_clarification {
@@ -204,7 +220,11 @@ Rules:\n\
                     description: s.description,
                     depends_on: s.depends_on,
                     invariants: s.invariants,
-                    allowed_paths: s.allowed_paths.into_iter().map(std::path::PathBuf::from).collect(),
+                    allowed_paths: s
+                        .allowed_paths
+                        .into_iter()
+                        .map(std::path::PathBuf::from)
+                        .collect(),
                     verification_command: s.verification_command,
                     status: StepStatus::Pending,
                 })
@@ -234,7 +254,13 @@ pub fn parse_json_object(content: &str) -> Option<serde_json::Value> {
 
 /// Compact repository tree for planner context. Skips VCS/build/vendor dirs.
 pub fn collect_repo_tree(root: &Path, max_entries: usize) -> String {
-    fn walk(dir: &Path, root: &Path, depth: usize, out: &mut Vec<String>, budget: &mut usize) {
+    fn walk(
+        dir: &Path,
+        root: &Path,
+        depth: usize,
+        out: &mut Vec<String>,
+        budget: &mut usize,
+    ) {
         if depth > 6 || *budget == 0 {
             return;
         }
@@ -252,7 +278,12 @@ pub fn collect_repo_tree(root: &Path, max_entries: usize) -> String {
             if name.starts_with('.')
                 || matches!(
                     name.as_ref(),
-                    "target" | "node_modules" | "dist" | "build" | "vendor" | "__pycache__"
+                    "target"
+                        | "node_modules"
+                        | "dist"
+                        | "build"
+                        | "vendor"
+                        | "__pycache__"
                 )
             {
                 continue;

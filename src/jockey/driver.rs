@@ -9,11 +9,13 @@ use crate::api::client::ApiClient;
 use crate::config::AppConfig;
 use crate::jev::JevClient;
 use crate::jockey::dag::{DagStep, StepStatus, TaskDag};
-use crate::jockey::interceptor::{AttemptRecord, InterceptVerdict, Interceptor};
+use crate::jockey::interceptor::{
+    AttemptRecord, InterceptVerdict, Interceptor,
+};
 use crate::jockey::ledger::{CostLedger, EventLog, JockeyEvent};
 use crate::jockey::worker::{
-    Worker, WorkerAction, WorkerPrompt, TOOL_EDIT_FILE, TOOL_FINISH_STEP, TOOL_READ_FILE,
-    TOOL_RUN_COMMAND, TOOL_WRITE_FILE,
+    TOOL_EDIT_FILE, TOOL_FINISH_STEP, TOOL_READ_FILE, TOOL_RUN_COMMAND,
+    TOOL_WRITE_FILE, Worker, WorkerAction, WorkerPrompt,
 };
 use crate::sandbox::git::GitSandbox;
 use crate::sandbox::paths::PathSandbox;
@@ -54,8 +56,9 @@ impl RunState {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let dir = Self::state_dir(&self.run_id)
-            .ok_or_else(|| std::io::Error::other("cannot determine state directory"))?;
+        let dir = Self::state_dir(&self.run_id).ok_or_else(|| {
+            std::io::Error::other("cannot determine state directory")
+        })?;
         std::fs::create_dir_all(&dir)?;
         std::fs::write(
             dir.join("state.json"),
@@ -64,10 +67,12 @@ impl RunState {
     }
 
     pub fn load(run_id: &str) -> std::io::Result<Self> {
-        let dir = Self::state_dir(run_id)
-            .ok_or_else(|| std::io::Error::other("cannot determine state directory"))?;
+        let dir = Self::state_dir(run_id).ok_or_else(|| {
+            std::io::Error::other("cannot determine state directory")
+        })?;
         let raw = std::fs::read_to_string(dir.join("state.json"))?;
-        serde_json::from_str(&raw).map_err(|e| std::io::Error::other(e.to_string()))
+        serde_json::from_str(&raw)
+            .map_err(|e| std::io::Error::other(e.to_string()))
     }
 
     pub fn list_runs() -> Vec<(String, String)> {
@@ -81,13 +86,13 @@ impl RunState {
         let mut runs: Vec<(String, String)> = entries
             .flatten()
             .filter(|e| e.path().is_dir())
-            .filter_map(|e| {
+            .map(|e| {
                 let id = e.file_name().to_string_lossy().to_string();
                 let status = Self::load(&id)
                     .ok()
                     .map(|s| s.status)
                     .unwrap_or_else(|| "unknown".to_string());
-                Some((id, status))
+                (id, status)
             })
             .collect();
         runs.sort();
@@ -130,8 +135,9 @@ impl Governor {
         dag: TaskDag,
         run_id: String,
     ) -> Result<Self, GovernorError> {
-        let state_dir = RunState::state_dir(&run_id)
-            .ok_or_else(|| GovernorError::Failed("cannot determine state directory".into()))?;
+        let state_dir = RunState::state_dir(&run_id).ok_or_else(|| {
+            GovernorError::Failed("cannot determine state directory".into())
+        })?;
         let event_log = EventLog::create(&state_dir)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         let state = RunState {
@@ -172,8 +178,10 @@ impl Governor {
         sandbox: GitSandbox,
         mut state: RunState,
     ) -> Result<Self, GovernorError> {
-        let state_dir = RunState::state_dir(&state.run_id)
-            .ok_or_else(|| GovernorError::Failed("cannot determine state directory".into()))?;
+        let state_dir =
+            RunState::state_dir(&state.run_id).ok_or_else(|| {
+                GovernorError::Failed("cannot determine state directory".into())
+            })?;
         let event_log = EventLog::create(&state_dir)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         state.status = "running".to_string();
@@ -194,7 +202,9 @@ impl Governor {
     }
 
     pub fn take_event_rx(&mut self) -> mpsc::UnboundedReceiver<JockeyEvent> {
-        self.event_rx.take().unwrap_or_else(|| mpsc::unbounded_channel().1)
+        self.event_rx
+            .take()
+            .unwrap_or_else(|| mpsc::unbounded_channel().1)
     }
 
     fn emit(&mut self, event: JockeyEvent) {
@@ -207,7 +217,9 @@ impl Governor {
     }
 
     /// Runs every runnable step to completion or failure.
-    pub async fn run_to_completion(&mut self) -> Result<RunOutcome, GovernorError> {
+    pub async fn run_to_completion(
+        &mut self,
+    ) -> Result<RunOutcome, GovernorError> {
         self.emit(JockeyEvent::RunStarted {
             run_id: self.state.run_id.clone(),
             goal: self.state.goal.clone(),
@@ -243,7 +255,9 @@ impl Governor {
             .dag
             .steps
             .iter()
-            .filter(|s| matches!(s.status, StepStatus::Failed | StepStatus::RolledBack))
+            .filter(|s| {
+                matches!(s.status, StepStatus::Failed | StepStatus::RolledBack)
+            })
             .map(|s| s.id.clone())
             .collect();
         let outcome = if failed.is_empty() {
@@ -269,7 +283,10 @@ impl Governor {
         Ok(outcome)
     }
 
-    async fn run_step(&mut self, step_id: &str) -> Result<StepResult, GovernorError> {
+    async fn run_step(
+        &mut self,
+        step_id: &str,
+    ) -> Result<StepResult, GovernorError> {
         if let Some(step) = self.state.dag.step_mut(step_id) {
             step.status = StepStatus::InProgress;
         }
@@ -283,20 +300,29 @@ impl Governor {
         };
         self.state.save().ok();
         let sandbox = PathSandbox::new(&self.state.worktree, &allowed)
-            .map_err(|e| GovernorError::Failed(format!("path sandbox init failed: {e}")))?;
+            .map_err(|e| {
+                GovernorError::Failed(format!("path sandbox init failed: {e}"))
+            })?;
 
-        let step_timeout = std::time::Duration::from_secs(self.jj.step_timeout_secs.max(60));
-        let result = tokio::time::timeout(step_timeout, self.attempt_loop(step_id, &description, &invariants, &sandbox))
-            .await;
+        let step_timeout =
+            std::time::Duration::from_secs(self.jj.step_timeout_secs.max(60));
+        let result = tokio::time::timeout(
+            step_timeout,
+            self.attempt_loop(step_id, &description, &invariants, &sandbox),
+        )
+        .await;
 
         match result {
             Ok(inner) => {
                 let completed = inner?;
                 if completed {
-                    let commit = self.sandbox.checkpoint(&format!(
-                        "jj: step {step_id} verified [run {}]",
-                        self.state.run_id
-                    )).await?;
+                    let commit = self
+                        .sandbox
+                        .checkpoint(&format!(
+                            "jj: step {step_id} verified [run {}]",
+                            self.state.run_id
+                        ))
+                        .await?;
                     if let Some(step) = self.state.dag.step_mut(step_id) {
                         step.status = StepStatus::Completed;
                     }
@@ -322,7 +348,10 @@ impl Governor {
                 self.state.save().ok();
                 self.emit(JockeyEvent::StepFailed {
                     step_id: step_id.to_string(),
-                    reason: format!("step exceeded {}s wall clock", self.jj.step_timeout_secs),
+                    reason: format!(
+                        "step exceeded {}s wall clock",
+                        self.jj.step_timeout_secs
+                    ),
                 });
                 Ok(StepResult::Failed(step_id.to_string()))
             }
@@ -349,17 +378,27 @@ impl Governor {
                 attempt,
             });
 
-            let mut context: Vec<String> = self.extra_context.remove(step_id).unwrap_or_default();
+            let mut context: Vec<String> =
+                self.extra_context.remove(step_id).unwrap_or_default();
             if let Some(err) = &last_error {
-                context.push(format!("LAST ATTEMPT FAILED verification:\n{err}"));
+                context
+                    .push(format!("LAST ATTEMPT FAILED verification:\n{err}"));
             }
             if let Some(g) = &guidance {
-                context.push(format!("FRONTIER GUIDANCE (authoritative):\n{g}"));
+                context
+                    .push(format!("FRONTIER GUIDANCE (authoritative):\n{g}"));
                 guidance = None;
             }
 
             let (outcome, records) = self
-                .worker_attempt(step_id, description, invariants, sandbox, attempt, &context)
+                .worker_attempt(
+                    step_id,
+                    description,
+                    invariants,
+                    sandbox,
+                    attempt,
+                    &context,
+                )
                 .await;
 
             match outcome {
@@ -367,7 +406,10 @@ impl Governor {
                     return Ok(true);
                 }
                 AttemptOutcome::VerificationFailed(output) => {
-                    self.attempts.entry(step_id.to_string()).or_default().extend(records);
+                    self.attempts
+                        .entry(step_id.to_string())
+                        .or_default()
+                        .extend(records);
                     let to_commit = self.sandbox.current_commit().await?;
                     self.sandbox.rollback().await?;
                     self.emit(JockeyEvent::RolledBack {
@@ -377,17 +419,28 @@ impl Governor {
                     last_error = Some(output);
                     let error_ref = last_error.clone();
 
-                    let verdict = self.triage(step_id, description, invariants, &error_ref).await;
-                    if verdict == TriageVerdict::ReadContext {
-                        if let Some(file_ctx) = self.read_context_for_error(&error_ref) {
-                            self.extra_context
-                                .insert(step_id.to_string(), vec![file_ctx]);
-                        }
+                    let verdict = self
+                        .triage(step_id, description, invariants, &error_ref)
+                        .await;
+                    if verdict == TriageVerdict::ReadContext
+                        && let Some(file_ctx) =
+                            self.read_context_for_error(&error_ref)
+                    {
+                        self.extra_context
+                            .insert(step_id.to_string(), vec![file_ctx]);
                     }
-                    let must_escalate =
-                        verdict == TriageVerdict::Deadlock || attempt >= self.jj.max_attempts_per_step;
+                    let must_escalate = verdict == TriageVerdict::Deadlock
+                        || attempt >= self.jj.max_attempts_per_step;
                     if must_escalate {
-                        match self.escalate(step_id, description, invariants, &error_ref).await? {
+                        match self
+                            .escalate(
+                                step_id,
+                                description,
+                                invariants,
+                                &error_ref,
+                            )
+                            .await?
+                        {
                             EscalationOutcome::PatchVerified => {
                                 return Ok(true);
                             }
@@ -414,7 +467,10 @@ impl Governor {
                     }
                 }
                 AttemptOutcome::NoAction(reason) => {
-                    self.attempts.entry(step_id.to_string()).or_default().extend(records);
+                    self.attempts
+                        .entry(step_id.to_string())
+                        .or_default()
+                        .extend(records);
                     if attempt >= self.jj.max_attempts_per_step {
                         self.emit(JockeyEvent::StepFailed {
                             step_id: step_id.to_string(),
@@ -443,7 +499,8 @@ impl Governor {
         let mut records: Vec<AttemptRecord> = Vec::new();
 
         loop {
-            if actions_done >= MAX_ACTIONS_PER_ATTEMPT || rejections >= MAX_REJECTIONS_PER_ATTEMPT
+            if actions_done >= MAX_ACTIONS_PER_ATTEMPT
+                || rejections >= MAX_REJECTIONS_PER_ATTEMPT
             {
                 return (
                     AttemptOutcome::NoAction(format!(
@@ -484,11 +541,12 @@ impl Governor {
                 ledger: self.state.ledger.clone(),
             });
 
-            let action = turn.actions.into_iter().next().unwrap_or(WorkerAction {
-                id: String::new(),
-                tool: String::new(),
-                args: json!({}),
-            });
+            let action =
+                turn.actions.into_iter().next().unwrap_or(WorkerAction {
+                    id: String::new(),
+                    tool: String::new(),
+                    args: json!({}),
+                });
             let action = relativize_action(action, &self.state.worktree);
 
             if action.tool == TOOL_FINISH_STEP {
@@ -503,7 +561,8 @@ impl Governor {
                 args: Some(action.args.clone()),
             });
 
-            let failed = self.attempts.get(step_id).cloned().unwrap_or_default();
+            let failed =
+                self.attempts.get(step_id).cloned().unwrap_or_default();
             let deterministic = self.deterministic_check(&action, sandbox);
             let step_view = self.step_view(step_id);
             let review = match (
@@ -514,7 +573,9 @@ impl Governor {
                     .and_then(|c| c.as_str())
                     .map(crate::sandbox::exec::is_readonly_command),
             ) {
-                (t, Some(true)) if t == TOOL_RUN_COMMAND && deterministic.is_none() => {
+                (t, Some(true))
+                    if t == TOOL_RUN_COMMAND && deterministic.is_none() =>
+                {
                     crate::jockey::interceptor::Review {
                         verdict: InterceptVerdict::Approved {
                             scope_p: None,
@@ -523,7 +584,11 @@ impl Governor {
                         jev_usage: None,
                     }
                 }
-                _ => self.interceptor.review(&action, &step_view, &failed, deterministic).await,
+                _ => {
+                    self.interceptor
+                        .review(&action, &step_view, &failed, deterministic)
+                        .await
+                }
             };
             if let Some(usage) = &review.jev_usage {
                 self.state.ledger.add_jev_usage(false, usage);
@@ -545,11 +610,14 @@ impl Governor {
                             .args
                             .get("command")
                             .and_then(|c| c.as_str())
-                            .map(|c| !crate::sandbox::exec::is_readonly_command(c))
+                            .map(|c| {
+                                !crate::sandbox::exec::is_readonly_command(c)
+                            })
                             .unwrap_or(true),
                         _ => false,
                     };
-                    let (ok, result) = self.execute_action(&action, sandbox).await;
+                    let (ok, result) =
+                        self.execute_action(&action, sandbox).await;
                     self.emit(JockeyEvent::ActionExecuted {
                         tool: action.tool.clone(),
                         ok,
@@ -606,8 +674,11 @@ impl Governor {
             }
             TOOL_RUN_COMMAND => {
                 let command = action.args.get("command")?.as_str()?;
-                crate::sandbox::exec::blocklist_violation(command, &self.shell_blocklist)
-                    .map(|p| format!("command blocked by policy: matched '{p}'"))
+                crate::sandbox::exec::blocklist_violation(
+                    command,
+                    &self.shell_blocklist,
+                )
+                .map(|p| format!("command blocked by policy: matched '{p}'"))
             }
             _ => None,
         }
@@ -620,14 +691,20 @@ impl Governor {
     ) -> (bool, String) {
         match action.tool.as_str() {
             TOOL_READ_FILE => {
-                let Some(path) = action.args.get("path").and_then(|p| p.as_str()) else {
+                let Some(path) =
+                    action.args.get("path").and_then(|p| p.as_str())
+                else {
                     return (false, "read_file: missing path".to_string());
                 };
                 match sandbox.resolve_for_read(path) {
                     Ok(resolved) => match std::fs::read_to_string(&resolved) {
                         Ok(content) => {
                             let brief = if content.len() > MAX_READ_CHARS {
-                                format!("{}\n... (truncated {} chars)", &content[..MAX_READ_CHARS], content.len())
+                                format!(
+                                    "{}\n... (truncated {} chars)",
+                                    &content[..MAX_READ_CHARS],
+                                    content.len()
+                                )
                             } else {
                                 content
                             };
@@ -643,17 +720,29 @@ impl Governor {
                     action.args.get("path").and_then(|p| p.as_str()),
                     action.args.get("content").and_then(|c| c.as_str()),
                 ) else {
-                    return (false, "write_file: missing path/content".to_string());
+                    return (
+                        false,
+                        "write_file: missing path/content".to_string(),
+                    );
                 };
                 match sandbox.resolve_for_write(path) {
                     Ok(resolved) => {
-                        if let Some(parent) = resolved.parent() {
-                            if std::fs::create_dir_all(parent).is_err() {
-                                return (false, format!("cannot create dirs for {path}"));
-                            }
+                        if let Some(parent) = resolved.parent()
+                            && std::fs::create_dir_all(parent).is_err()
+                        {
+                            return (
+                                false,
+                                format!("cannot create dirs for {path}"),
+                            );
                         }
                         match std::fs::write(&resolved, content) {
-                            Ok(()) => (true, format!("wrote {path} ({} bytes)", content.len())),
+                            Ok(()) => (
+                                true,
+                                format!(
+                                    "wrote {path} ({} bytes)",
+                                    content.len()
+                                ),
+                            ),
                             Err(e) => (false, format!("write failed: {e}")),
                         }
                     }
@@ -666,7 +755,11 @@ impl Governor {
                     action.args.get("old_string").and_then(|p| p.as_str()),
                     action.args.get("new_string").and_then(|p| p.as_str()),
                 ) else {
-                    return (false, "edit_file: missing path/old_string/new_string".to_string());
+                    return (
+                        false,
+                        "edit_file: missing path/old_string/new_string"
+                            .to_string(),
+                    );
                 };
                 match sandbox.resolve_for_write(path) {
                     Ok(resolved) => match std::fs::read_to_string(&resolved) {
@@ -674,13 +767,17 @@ impl Governor {
                             if !content.contains(old) {
                                 (
                                     false,
-                                    format!("edit_file: old_string not found in {path}"),
+                                    format!(
+                                        "edit_file: old_string not found in {path}"
+                                    ),
                                 )
                             } else {
                                 let updated = content.replacen(old, new, 1);
                                 match std::fs::write(&resolved, updated) {
                                     Ok(()) => (true, format!("edited {path}")),
-                                    Err(e) => (false, format!("write failed: {e}")),
+                                    Err(e) => {
+                                        (false, format!("write failed: {e}"))
+                                    }
                                 }
                             }
                         }
@@ -690,7 +787,9 @@ impl Governor {
                 }
             }
             TOOL_RUN_COMMAND => {
-                let Some(command) = action.args.get("command").and_then(|c| c.as_str()) else {
+                let Some(command) =
+                    action.args.get("command").and_then(|c| c.as_str())
+                else {
                     return (false, "run_command: missing command".to_string());
                 };
                 let outcome = run_command(
@@ -700,12 +799,14 @@ impl Governor {
                     &self.shell_blocklist,
                 )
                 .await
-                .unwrap_or_else(|e| crate::sandbox::CommandOutcome {
-                    success: false,
-                    exit_code: None,
-                    timed_out: false,
-                    stdout: String::new(),
-                    stderr: format!("spawn failed: {e}"),
+                .unwrap_or_else(|e| {
+                    crate::sandbox::CommandOutcome {
+                        success: false,
+                        exit_code: None,
+                        timed_out: false,
+                        stdout: String::new(),
+                        stderr: format!("spawn failed: {e}"),
+                    }
                 });
                 (outcome.success, outcome.combined())
             }
@@ -759,7 +860,6 @@ impl Governor {
         }
     }
 
-
     async fn triage(
         &mut self,
         step_id: &str,
@@ -789,19 +889,19 @@ impl Governor {
         match self.interceptor.jev_client().ask(&state, &set).await {
             Ok(result) => {
                 self.state.ledger.add_jev(&result);
-                if let Some(ans) = result.answers.get("triage") {
-                    if let Some((choice, confidence)) = ans.as_choice() {
-                        self.emit(JockeyEvent::Triage {
-                            step_id: step_id.to_string(),
-                            verdict: choice.to_string(),
-                            confidence,
-                        });
-                        return match choice {
-                            "read_context" => TriageVerdict::ReadContext,
-                            "deadlock" => TriageVerdict::Deadlock,
-                            _ => TriageVerdict::SyntaxFix,
-                        };
-                    }
+                if let Some(ans) = result.answers.get("triage")
+                    && let Some((choice, confidence)) = ans.as_choice()
+                {
+                    self.emit(JockeyEvent::Triage {
+                        step_id: step_id.to_string(),
+                        verdict: choice.to_string(),
+                        confidence,
+                    });
+                    return match choice {
+                        "read_context" => TriageVerdict::ReadContext,
+                        "deadlock" => TriageVerdict::Deadlock,
+                        _ => TriageVerdict::SyntaxFix,
+                    };
                 }
                 TriageVerdict::SyntaxFix
             }
@@ -821,28 +921,26 @@ impl Governor {
             let line = line.trim();
             if let Some(idx) = line.find(" --> ") {
                 let rest = &line[idx + 5..];
-                if let Some(file_line) = rest.split_whitespace().next() {
-                    if let Some(file) = file_line.split(':').next() {
-                        if let Some(ctx) = self.try_read_worktree_file(file) {
-                            return Some(ctx);
-                        }
-                    }
+                if let Some(file_line) = rest.split_whitespace().next()
+                    && let Some(file) = file_line.split(':').next()
+                    && let Some(ctx) = self.try_read_worktree_file(file)
+                {
+                    return Some(ctx);
                 }
             }
-            if let Some(file) = line.strip_prefix("file:") {
-                if let Some(file) = file.split(|c| c == ':').next() {
-                    if let Some(ctx) = self.try_read_worktree_file(file) {
-                        return Some(ctx);
-                    }
-                }
+            if let Some(file) = line.strip_prefix("file:")
+                && let Some(file) = file.split(':').next()
+                && let Some(ctx) = self.try_read_worktree_file(file)
+            {
+                return Some(ctx);
             }
             for token in line.split_whitespace() {
-                if token.contains('.') && token.contains(':') {
-                    if let Some(file) = token.split(':').next() {
-                        if let Some(ctx) = self.try_read_worktree_file(file) {
-                            return Some(ctx);
-                        }
-                    }
+                if token.contains('.')
+                    && token.contains(':')
+                    && let Some(file) = token.split(':').next()
+                    && let Some(ctx) = self.try_read_worktree_file(file)
+                {
+                    return Some(ctx);
                 }
             }
         }
@@ -886,7 +984,8 @@ impl Governor {
         }
         self.emit(JockeyEvent::Escalated {
             step_id: step_id.to_string(),
-            reason: truncate_str(error.as_deref().unwrap_or("deadlock"), 300).to_string(),
+            reason: truncate_str(error.as_deref().unwrap_or("deadlock"), 300)
+                .to_string(),
         });
 
         let step = self.step_view(step_id);
@@ -901,16 +1000,20 @@ impl Governor {
                         truncate_str(&content, 8000)
                     ));
                 }
-            } else if full.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&full) {
-                    for entry in entries.flatten().take(2) {
-                        if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                            files_block.push_str(&format!(
-                                "--- {} ---\n{}\n",
-                                entry.path().strip_prefix(&self.state.worktree).unwrap_or(&entry.path()).display(),
-                                truncate_str(&content, 8000)
-                            ));
-                        }
+            } else if full.is_dir()
+                && let Ok(entries) = std::fs::read_dir(&full)
+            {
+                for entry in entries.flatten().take(2) {
+                    if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                        files_block.push_str(&format!(
+                            "--- {} ---\n{}\n",
+                            entry
+                                .path()
+                                .strip_prefix(&self.state.worktree)
+                                .unwrap_or(&entry.path())
+                                .display(),
+                            truncate_str(&content, 8000)
+                        ));
                     }
                 }
             }
@@ -959,7 +1062,10 @@ Never restate the problem; fix or direct. Keep it minimal.\n";
                 if let Some(patch) = extract_diff_fence(&content) {
                     match self.sandbox.apply_patch(&patch).await {
                         Ok(()) => {
-                            if matches!(self.verify(step_id).await, AttemptOutcome::Verified) {
+                            if matches!(
+                                self.verify(step_id).await,
+                                AttemptOutcome::Verified
+                            ) {
                                 return Ok(EscalationOutcome::PatchVerified);
                             }
                             let _ = self.sandbox.rollback().await;
@@ -1026,7 +1132,8 @@ fn relativize_action(mut action: WorkerAction, root: &Path) -> WorkerAction {
         .and_then(|v| v.as_str())
         .and_then(|p| p.strip_prefix(&prefix))
         .map(|s| s.to_string());
-    if let (Some(stripped), Some(obj)) = (relative, action.args.as_object_mut()) {
+    if let (Some(stripped), Some(obj)) = (relative, action.args.as_object_mut())
+    {
         obj.insert("path".to_string(), json!(stripped));
     }
     action

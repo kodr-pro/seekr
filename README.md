@@ -1,124 +1,129 @@
-# seekr: The Asynchronous Agentic System Operator
+# Jev Jockey
 
-<p align="center">
-  <img src="docs/logo.png" alt="seekr Logo">
-</p>
+An autonomous, cost-guarded coding agent. You describe a goal; a frontier
+model turns it into a rigid task DAG; a cheap local model grinds through
+every step; a Jev (TypeSafe AI) interceptor approves each action before it
+touches disk; deterministic verification gates each step; git worktrees
+make every run reversible.
 
-**seekr** is a high-performance, background-first AI Agent Manager designed to transform your terminal into an autonomous system operator. Originally built as a DeepSeek-native client, seekr has evolved into a full-featured agentic platform that runs persistently in the background, executing long-running tasks while you work elsewhere.
-
-seekr brings "Jarvis-style" persistence to Linux via a client-server architecture, featuring a rugged Terminal UI (TUI) and a headless background daemon (`seekrd`) that communicates over a high-speed SSE (Server-Sent Events) interface.
-
-![License](https://img.shields.io/badge/license-Polyform_Prosperity-blue.svg)
-![Rust](https://img.shields.io/badge/rust-2024-orange.svg)
-![DeepSeek](https://img.shields.io/badge/AI-DeepSeek-green.svg)
-![OpenAI-Compatible](https://img.shields.io/badge/AI-Multi--Model-purple.svg)
-
----
-
-## 🚀 The Asynchronous Advantage
-
-Traditional AI agents live and die with your terminal session. **seekr** changes the paradigm:
-
-- **Persistent Daemon Architecture:** Launch the Seekr daemon (`seekr daemon`) to maintain a peristent agentic presence. Close the TUI anytime; your tasks continue to execute in the background.
-- **Client-Server Flow:** The TUI acts as a lightweight window into the agent's mind. Reconnect to active sessions from any terminal at any time.
-- **Automated Lifecycle:** Launch `seekr` normally and the TUI will automatically stand up the background daemon if it isn't already running.
-
----
-
-## Highlights
-
-- **Unlimited Context Window:** Never run out of memory. Seekr automatically summarizes past conversation segments and injects them into the current context as a "sliding window."
-- **Interruptible Agent Loop:** Real-time user steering. Interrupt the agent mid-thought to provide new context or directions.
-- **True Multi-Tool Parallelism:** Execute multiple independent tool calls (reading files, searching web, etc.) concurrently for 5-10x performance gains.
-- **Premium TUI Experience:** Beautiful, icon-based headers and a custom-built, wrapping-aware scrolling engine for a smooth conversation flow.
-- **Dynamic Skills System:** Load and execute custom tools via simple JSON definitions and shell scripts (Python, JS, Bash, etc.).
-
-## Features
-
-- **Terminal UI (TUI):** Built with `ratatui` for a responsive, multi-tabbed interactive experience.
-- **Multi-Model & OpenAI API Support:** Full support for configuring multiple LLM providers (OpenAI, DeepSeek, Local, etc.) via the standard OpenAPI format.
-- **Asynchronous Tooling:**
-  - **Shell:** Execute terminal commands with built-in sandboxing, timeouts, and **background persistence**.
-  - **File Edit:** Sophisticated file manipulation using patches and diffs.
-  - **Web:** Real-time search and scraping.
-  - **Task Management:** Hierarchical goal planning and progress tracking.
-- **Real-time SSE Streaming:** Extremely low-latency synchronization between the background daemon and the interactive UI.
-- **Seekr Doctor:** Built-in diagnostics command to verify system health and API connectivity.
-
----
-
-## Getting Started
-
-### Installation
-
-#### 📦 Binary Install (Linux x86_64)
-
-```bash
-# Download the binary
-curl -L -O https://github.com/kodr-pro/seekr/releases/download/v0.3.1/seekr-v0.3.1-linux-x86_64
-
-# Make it executable and move to path
-chmod +x seekr-v0.3.1-linux-x86_64
-sudo mv seekr-v0.3.1-linux-x86_64 /usr/local/bin/seekr
+```
+              [goal]
+                │
+        Phase 0: Plan (frontier, 1-2 calls)
+        clarify-or-DAG, schema + topo validated
+                │
+   ┌────────► [DAG step] ≤3 local attempts
+   │            │
+   │   Phase 1: Worker (local SLM, fresh bounded context)
+   │   proposes ONE of: read_file write_file edit_file
+   │                     run_command finish_step
+   │            │
+   │   Phase 2: Interceptor
+   │   ├─ deterministic: fail-closed path sandbox, shell
+   │   │  blocklist, duplicate fingerprint, read-only cmd allowlist
+   │   └─ Jev (one batched call, disk-cached):
+   │      noul scope ≥ 0.85 · noul steering < 0.5
+   │      score novelty > 1.0 (vs failed attempts)
+   │            │
+   │   Phase 3: Execution + deterministic gate
+   │   finish_step → verification command → checkpoint commit
+   │            │        fail → rollback (reset --hard + clean -fd)
+   │            ▼
+   │   Phase 4: Triage (Jev choice)
+   │   syntax_fix → retry with stderr
+   │   read_context → inject the file the error points at
+   │   deadlock / attempts exhausted → escalate to frontier
+   │   (minimal payload; ```diff patch verified via git apply, or
+   │    GUIDANCE injected once) ── hard cap on frontier calls
+   └──── next ready step
 ```
 
-#### Build from Source
+## Install
 
-Ensure you have [Rust](https://www.rust-lang.org/tools/install) installed:
-
-```bash
-git clone https://github.com/kodr-pro/seekr.git
-cd seekr
+```sh
 cargo install --path .
 ```
 
----
+Requires: git, a terminal. Optionally `TYPESAFE_API_KEY` for the Jev gate
+(without it autonomous writes are **blocked** — fail-closed by design).
 
-## CLI Usage
+## Configure
 
-| Command | Description |
-| :--- | :--- |
-| `seekr` | Launch the main TUI application (Auto-starts daemon). |
-| `seekr daemon` | Launch the background daemon independently. |
-| `seekr doctor` | Run system diagnostics and health checks. |
-| `seekr --resume <session_id>` | Reconnect to an active background session. |
-
----
-
-## TUI Shortcuts
-
-| `Tab` | Switch focus between Chat and Tasks panel. |
-| `Ctrl+G` | Open **Unified Menu** (Sessions, Models, Providers, Settings). |
-| `Ctrl+R` | **Clear Chat** history (resets context). |
-| `Ctrl+C` | Detach TUI (Tasks continue in background). |
-
----
-
-## Configuration
-
-**seekr** stores its configuration in `~/.config/seekr/config.toml`.
+`~/.config/seekr/config.toml`:
 
 ```toml
-[agent]
-max_iterations = 25
-auto_approve_tools = false
-working_directory = "."
-context_window_threshold = 40
-context_window_keep = 10
+[[providers]]
+name = "qwen-local"
+base_url = "http://server:11434/v1"     # any OpenAI-compatible endpoint
+model = "qwen3.5:latest"
 
-[ui]
-theme = "dark"
-show_reasoning = true
+[[providers]]
+name = "glm-frontier"
+key = "..."                             # or <NAME>_API_KEY env
+base_url = "https://api.z.ai/api/coding/paas/v4"
+model = "glm-5.3"
+
+[jj]
+worker_provider = "qwen-local"
+frontier_provider = "glm-frontier"
+max_attempts_per_step = 3
+max_frontier_calls = 5
+scope_threshold = 0.85                  # Jev P(in_scope) floor
+novelty_reject_at_or_below = 1.0        # loop rejection
+step_timeout_secs = 3600
 ```
 
----
+Env: `TYPESAFE_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_MODEL`,
+`JEV_EGRESS=off` (disables semantic gate), `SEEKR_WORKER_REASONING=none`
+(recommended for Ollama thinking models — 2s/turn instead of 70s).
 
-## License
+## Use
 
-Distributed under the Polyform Prosperity License 1.0.0. See `LICENSE` for more information regarding personal and commercial use.
+```sh
+seekr                     # TUI: goal → clarify → plan review → grind dashboard
+seekr run --goal "..."    # autonomous run (TUI in a terminal, headless when piped)
+seekr run --plan dag.json --repo /path --headless --auto
+seekr plan --goal "..."   # print a TaskDag JSON without running
+seekr runs                # list runs (state + status)
+seekr resume <run-id>     # resume an interrupted run
+seekr merge <run-id>      # merge the run's branch back, clean its worktree
+seekr clean <run-id>      # drop the worktree, keep the branch
+seekr doctor              # config/roles/jev/git diagnostics
+```
 
----
+Output lands on branch `jj/<run-id>` in a linked worktree under
+`<repo>/../.jj-worktrees/` — your main checkout is never touched.
 
-<p align="center">
-  Built with care by <a href="https://kodr.pro">kodr</a>
-</p>
+## Safety model
+
+- **Fail-closed Jev**: no key / egress off / API error → writes are
+  rejected, not waved through. `--allow-degraded` opts out explicitly.
+- **Path sandbox**: `..`, absolute escapes, symlink escapes, sibling-prefix
+  confusion all rejected; empty `allowed_paths` = read-only step.
+- **Injection defense**: action arguments are comment/string-stripped
+  before the steering judgment; hidden "approve this" text is rejected.
+- **Rollback**: every failed attempt is reverted to the last checkpoint,
+  including untracked files the worker created.
+- **Budgets**: attempts per step, frontier calls per run, per-tier token
+  ledger, wall-clock timeouts per step and per verification command.
+
+## Cost model
+
+One successful 2-step Python task measured live: 22 worker calls
+(~29k local tokens), 12 Jev calls (~10k judgment tokens), **0** frontier
+completion tokens after planning. Runs are resumable; identical Jev
+questions hit a content-addressed disk cache instead of the network.
+
+## Development
+
+```sh
+cargo test                                # unit + wiremock suites
+cargo test --test jockey_e2e_tests        # full governor loop vs mocks
+SEEKR_JJ_TEST_URL=http://server:11434/v1 SEEKR_JJ_TEST_MODEL=qwen3.5:latest \
+  cargo test -- --ignored                 # live tests (planner, worker, jev)
+```
+
+Layout: `src/jev` (System One client), `src/jockey` (dag, planner, worker,
+interceptor, driver, ledger, cli), `src/sandbox` (git worktree, path
+containment, command exec), `src/ui/jockey.rs` (TUI), `src/api`
+(OpenAI/Anthropic/Gemini providers).
