@@ -151,17 +151,44 @@ impl GitSandbox {
         &self.repo_root
     }
 
+    /// Build artifacts and caches never belong in checkpoints. Excluded via
+    /// pathspec so they stay untracked (and invisible to rollback/status).
+    const CHECKPOINT_EXCLUDES: [&'static str; 6] = [
+        ":(exclude)__pycache__/",
+        ":(exclude)*.pyc",
+        ":(exclude)*.pyo",
+        ":(exclude).DS_Store",
+        ":(exclude)node_modules/",
+        ":(exclude)target/",
+    ];
+
+    fn add_args(intent_only: bool) -> Vec<String> {
+        let mut args: Vec<String> = vec!["add".to_string()];
+        if intent_only {
+            args.push("--intent-to-add".to_string());
+        }
+        args.push("-A".to_string());
+        args.extend(Self::CHECKPOINT_EXCLUDES.iter().map(|s| s.to_string()));
+        args
+    }
+
     /// Commits every change in the worktree as a passing-step checkpoint.
     /// Returns the new commit sha.
     pub async fn checkpoint(
         &self,
         message: &str,
     ) -> Result<String, SandboxError> {
-        let _ = git(&self.worktree, ["add", "-A"]).await;
+        let _ = git_str(&self.worktree, &Self::add_args(false)).await;
         let status = git(&self.worktree, ["status", "--porcelain"])
             .await
             .map_err(|e| SandboxError::Git("status", e))?;
-        if status.trim().is_empty() {
+        let index_dirty =
+            status.lines().filter(|l| !l.trim().is_empty()).any(|l| {
+                let index = l.chars().next().unwrap_or(' ');
+                index != '?' && index != ' ' && index != '!'
+            });
+        if !index_dirty {
+            // nothing staged beyond excluded junk; nothing worth committing
             return self.current_commit().await;
         }
         git(
@@ -189,10 +216,10 @@ impl GitSandbox {
             .map_err(|e| SandboxError::Git("rev-parse", e))
     }
 
-    /// Unified diff of all uncommitted changes (tracked + untracked via
+    /// Unified diff of all uncommitted changes (tracked + new files via
     /// intent-to-add), used for Jev state and escalation payloads.
     pub async fn diff(&self) -> Result<String, SandboxError> {
-        git(&self.worktree, ["add", "--intent-to-add", "-A"])
+        git_str(&self.worktree, &Self::add_args(true))
             .await
             .map_err(|e| SandboxError::Git("intent-to-add", e))?;
         let d = git(&self.worktree, ["diff", "HEAD"])
@@ -268,6 +295,10 @@ where
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
+}
+
+async fn git_str(cwd: &Path, args: &[String]) -> Result<String, String> {
+    git(cwd, args.iter().map(|s| s.as_str())).await
 }
 
 #[cfg(test)]

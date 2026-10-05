@@ -54,7 +54,7 @@ impl CostLedger {
 
 /// Structured events emitted by the governor; consumed by the TUI, the
 /// headless printer, and persisted as JSONL.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum JockeyEvent {
     RunStarted {

@@ -91,6 +91,13 @@ seekr clean <run-id>      # drop the worktree, keep the branch
 seekr doctor              # config/roles/jev/git diagnostics
 ```
 
+In the TUI: **Ctrl+G** opens the control center (runs browser with
+attach/resume/merge/clean, provider CRUD with live key tests and worker/
+frontier role assignment, `[jj]` settings editor, key reference). **?**
+shows help anywhere, **Ctrl+C twice** quits. The grind dashboard shows a
+tree-style DAG with a progress gauge, live scope/novelty telemetry,
+per-tier token share gauges, and a scrollable activity log.
+
 Output lands on branch `jj/<run-id>` in a linked worktree under
 `<repo>/../.jj-worktrees/` — your main checkout is never touched.
 
