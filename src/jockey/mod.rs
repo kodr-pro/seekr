@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod dag;
 pub mod driver;
 pub mod interceptor;

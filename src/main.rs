@@ -1,10 +1,13 @@
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use seekr::daemon::server::start_server;
-use seekr::{app, config};
+use seekr::config::AppConfig;
+use seekr::jockey::cli;
+use seekr::jockey::driver::{RunOutcome, RunState};
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
+#[command(version, about = "Jev Jockey — autonomous, cost-guarded coding agent", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -12,214 +15,181 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Start the background Seekr daemon
-    Daemon {
-        #[command(subcommand)]
-        subcommand: Option<DaemonCommands>,
+    /// Start an autonomous run (TUI by default; headless when piped or --headless)
+    Run {
+        /// Goal for the frontier planner (omit with --plan)
+        #[arg(short, long)]
+        goal: Option<String>,
+        /// Load a TaskDag JSON file instead of frontier planning
+        #[arg(short, long)]
+        plan: Option<std::path::PathBuf>,
+        /// Repository to work in (default: cwd)
+        #[arg(short, long)]
+        repo: Option<std::path::PathBuf>,
+        /// Force headless mode
+        #[arg(long)]
+        headless: bool,
+        /// Pre-supplied clarification answer (`id=text`, repeatable)
+        #[arg(long = "answer")]
+        answers: Vec<String>,
+        /// Proceed without interactive clarification
+        #[arg(long)]
+        auto: bool,
+        /// Permit autonomous writes without the Jev gate (fail-closed default)
+        #[arg(long)]
+        allow_degraded: bool,
     },
-    /// Run diagnostics
+    /// List previous runs
+    Runs,
+    /// Resume an interrupted run
+    Resume { run_id: String },
+    /// Merge a finished run's branch back and clean up its worktree
+    Merge { run_id: String },
+    /// Remove a run's worktree, keeping its branch
+    Clean { run_id: String },
+    /// Environment and configuration diagnostics
     Doctor,
-    /// Start TUI from a previous session
-    Resume { session_id: String },
-}
-
-#[derive(Subcommand, Debug)]
-enum DaemonCommands {
-    /// Check if the daemon is running
-    Status,
-    /// Stop a running daemon
-    Stop,
-    /// Show recent daemon logs
-    Logs {
-        #[arg(short, long, default_value = "50")]
-        lines: usize,
+    /// Print a TaskDag JSON for a goal without running it
+    Plan {
+        #[arg(short, long)]
+        goal: String,
+        #[arg(short, long)]
+        repo: Option<std::path::PathBuf>,
+        #[arg(long)]
+        auto: bool,
     },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_logging();
-    setup_panic_hook();
-
     let cli = Cli::parse();
+    let config = AppConfig::load().unwrap_or_default();
 
     match cli.command {
-        Some(Commands::Daemon { subcommand }) => match subcommand {
-            None => {
-                println!("Starting Seekr daemon...");
-                return start_server().await;
-            }
-            Some(DaemonCommands::Status) => {
-                return daemon_status().await;
-            }
-            Some(DaemonCommands::Stop) => {
-                return daemon_stop().await;
-            }
-            Some(DaemonCommands::Logs { lines }) => {
-                return daemon_logs(lines);
-            }
-        },
-        Some(Commands::Doctor) => {
-            return seekr::doctor::run_diagnostics().await;
-        }
-        _ => {}
-    }
-
-    let resume_id = match cli.command {
-        Some(Commands::Resume { ref session_id }) => Some(session_id.clone()),
-        _ => None,
-    };
-
-    if matches!(cli.command, None | Some(Commands::Resume { .. })) {
-        let client = seekr::daemon::client::DaemonClient::new();
-        if !client.check_health().await {
-            println!("Daemon not reachable. Starting 'seekr daemon' in background...");
-            if let Ok(exe) = std::env::current_exe() {
-                let _ = tokio::process::Command::new(exe).arg("daemon").spawn();
-
-                let mut retries = 0;
-                while !client.check_health().await && retries < 30 {
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                    retries += 1;
-                }
-
-                if retries >= 30 {
-                    eprintln!("Warning: Daemon failed to start within 3 seconds.");
-                }
-            }
-        }
-    }
-
-    let mut app = if config::AppConfig::exists() {
-        match config::AppConfig::load() {
-            Ok(cfg) => app::App::new_main(cfg),
-            Err(e) => {
-                eprintln!("Failed to load config: {}. Starting setup wizard.", e);
-                app::App::new_setup()
-            }
-        }
-    } else {
-        app::App::new_setup()
-    };
-
-    if let Some(sid) = resume_id
-        && app.mode == app::AppMode::Main
-    {
-        app.resume_session(sid);
-    }
-
-    app::run_app(app).await
-} // main
-
-async fn daemon_status() -> Result<()> {
-    let client = seekr::daemon::client::DaemonClient::new();
-    if client.check_health().await {
-        println!("Seekr daemon is running");
-        if let Some(pid) = seekr::daemon::server::read_pid_file() {
-            println!("  PID: {}", pid);
-        }
-        if let Some(path) = seekr::daemon::server::pid_file_path() {
-            println!("  PID file: {}", path.display());
-        }
-    } else {
-        println!("Seekr daemon is NOT running");
-        if seekr::daemon::server::read_pid_file().is_some() {
-            println!("  (stale PID file found - removing)");
-            seekr::daemon::server::remove_pid_file();
-        }
-    }
-    Ok(())
-}
-
-async fn daemon_stop() -> Result<()> {
-    let client = seekr::daemon::client::DaemonClient::new();
-    if !client.check_health().await {
-        println!("Daemon is not running.");
-        seekr::daemon::server::remove_pid_file();
-        return Ok(());
-    }
-
-    client.send_shutdown().await?;
-    println!("Shutdown signal sent to daemon.");
-
-    let mut retries = 0;
-    while client.check_health().await && retries < 30 {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        retries += 1;
-    }
-
-    if retries >= 30 {
-        if let Some(pid) = seekr::daemon::server::read_pid_file() {
-            println!("Daemon did not stop gracefully. Killing PID {}...", pid);
-            #[cfg(unix)]
+        None | Some(Commands::Run { .. }) => {
+            if let Some(Commands::Run {
+                goal,
+                plan,
+                repo,
+                headless,
+                answers,
+                auto,
+                allow_degraded,
+            }) = cli.command
             {
-                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+                run_command(goal, plan, repo, headless, answers, auto, allow_degraded, config).await
+            } else {
+                seekr::ui::jockey::run_tui_new(config).await
             }
         }
+        Some(Commands::Runs) => {
+            for (id, status) in RunState::list_runs() {
+                println!("{id:<28} {status}");
+            }
+            Ok(())
+        }
+        Some(Commands::Resume { run_id }) => {
+            let state = RunState::load(&run_id)?;
+            println!(
+                "resuming {run_id} ({}) on branch {}",
+                state.status, state.branch
+            );
+            resume_headless(state, config).await
+        }
+        Some(Commands::Merge { run_id }) => cli::merge_run(&run_id).await,
+        Some(Commands::Clean { run_id }) => cli::clean_run(&run_id).await,
+        Some(Commands::Doctor) => cli::doctor().await,
+        Some(Commands::Plan { goal, repo, auto }) => {
+            let repo = match repo {
+                Some(p) => p.canonicalize().unwrap_or(p),
+                None => std::env::current_dir()?,
+            };
+            let roles = cli::resolve_roles(&config)?;
+            let dag = cli::plan_interactive(&roles, &goal, &repo, &[], auto, 2).await?;
+            println!("{}", serde_json::to_string_pretty(&dag)?);
+            Ok(())
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_command(
+    goal: Option<String>,
+    plan: Option<std::path::PathBuf>,
+    repo: Option<std::path::PathBuf>,
+    headless: bool,
+    answers: Vec<String>,
+    auto: bool,
+    allow_degraded: bool,
+    mut config: AppConfig,
+) -> Result<()> {
+    if allow_degraded {
+        config.jockey.allow_degraded = true;
+    }
+    let repo = match repo {
+        Some(p) => p.canonicalize().unwrap_or(p),
+        None => std::env::current_dir()?,
+    };
+    let roles = cli::resolve_roles(&config)?;
+
+    let (goal, dag) = match (goal, plan) {
+        (_, Some(plan_path)) => {
+            let dag = cli::load_plan(&plan_path)?;
+            let goal = dag.goal.clone();
+            (goal, dag)
+        }
+        (Some(goal), None) => {
+            let parsed: Vec<(String, String)> = answers
+                .iter()
+                .filter_map(|a| a.split_once('=').map(|(k, v)| (k.trim().to_string(), v.trim().to_string())))
+                .collect();
+            let dag = cli::plan_interactive(&roles, &goal, &repo, &parsed, auto, 2).await?;
+            (goal, dag)
+        }
+        (None, None) => anyhow::bail!("provide --goal or --plan"),
+    };
+
+    let interactive = !headless
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal();
+    if interactive {
+        seekr::ui::jockey::run_tui_with_dag(config, roles, goal, dag, repo).await
     } else {
-        println!("Daemon stopped successfully.");
+        let run_id = cli::new_run_id();
+        cli::run_headless(&config, &roles, &goal, dag, &repo, run_id).await?;
+        Ok(())
     }
-
-    seekr::daemon::server::remove_pid_file();
-    Ok(())
 }
 
-fn daemon_logs(lines: usize) -> Result<()> {
-    let log_path = dirs::data_local_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join("seekr")
-        .join("seekr.log");
-
-    if !log_path.exists() {
-        println!("No log file found at {}", log_path.display());
-        println!("Enable logging by setting SEEKR_LOG=1");
-        return Ok(());
+async fn resume_headless(state: RunState, config: AppConfig) -> Result<()> {
+    let roles = cli::resolve_roles(&config)?;
+    let sandbox = seekr::sandbox::git::GitSandbox::attach(&state.repo_root, &state.run_id)?;
+    let worker = seekr::jockey::worker::Worker::new(
+        roles.worker.0.clone(),
+        roles.worker.1.clone(),
+        config.jockey.worker_temperature,
+        config.jockey.worker_max_tokens,
+        std::env::var("SEEKR_WORKER_REASONING").ok(),
+    );
+    let mut governor = seekr::jockey::driver::Governor::attach(
+        &config,
+        worker,
+        roles.frontier.clone(),
+        roles.jev.clone(),
+        sandbox,
+        state,
+    )?;
+    let mut rx = governor.take_event_rx();
+    let printer = tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            cli::print_event(&event);
+        }
+    });
+    let outcome = governor.run_to_completion().await?;
+    printer.abort();
+    cli::print_summary(&governor.state);
+    match outcome {
+        RunOutcome::Success => Ok(()),
+        RunOutcome::Failed(reason) => Err(anyhow::anyhow!("{reason}")),
     }
-
-    let content = std::fs::read_to_string(&log_path)?;
-    let log_lines: Vec<&str> = content.lines().collect();
-    let start = log_lines.len().saturating_sub(lines);
-    for line in &log_lines[start..] {
-        println!("{}", line);
-    }
-    Ok(())
 }
-
-fn init_logging() {
-    if std::env::var("SEEKR_LOG").is_ok() {
-        let log_path = dirs::data_local_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join("seekr")
-            .join("seekr.log");
-
-        if let Some(parent) = log_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-        {
-            Ok(file) => {
-                tracing_subscriber::fmt()
-                    .with_max_level(tracing::Level::DEBUG)
-                    .with_writer(std::sync::Mutex::new(file))
-                    .init();
-            }
-            Err(e) => {
-                eprintln!("Failed to open log file {}: {}", log_path.display(), e);
-            }
-        }
-    }
-} // init_logging
-
-fn setup_panic_hook() {
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |panic_info| {
-        let _ =
-            ratatui::crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-        ratatui::restore();
-        original_hook(panic_info);
-    }));
-} // setup_panic_hook

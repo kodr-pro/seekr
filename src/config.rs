@@ -176,7 +176,7 @@ pub struct AppConfig {
     pub ui: UiConfig,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
-    #[serde(default)]
+    #[serde(default, alias = "jj")]
     pub jockey: JockeyConfig,
 }
 
