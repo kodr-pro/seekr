@@ -32,11 +32,11 @@ impl ApiClient {
         _config: &AppConfig,
         provider_cfg: &crate::config::ProviderConfig,
     ) -> Self {
-        let mut client_builder = Client::builder();
-        if let Some(timeout_secs) = provider_cfg.timeout {
-            client_builder = client_builder.timeout(Duration::from_secs(timeout_secs));
-        }
-        let http = client_builder.build().unwrap_or_else(|_| Client::new());
+        let timeout_secs = provider_cfg.timeout.unwrap_or(120);
+        let http = Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .unwrap_or_else(|_| Client::new());
 
         let provider: Arc<dyn Provider> = if provider_cfg.base_url.contains("anthropic.com") {
             Arc::new(AnthropicProvider)
