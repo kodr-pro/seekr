@@ -28,6 +28,7 @@ pub struct ApiClient {
 pub struct CompletionOutcome {
     pub content: String,
     pub usage: Option<Usage>,
+    pub tool_calls: Vec<crate::api::types::ToolCall>,
 }
 
 impl ApiClient {
@@ -130,6 +131,7 @@ impl ApiClient {
             response_format: None,
             tools,
             tool_choice: None,
+            reasoning_effort: None,
         };
 
         let request_body = self.provider.format_request(&request);
@@ -193,6 +195,7 @@ impl ApiClient {
             response_format: None,
             tools: None,
             tool_choice: None,
+            reasoning_effort: None,
         };
 
         let request_body = self.provider.format_request(&request);
@@ -247,14 +250,16 @@ impl ApiClient {
         }
     } // chat_completion
 
-    /// Non-streaming completion returning content plus token usage, with
-    /// explicit sampling controls for programmatic callers (planner, worker).
+    /// Non-streaming completion returning content, tool calls, and token
+    /// usage, with explicit sampling controls for programmatic callers.
     pub async fn chat_completion_with_usage(
         &self,
         messages: Vec<ChatMessage>,
         model: &str,
         temperature: Option<f64>,
         max_tokens: Option<u32>,
+        tools: Option<Vec<ToolDefinition>>,
+        reasoning_effort: Option<&str>,
     ) -> Result<CompletionOutcome, ApiError> {
         let is_anthropic = self.provider.name() == "Anthropic";
 
@@ -269,8 +274,9 @@ impl ApiClient {
             presence_penalty: None,
             stop: None,
             response_format: None,
-            tools: None,
+            tools,
             tool_choice: None,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
         };
 
         let request_body = self.provider.format_request(&request);
@@ -299,6 +305,13 @@ impl ApiClient {
                 total_tokens: u.get("total_tokens")?.as_u64()? as u32,
             })
         });
+        let tool_calls: Vec<crate::api::types::ToolCall> = result
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("tool_calls"))
+            .and_then(|tc| serde_json::from_value(tc.clone()).ok())
+            .unwrap_or_default();
 
         if is_anthropic {
             if let Some(content_array) = result["content"].as_array() {
@@ -309,6 +322,7 @@ impl ApiClient {
                         return Ok(CompletionOutcome {
                             content: text.to_string(),
                             usage,
+                            tool_calls,
                         });
                     }
                 }
@@ -321,6 +335,13 @@ impl ApiClient {
                 Ok(CompletionOutcome {
                     content: content.to_string(),
                     usage,
+                    tool_calls,
+                })
+            } else if !tool_calls.is_empty() {
+                Ok(CompletionOutcome {
+                    content: String::new(),
+                    usage,
+                    tool_calls,
                 })
             } else {
                 Err(ApiError::MissingContent(
@@ -388,6 +409,7 @@ impl ApiClient {
             response_format: None,
             tools: None,
             tool_choice: None,
+            reasoning_effort: None,
         };
 
         let request_body = provider.format_request(&request);

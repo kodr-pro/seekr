@@ -157,13 +157,15 @@ Rules:\n\
         messages: &[crate::api::types::ChatMessage],
         fallback_goal: &str,
     ) -> Result<PlanResponse, PlannerError> {
-        let CompletionOutcome { content, usage } = self
+        let CompletionOutcome { content, usage, .. } = self
             .client
             .chat_completion_with_usage(
                 messages.to_vec(),
                 &self.model,
                 Some(self.temperature),
                 Some(self.max_tokens),
+                None,
+                None,
             )
             .await?;
         let reply: FrontierReply = parse_json_object(&content)

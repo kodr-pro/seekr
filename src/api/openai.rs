@@ -38,6 +38,10 @@ impl Provider for OpenAiProvider {
             body["stream_options"] = json!({ "include_usage": true });
         }
 
+        if let Some(effort) = &request.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+
         if let Some(tools) = &request.tools
             && !tools.is_empty()
         {
