@@ -42,3 +42,22 @@ jobs:
       
     - name: Run tests
       run: cargo test --verbose
+
+    - name: Verify bench fixtures
+      run: |
+        # Every fixture must compile on stubs and FAIL its tests, so the
+        # verification gates stay meaningful.
+        set -e
+        for f in bench/fixtures/*/; do
+          name=$(basename "$f")
+          echo "::group::fixture $name"
+          (
+            cd "$f"
+            cargo build --quiet
+            if cargo test --quiet >tests.log 2>&1; then
+              echo "fixture $name passed tests against stubs — tests are not discriminating" >&2
+              exit 1
+            fi
+          )
+          echo "::endgroup::"
+        done
