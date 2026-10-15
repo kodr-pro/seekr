@@ -114,13 +114,16 @@ pub struct JockeyConfig {
     pub worker_temperature: f64,
     #[serde(default = "default_jj_worker_max_tokens")]
     pub worker_max_tokens: u32,
-    /// Jev scope gate: P(in_scope) must be at least this to approve an action.
-    #[serde(default = "default_jj_scope_threshold")]
-    pub scope_threshold: f64,
-    /// Jev loop gate: novelty score at or below this is a degenerate repeat.
-    #[serde(default = "default_jj_novelty_floor")]
-    pub novelty_reject_at_or_below: f64,
-    /// Allow autonomous writes when Jev is unavailable (fail-closed default).
+    /// Command that launches the AiWrangler MCP server (argv split on
+    /// whitespace). Examples: `aiwrangler-mcp`, or
+    /// `node /path/to/AiWrangler/dist/mcp.js`.
+    #[serde(default)]
+    pub wrangler_command: Option<String>,
+    /// Per-call timeout for AiWrangler gate round-trips.
+    #[serde(default = "default_jj_wrangler_timeout")]
+    pub wrangler_timeout_secs: u64,
+    /// Allow autonomous runs when the AiWrangler semantic layer is
+    /// unavailable (fail-closed default).
     #[serde(default)]
     pub allow_degraded: bool,
     /// Reasoning-effort hint for the worker model ("none" avoids thinking
@@ -157,11 +160,13 @@ fn default_jj_worker_temperature() -> f64 {
 fn default_jj_worker_max_tokens() -> u32 {
     8192
 }
-fn default_jj_scope_threshold() -> f64 {
-    0.80
+/// Default AiWrangler launch command; resolved from PATH (npm link or a
+/// global install). Override with `wrangler_command` in `[jj]`.
+pub fn default_wrangler_command() -> &'static str {
+    "aiwrangler-mcp"
 }
-fn default_jj_novelty_floor() -> f64 {
-    1.0
+fn default_jj_wrangler_timeout() -> u64 {
+    300
 }
 fn default_jj_worker_reasoning() -> Option<String> {
     Some("none".to_string())
@@ -181,8 +186,8 @@ impl Default for JockeyConfig {
             step_timeout_secs: default_jj_step_timeout(),
             worker_temperature: default_jj_worker_temperature(),
             worker_max_tokens: default_jj_worker_max_tokens(),
-            scope_threshold: default_jj_scope_threshold(),
-            novelty_reject_at_or_below: default_jj_novelty_floor(),
+            wrangler_command: None,
+            wrangler_timeout_secs: default_jj_wrangler_timeout(),
             allow_degraded: false,
             worker_reasoning: default_jj_worker_reasoning(),
             worker_read_lines: default_jj_read_limit(),

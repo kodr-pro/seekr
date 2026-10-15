@@ -1,8 +1,8 @@
 [package]
 name = "seekr"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
-description = "Async Agentic System Operator"
+description = "Autonomous, cost-guarded coding agent governed by AiWrangler"
 license = "Polyform-Prosperity-1.0.0"
 
 [lib]
@@ -12,6 +12,11 @@ path = "src/lib.rs"
 [[bin]]
 name = "seekr"
 path = "src/main.rs"
+
+# Hermetic stand-in for the aiwrangler-mcp stdio server, used by the test
+# suite (CARGO_BIN_EXE_mock_aiwrangler) and usable directly to smoke-test
+# a seekr install without spending judgment tokens. Auto-discovered from
+# src/bin/mock_aiwrangler.rs.
 
 [dependencies]
 # TUI

@@ -1,50 +1,54 @@
 # User Interface
 
-**seekr** features a rich, responsive Terminal UI (TUI) that organizes multiple streams of information into a cohesive interface.
+seekr ships a TUI for interactive runs and a headless JSONL mode for
+scripting.
 
-## Layout Overview
+## The TUI flow
 
-The UI is divided into several persistent and contextual areas:
+1. **Goal intake** — describe what you want built.
+2. **Clarify** — answer the planner's bounded questions.
+3. **Plan review** — inspect the DAG (steps, invariants, allowed paths,
+   verification commands) before it grinds.
+4. **Grind dashboard** — the run in progress:
+   - tree-style DAG panel with per-step status
+   - progress gauge and live gate verdicts (`🛡 aiwrangler [check] …`)
+   - per-tier token share gauges (worker / gates / frontier)
+   - scrollable activity log (actions, approvals, rejections,
+     rollbacks, escalations)
 
-### 1. Navigation Tabs
-At the top of the screen, you'll find the main navigation:
-- **Chat:** Your conversation history with the AI, now featuring **full syntax highlighting** for code blocks.
-- **Tasks:** Active goals and sub-tasks. Features a real-time **Concurrency Indicator** showing how many threads are active.
-
-### 2. Interaction Area
-The largest portion of the screen, where chat messages, reasoning, and tool executions are displayed. The **Activity Log** within this area numbers parallel tool calls (e.g., `7/12`) for better visibility. Use **Visual Selection** mode to copy text directly from the chat history.
-
-### 3. Popups & Dialogs
-- **Unified Menu:** Press `Ctrl+G` to view, resume, or delete sessions, switch models/providers, and adjust settings.
-- **Help Menu:** Press `F1` to toggle a cheat sheet of all available shortcuts.
-- **Confirmation Dialogs:** Standard `[Y]es / [N]o` prompts for quitting or approving dangerous tool calls.
-
-### 4. Status Bar
-Located at the bottom, showing the current state of the agent (Idle, Flowing, Thinking), the selected model, token usage, and active shortcuts.
-
-## Key Shortcuts
+## Keys
 
 | Key | Action |
-| :--- | :--- |
-| `Tab` | Cycle focus between Chat and Tasks panel. |
-| `Ctrl+G` | Open **Unified Menu** (Sessions, Models, Providers, Settings). |
-| `Ctrl+R` | **Clear Chat** history. |
-| `F1` | Show the **Help** shortcut menu. |
-| `Esc` | Cancel / Go back / Open Quit dialog. |
-| `Ctrl+C` | Force quit the application. |
+|---|---|
+| `?` | help, anywhere |
+| `Ctrl+G` | control center |
+| `Ctrl+C` twice | quit (the run is resumable) |
 
-### Chat Selection & Copy (focused)
-| Key | Action |
-| :--- | :--- |
-| `j / k` | Scroll selection up/down. |
-| `v / V` | Enter **Visual** / **Visual-Line** mode. |
-| `y` | Copy current selection to clipboard. |
-| `c` | Quick-copy the code block under the cursor. |
-| `i / Esc` | Return to **Input** focus. |
+## Control center (`Ctrl+G`)
 
-## Themes
-Currently, **seekr** supports a premium high-contrast dark theme optimized for most modern terminal emulators, featuring vibrant HSL-tailored colors for better readability.
+- **Runs** — browse every run, attach to a live one, resume, merge, or
+  clean it.
+- **Providers** — CRUD with live key tests; assign the worker and
+  frontier roles.
+- **Settings** — the `[jj]` block: attempts, timeouts, budgets,
+  `wrangler_timeout_secs`, `allow_degraded`.
+- **Keys** — quick reference for the whole TUI.
 
----
+## Headless / JSON
 
-[Next: Agent Logic](/agent)
+```bash
+seekr run . --goal "..." --headless          # human-readable progress
+seekr run . --goal "..." --headless --json   # one JSON event per line
+```
+
+The JSON stream is the governor's event log: `run_started`,
+`wrangler_gate`, `step_started`, `action_proposed`, `action_rejected`,
+`verification_failed`, `rolled_back`, `escalated`, `step_completed`,
+`usage`, `run_completed`... Filter with `jq`:
+
+```bash
+... | jq -c 'select(.type=="wrangler_gate")'
+... | jq -c 'select(.type=="step_completed") | .step_id'
+```
+
+The same events persist per run — `seekr logs <run-id>` replays them.

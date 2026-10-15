@@ -9,7 +9,7 @@ use seekr::jockey::driver::{RunOutcome, RunState};
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about = "Jev Jockey — autonomous, cost-guarded coding agent",
+    about = "seekr — autonomous, cost-guarded coding agent; gates by AiWrangler",
     long_about = None
 )]
 struct Cli {
@@ -41,7 +41,7 @@ enum Commands {
         /// Proceed without interactive clarification
         #[arg(long)]
         auto: bool,
-        /// Permit autonomous writes without the Jev gate (fail-closed default)
+        /// Permit autonomous runs without the AiWrangler semantic layer (fail-closed default)
         #[arg(long)]
         allow_degraded: bool,
         /// Emit raw JSONL events instead of human output (headless only)
@@ -64,6 +64,16 @@ enum Commands {
     Clean { run_id: String },
     /// Delete a run's state (and worktree); the branch is kept
     Rm { run_id: String },
+    /// Review / acknowledge AiWrangler human-review findings for a run
+    Ack {
+        run_id: String,
+        /// Rule IDs to acknowledge, e.g. RULE-10,RULE-11 (omit to list)
+        #[arg(long, value_delimiter = ',')]
+        rules: Vec<String>,
+        /// What the owner approved and why (audited)
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// Environment and configuration diagnostics
     Doctor,
     /// Print a TaskDag JSON for a goal without running it
@@ -164,6 +174,11 @@ async fn main() -> Result<()> {
         Some(Commands::Merge { run_id }) => cli::merge_run(&run_id).await,
         Some(Commands::Clean { run_id }) => cli::clean_run(&run_id).await,
         Some(Commands::Rm { run_id }) => cli::rm_run(&run_id).await,
+        Some(Commands::Ack {
+            run_id,
+            rules,
+            note,
+        }) => cli::ack_run(&run_id, &rules, note.as_deref()).await,
         Some(Commands::Doctor) => cli::doctor().await,
         Some(Commands::Plan { goal, repo, auto }) => {
             let repo = resolve_repo(repo.as_ref())?;
@@ -274,7 +289,6 @@ async fn resume_headless(state: RunState, config: AppConfig) -> Result<()> {
         &config,
         worker,
         roles.frontier.clone(),
-        roles.jev.clone(),
         sandbox,
         state,
     )?;

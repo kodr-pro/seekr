@@ -1,73 +1,64 @@
-# Custom Skills Guide
+# Live Validation & Probes
 
-Seekr allows you to extend its capabilities by adding your own tools (skills). A skill is simply a directory containing a metadata file and executable scripts.
+Before trusting an autonomous agent on a real repo, prove the loop works
+end to end. seekr ships three ladders: mocked, probed, live.
 
-## Directory Structure
+## 1. Mocked (offline, free)
 
-Seekr searches for skills in these locations:
-1. **Global:** `~/.config/seekr/skills/`
-2. **Local:** `./.seekr/skills/` (project-specific)
+The e2e suite runs the full governor loop against wiremock worker
+endpoints and the scenario-driven `mock_aiwrangler` server:
 
-A skill directory should look like this:
-```
-my_new_skill/
-├── skill.json    # Metadata and tool definition
-└── script.py     # (Optional) The logic for your skill
+```bash
+cargo test --test jockey_e2e_tests
 ```
 
-## `skill.json` Schema
+Scenarios covered: out-of-scope writes never touch disk, FIX REQUIRED
+rolls back and recovers, HUMAN REVIEW parks a step, CLARIFY stops a run
+before any work, a dead gate server sinks the run fail-closed, attempts
+exhaust into frontier escalation and clean rollback, and batched
+read/search actions execute in one turn.
 
-The `skill.json` file defines how the AI interacts with your tool.
+Scenario files are JSON:
 
 ```json
 {
-  "name": "my_tool_name",
-  "description": "What this tool does (be descriptive for the AI)",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "input_arg": {
-        "type": "string",
-        "description": "Description of the argument"
-      }
-    },
-    "required": ["input_arg"]
-  },
-  "command": "python3 {{SKILL_DIR}}/script.py --input {{input_arg}}"
+  "plan": "AIWRANGLER PLAN: PASS\n\ncontext pack:\n- S1: ...",
+  "checks": [
+    "AIWRANGLER FIX REQUIRED (exit 17)\n...",
+    "AIWRANGLER PASS (exit 0)"
+  ],
+  "die_on_check": false
 }
 ```
 
-### Variables
-- `{{SKILL_DIR}}`: Absolute path to the directory containing the `skill.json`. Use this to reference your scripts reliably.
-- `{{arg_name}}`: Injects the value of the parameter provided by the AI.
+## 2. Probed (one real model, one step)
 
-## Script Examples
+`worker_probe` drives a single bounded-context worker against a real
+OpenAI-compatible endpoint and reports whether it ever proposes a
+mutating action or reaches `finish_step`:
 
-### Python Example (`script.py`)
-```python
-import sys
-import json
-import argparse
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--input", required=True)
-args = parser.parse_args()
-
-# Perform logic
-result = f"Hello, I processed: {args.input}"
-
-# Print to stdout for the AI to read
-print(result)
-```
-
-### Bash Example
 ```bash
-#!/bin/bash
-echo "Current directory: $(pwd)"
-echo "Input provided: $1"
+SEEKR_PROBE_REPO=/path/to/repo \
+SEEKR_PROBE_URL=http://server:11434/v1 \
+SEEKR_PROBE_MODEL=qwen3.5:latest \
+cargo run --release --example worker_probe
 ```
 
-## Tips for Great Skills
-- **Concise Output:** AI models perform better with clear, concise tool results.
-- **Error Handling:** If your script fails (non-zero exit code), Seekr will report the stderr to the AI so it can self-correct.
-- **Sandboxing:** Seekr runs these commands with the same permissions as your user. Be careful with tools that modify files.
+Use it to sanity-check a new worker model before wiring it into `[jj]`.
+
+## 3. Live (everything real)
+
+```bash
+# live planner/worker/jev smoke tests against your local server
+SEEKR_JJ_TEST_URL=http://server:11434/v1 \
+SEEKR_JJ_TEST_MODEL=qwen3.5:latest \
+cargo test -- --ignored
+
+# a full autonomous run with real gates
+seekr run /path/to/repo --plan plan.json --auto --headless
+```
+
+Watch: the `wrangler_gate` events, the ledger's gate token share, and
+that failed attempts leave the worktree at its checkpoint. A benchmark
+corpus harness (graded fixture repos, success-rate reporting) is on the
+roadmap — `kv_lsm_bench` is the template.

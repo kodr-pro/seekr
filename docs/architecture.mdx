@@ -1,43 +1,47 @@
 # Architecture
 
-Seekr's architecture is designed around several decoupled components which allow for powerful agent-level workflows isolated from UI concerns and robust asynchronous process orchestration.
+How seekr is laid out on disk and in code.
 
-## Component Breakdown
+## Crates / modules
 
-1. **System Operator (Agent Loop)**
-   - Encapsulated inside `AgentLoop`, the core cognitive engine is capable of recursive problem-solving, context management, and utilizing a broad array of localized skills and external tools.
-   
-2. **SeekrManager**
-   - The central orchestrator that manages shared state (`LspManager`, `McpManager`, `SkillRegistry`) across frontend interfaces and background daemon topologies.
-
-3. **Daemon Services**
-   - Headless background execution is facilitated by an Axum-powered web server that pipes state, lifecycle events, and telemetry outputs to frontend consumers using standard Server-Sent Events (SSE).
-
-4. **Extensible Protocols**
-   - **Language Server Protocol (LSP)**: Advanced filesystem contextual grounding through `seekr::lsp::client`.
-   - **Model Context Protocol (MCP)**: Expansive capability delegation to local or remote servers via `seekr::mcp::manager` that unifies external tools, resources, and templates.
-
-5. **Terminal UI (TUI)**
-   - The primary command center built iteratively upon `ratatui`.
-
-## Flow of Execution
-
-```mermaid
-graph TD
-    A[User Request in TUI] --> B(Daemon Client)
-    B --> C[Daemon Server API]
-    C --> D{Agent Loop}
-    D --> E[LspManager]
-    D --> F[McpManager]
-    D --> G[Local Skills API]
-    D -.-> H[LLM Provider]
-    
-    H --> D
-    E --> D
-    F --> D
-    G --> D
-
-    D --> I[Output Context / Result]
-    I --> J[Broadcast via SSE]
-    J --> A
 ```
+src/
+├── wrangler/       AiWrangler MCP client (spawn, JSON-RPC, verdict parsing)
+├── jockey/
+│   ├── dag.rs      TaskDag + validation (schema, topo order)
+│   ├── planner.rs  frontier Phase 0 (clarify-or-DAG)
+│   ├── worker.rs   bounded-context SLM worker + tool definitions
+│   ├── interceptor.rs  deterministic action review (paths, blocklist, loops)
+│   ├── tools.rs    tool execution inside the sandbox
+│   ├── driver.rs   the governor: phases, budgets, events, run state
+│   ├── ledger.rs   cost tiers + append-only event log
+│   └── cli.rs      roles, headless runners, doctor, ack/merge/clean
+├── sandbox/
+│   ├── git.rs      linked worktrees, checkpoints, rollback, patches
+│   ├── paths.rs    fail-closed path containment
+│   └── exec.rs     blocklisted command execution with timeouts
+├── ui/             TUI (jockey dashboard + control center menu)
+├── api/            OpenAI / Anthropic / Gemini provider clients
+├── config.rs       config.toml (providers, agent, [jj])
+└── bin/
+    └── mock_aiwrangler.rs   scenario-driven MCP server stand-in
+```
+
+## On-disk layout
+
+- **Worktrees** — each run gets `<repo>/../.jj-worktrees/<run-id>` on
+  branch `jj/<run-id>`. Verified steps checkpoint there; failed attempts
+  hard-reset. Merge with `seekr merge`; the branch always survives.
+- **Run state** — `~/.local/state/seekr/jockey/<run-id>/`:
+  `state.json` (DAG + ledger + status, written on every event),
+  `events.jsonl` (the full log), and `wrangler/` (the generated gate
+  config's ledger and semantic cache).
+- **Config** — `~/.config/seekr/config.toml`.
+
+## Process model
+
+A `seekr run` is one process: the governor, the worker's HTTP client,
+and one spawned `aiwrangler-mcp` stdio subprocess. Verification commands
+run as short-lived children of the worktree. Nothing listens on a port;
+the only network egress is your model endpoints and
+`api.typesafe.ai` (AiWrangler's semantic battery).

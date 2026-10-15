@@ -433,12 +433,12 @@ impl MenuState {
                             jj.worker_max_tokens.saturating_sub(1024).max(1024);
                     }
                     (6, KeyCode::Char('+')) => {
-                        jj.scope_threshold =
-                            (jj.scope_threshold + 0.05).min(0.99);
+                        jj.wrangler_timeout_secs =
+                            jj.wrangler_timeout_secs.saturating_add(30);
                     }
                     (6, KeyCode::Char('-')) => {
-                        jj.scope_threshold =
-                            (jj.scope_threshold - 0.05).max(0.5);
+                        jj.wrangler_timeout_secs =
+                            jj.wrangler_timeout_secs.saturating_sub(30).max(30);
                     }
                     (7, KeyCode::Char(' ')) => {
                         jj.allow_degraded = !jj.allow_degraded;
@@ -609,9 +609,16 @@ pub fn render_menu(
                     "±1024",
                 ),
                 (
-                    "scope_threshold",
-                    format!("{:.2}", jj.scope_threshold),
-                    "±0.05",
+                    "wrangler_timeout_secs",
+                    jj.wrangler_timeout_secs.to_string(),
+                    "±30",
+                ),
+                (
+                    "wrangler_command",
+                    jj.wrangler_command.clone().unwrap_or_else(|| {
+                        crate::config::default_wrangler_command().to_string()
+                    }),
+                    "config file",
                 ),
                 (
                     "allow_degraded",

@@ -7,10 +7,14 @@ pub struct CostLedger {
     pub worker_calls: u64,
     pub worker_prompt_tokens: u64,
     pub worker_completion_tokens: u64,
-    pub jev_calls: u64,
-    pub jev_input_tokens: u64,
-    pub jev_output_tokens: u64,
-    pub jev_cache_hits: u64,
+    #[serde(default, alias = "jev_calls")]
+    pub wrangler_calls: u64,
+    #[serde(default, alias = "jev_input_tokens")]
+    pub wrangler_input_tokens: u64,
+    #[serde(default, alias = "jev_output_tokens")]
+    pub wrangler_output_tokens: u64,
+    #[serde(default, alias = "jev_cache_hits")]
+    pub wrangler_cache_hits: u64,
     pub frontier_calls: u64,
     pub frontier_prompt_tokens: u64,
     pub frontier_completion_tokens: u64,
@@ -33,22 +37,15 @@ impl CostLedger {
         }
     }
 
-    pub fn add_jev(&mut self, result: &crate::jev::JevResult) {
-        self.add_jev_usage(result.cached, &result.usage);
-    }
-
-    pub fn add_jev_usage(
-        &mut self,
-        cached: bool,
-        usage: &crate::jev::client::JevUsage,
-    ) {
-        if cached {
-            self.jev_cache_hits += 1;
-        } else {
-            self.jev_calls += 1;
+    /// Records AiWrangler semantic-battery usage parsed from a check
+    /// report. AiWrangler owns its own disk cache, so identical questions
+    /// it answers locally are simply absent from the usage line.
+    pub fn add_wrangler(&mut self, usage: Option<(u64, u64)>) {
+        if let Some((input, output)) = usage {
+            self.wrangler_calls += 1;
+            self.wrangler_input_tokens += input;
+            self.wrangler_output_tokens += output;
         }
-        self.jev_input_tokens += usage.input_tokens;
-        self.jev_output_tokens += usage.output_tokens;
     }
 }
 
@@ -77,8 +74,6 @@ pub enum JockeyEvent {
     },
     ActionApproved {
         tool: String,
-        scope_p: Option<f64>,
-        novelty: Option<f64>,
     },
     ActionRejected {
         tool: String,
@@ -87,6 +82,13 @@ pub enum JockeyEvent {
     ActionExecuted {
         tool: String,
         ok: bool,
+        brief: String,
+    },
+    /// AiWrangler gate verdict at step completion (post deterministic
+    /// verification): plan or check gate, action label, and findings brief.
+    WranglerGate {
+        gate: String,
+        action: String,
         brief: String,
     },
     VerificationStarted {
@@ -185,21 +187,24 @@ mod tests {
         assert_eq!(l.worker_prompt_tokens, 100);
         assert_eq!(l.frontier_calls, 1);
 
-        let mut result = crate::jev::JevResult {
-            model: "jev-1.13.0".into(),
-            answers: Default::default(),
-            usage: crate::jev::JevUsage {
-                input_tokens: 300,
-                output_tokens: 21,
-            },
-            cached: false,
-        };
-        l.add_jev(&result);
-        result.cached = true;
-        l.add_jev(&result);
-        assert_eq!(l.jev_calls, 1);
-        assert_eq!(l.jev_cache_hits, 1);
-        assert_eq!(l.jev_input_tokens, 600);
+        l.add_wrangler(Some((300, 21)));
+        l.add_wrangler(None);
+        assert_eq!(l.wrangler_calls, 1);
+        assert_eq!(l.wrangler_input_tokens, 300);
+        assert_eq!(l.wrangler_output_tokens, 21);
+    }
+
+    #[test]
+    fn ledger_deserializes_legacy_jev_fields() {
+        let legacy = serde_json::json!({
+            "worker_calls": 1, "worker_prompt_tokens": 2, "worker_completion_tokens": 3,
+            "jev_calls": 4, "jev_input_tokens": 5, "jev_output_tokens": 6, "jev_cache_hits": 7,
+            "frontier_calls": 8, "frontier_prompt_tokens": 9, "frontier_completion_tokens": 10,
+        });
+        let l: CostLedger = serde_json::from_value(legacy).unwrap();
+        assert_eq!(l.wrangler_calls, 4);
+        assert_eq!(l.wrangler_input_tokens, 5);
+        assert_eq!(l.wrangler_cache_hits, 7);
     }
 
     #[test]

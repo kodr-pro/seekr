@@ -9,7 +9,7 @@ pub mod worker;
 
 pub use dag::{DagError, DagStep, StepStatus, TaskDag};
 pub use driver::{Governor, GovernorError, RunOutcome, RunState};
-pub use interceptor::{AttemptRecord, InterceptVerdict, Interceptor};
+pub use interceptor::{AttemptRecord, InterceptVerdict};
 pub use ledger::{CostLedger, EventLog, JockeyEvent};
 pub use planner::{
     Clarification, FrontierPlanner, PlanOutcome, PlanResponse, PlannerError,

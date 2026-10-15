@@ -290,7 +290,6 @@ impl JockeyApp {
                 &config,
                 worker,
                 roles.frontier.clone(),
-                roles.jev.clone(),
                 sandbox,
                 goal,
                 dag,
@@ -360,26 +359,33 @@ impl JockeyApp {
                     Span::raw(format!("{tool}: {brief}")),
                 ]));
             }
-            ActionApproved {
-                tool,
-                scope_p,
-                novelty,
-            } => {
-                let mut spans =
-                    vec![Span::styled(format!("  ✓ {tool}"), green)];
-                if let Some(s) = scope_p {
-                    spans.push(Span::styled(format!(" scope {s:.2}"), cyan));
-                }
-                if let Some(n) = novelty {
-                    spans.push(Span::styled(format!(" novelty {n:.1}"), cyan));
-                }
-                self.push_log(Line::from(spans));
+            ActionApproved { tool } => {
+                self.push_log(Line::from(Span::styled(
+                    format!("  ✓ {tool}"),
+                    green,
+                )));
             }
             ActionRejected { tool, reason } => {
                 self.attempt_rejections += 1;
                 self.push_log(Line::from(vec![
                     Span::styled(format!("  ✗ {tool} "), red),
                     Span::styled(reason.clone(), yellow),
+                ]));
+            }
+            WranglerGate {
+                gate,
+                action,
+                brief,
+            } => {
+                let style = match action.as_str() {
+                    "Pass" => green,
+                    "FixRequired" | "HumanReview" => red,
+                    _ => yellow,
+                };
+                self.push_log(Line::from(vec![
+                    Span::styled("  🛡 ", dim),
+                    Span::styled(format!("aiwrangler [{gate}] "), style),
+                    Span::raw(format!("{action}: {brief}")),
                 ]));
             }
             ActionExecuted { ok, brief, .. } => {
@@ -892,7 +898,6 @@ impl JockeyApp {
                 &config,
                 worker,
                 roles.frontier.clone(),
-                roles.jev.clone(),
                 sandbox,
                 state,
             );
@@ -1007,9 +1012,9 @@ async fn run_loop(mut app: JockeyApp) -> anyhow::Result<()> {
     }
     if let Some(ledger) = &app.ledger {
         println!(
-            "cost    : worker {} tok · jev {} calls · frontier {} calls",
+            "cost    : worker {} tok · aiwrangler {} calls · frontier {} calls",
             ledger.worker_prompt_tokens + ledger.worker_completion_tokens,
-            ledger.jev_calls,
+            ledger.wrangler_calls,
             ledger.frontier_calls
         );
     }
@@ -1053,7 +1058,7 @@ fn title_bar(app: &JockeyApp) -> Line<'static> {
     let spin = SPINNER[((app.tick / 3) % SPINNER.len() as u64) as usize];
     let mut spans = vec![
         Span::styled(
-            " ⚡ Jev Jockey ",
+            " ⚡ Jev Jockey · AiWrangler ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
@@ -1183,11 +1188,11 @@ fn render_intake(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
             Style::default(),
         )),
         Line::from(Span::styled(
-            "A local model grinds every step — Jev approves each action before it",
+            "A local model grinds every step — deterministic guards intercept",
             Style::default(),
         )),
         Line::from(Span::styled(
-            "touches disk — deterministic verification gates every step.",
+            "each action, and AiWrangler gates every completed step.",
             Style::default(),
         )),
         Line::from(""),
@@ -1260,12 +1265,12 @@ fn render_intake(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
         &app.config.jockey.frontier_provider,
     ) {
         (Some(w), Some(fr)) => format!(
-            "worker {w} · frontier {fr} · jev {}",
-            if crate::jev::JevClient::from_env().unavailable().is_none() {
-                "ready"
-            } else {
-                "UNAVAILABLE (writes blocked)"
-            }
+            "worker {w} · frontier {fr} · gates: {}",
+            app.config
+                .jockey
+                .wrangler_command
+                .as_deref()
+                .unwrap_or(crate::config::default_wrangler_command())
         ),
         (Some(w), None) => {
             format!("worker {w} · frontier NONE — set one in Ctrl+G to plan")
@@ -1503,7 +1508,7 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
     }
     if let Some(l) = &app.ledger {
         let worker_tok = l.worker_prompt_tokens + l.worker_completion_tokens;
-        let jev_tok = l.jev_input_tokens + l.jev_output_tokens;
+        let wrangler_tok = l.wrangler_input_tokens + l.wrangler_output_tokens;
         let frontier_tok =
             l.frontier_prompt_tokens + l.frontier_completion_tokens;
         telemetry.push(Line::from("".to_string()));
@@ -1515,7 +1520,11 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
             ),
             Span::styled(" · ", Style::default().fg(Color::DarkGray)),
             Span::styled(
-                format!("jev {} ({} calls)", fmt_tokens(jev_tok), l.jev_calls),
+                format!(
+                    "aiwrangler {} ({} calls)",
+                    fmt_tokens(wrangler_tok),
+                    l.wrangler_calls
+                ),
                 Style::default().fg(Color::Cyan),
             ),
             Span::styled(" · ", Style::default().fg(Color::DarkGray)),
@@ -1546,10 +1555,10 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
             ])
             .split(right[0]);
         let worker_tok = l.worker_prompt_tokens + l.worker_completion_tokens;
-        let jev_tok = l.jev_input_tokens + l.jev_output_tokens;
+        let wrangler_tok = l.wrangler_input_tokens + l.wrangler_output_tokens;
         let frontier_tok =
             l.frontier_prompt_tokens + l.frontier_completion_tokens;
-        let total_tok = (worker_tok + jev_tok + frontier_tok).max(1);
+        let total_tok = (worker_tok + wrangler_tok + frontier_tok).max(1);
         let gauges = [
             (
                 "local",
@@ -1558,10 +1567,14 @@ fn render_grind(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
                 fmt_tokens(worker_tok),
             ),
             (
-                "jev",
-                jev_tok as f64 / total_tok as f64,
+                "gates",
+                wrangler_tok as f64 / total_tok as f64,
                 Color::Cyan,
-                format!("{} · {} calls", fmt_tokens(jev_tok), l.jev_calls),
+                format!(
+                    "{} · {} calls",
+                    fmt_tokens(wrangler_tok),
+                    l.wrangler_calls
+                ),
             ),
             (
                 "frontier",
@@ -1673,15 +1686,14 @@ fn render_done(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
 
     if let Some(l) = &app.ledger {
         let worker_tok = l.worker_prompt_tokens + l.worker_completion_tokens;
-        let jev_tok = l.jev_input_tokens + l.jev_output_tokens;
+        let wrangler_tok = l.wrangler_input_tokens + l.wrangler_output_tokens;
         let frontier_tok =
             l.frontier_prompt_tokens + l.frontier_completion_tokens;
         let worker_calls = l.worker_calls.to_string();
-        let jev_calls =
-            format!("{} (+{} cached)", l.jev_calls, l.jev_cache_hits);
+        let wrangler_calls = l.wrangler_calls.to_string();
         let frontier_calls = l.frontier_calls.to_string();
         let worker_tok_s = fmt_tokens(worker_tok);
-        let jev_tok_s = fmt_tokens(jev_tok);
+        let wrangler_tok_s = fmt_tokens(wrangler_tok);
         let frontier_tok_s = fmt_tokens(frontier_tok);
         let table = Table::new(
             [
@@ -1695,7 +1707,11 @@ fn render_done(f: &mut ratatui::Frame, app: &mut JockeyApp, area: Rect) {
                     worker_calls.as_str(),
                     worker_tok_s.as_str(),
                 ]),
-                Row::new(vec!["jev", jev_calls.as_str(), jev_tok_s.as_str()]),
+                Row::new(vec![
+                    "gates",
+                    wrangler_calls.as_str(),
+                    wrangler_tok_s.as_str(),
+                ]),
                 Row::new(vec![
                     "frontier",
                     frontier_calls.as_str(),

@@ -1,27 +1,27 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde_json::json;
 
 use crate::api::client::ApiClient;
 use crate::config::AppConfig;
-use crate::jev::client::JevClient;
 use crate::jockey::JockeyEvent;
 use crate::jockey::dag::TaskDag;
 use crate::jockey::driver::{Governor, RunOutcome, RunState};
 use crate::jockey::planner::{FrontierPlanner, PlanOutcome, PlanResponse};
 use crate::jockey::worker::Worker;
 use crate::sandbox::git::GitSandbox;
+use crate::wrangler::ensure_gate_config;
 
 #[derive(Clone)]
 pub struct Roles {
     pub worker: (ApiClient, String),
     pub frontier: Option<(ApiClient, String)>,
-    pub jev: JevClient,
+    /// AiWrangler launch command (argv in one string).
+    pub wrangler_command: String,
 }
 
-/// Resolves worker/frontier provider roles and the Jev client from config
-/// + environment. Fails fast with actionable errors.
+/// Resolves worker/frontier provider roles and the AiWrangler launch
+/// command from config + environment. Fails fast with actionable errors.
 pub fn resolve_roles(config: &AppConfig) -> Result<Roles> {
     let worker_cfg = match &config.jockey.worker_provider {
         Some(name) => config.provider_by_name(name).ok_or_else(|| {
@@ -52,19 +52,30 @@ pub fn resolve_roles(config: &AppConfig) -> Result<Roles> {
         None => None,
     };
 
-    let jev = JevClient::from_env();
-    if let Some(reason) = jev.unavailable() {
-        eprintln!(
-            "warn: jev semantic gate unavailable ({reason:?}); autonomous writes will be \
-blocked unless allow_degraded is set"
-        );
-    }
+    let wrangler_command =
+        config.jockey.wrangler_command.clone().unwrap_or_else(|| {
+            crate::config::default_wrangler_command().to_string()
+        });
 
     Ok(Roles {
         worker,
         frontier,
-        jev,
+        wrangler_command,
     })
+}
+
+/// Spawns the AiWrangler MCP server and reports its config as a health
+/// check (used by `seekr doctor` and startup warnings).
+pub async fn wrangler_health(
+    command: &str,
+) -> Result<String, crate::wrangler::WranglerError> {
+    let mut client = crate::wrangler::WranglerClient::new(
+        command,
+        std::path::PathBuf::from("."),
+        std::time::Duration::from_secs(15),
+    );
+    client.connect().await?;
+    client.config_report().await
 }
 
 /// Reasoning-effort for worker calls: env override beats config default.
@@ -177,7 +188,6 @@ pub async fn run_headless(
         config,
         worker,
         roles.frontier.clone(),
-        roles.jev.clone(),
         sandbox,
         goal.to_string(),
         dag,
@@ -220,7 +230,6 @@ pub async fn run_headless_json(
         config,
         worker,
         roles.frontier.clone(),
-        roles.jev.clone(),
         sandbox,
         goal.to_string(),
         dag,
@@ -259,17 +268,8 @@ pub fn print_event(event: &JockeyEvent) {
             println!("▶ step {step_id} (attempt {attempt})")
         }
         ActionProposed { tool, brief, .. } => println!("  … {tool}: {brief}"),
-        ActionApproved {
-            tool,
-            scope_p,
-            novelty,
-        } => {
-            let extra = match (scope_p, novelty) {
-                (Some(s), Some(n)) => format!(" [scope {s:.2} novelty {n:.1}]"),
-                (Some(s), None) => format!(" [scope {s:.2}]"),
-                _ => String::new(),
-            };
-            println!("  ✓ {tool} approved{extra}");
+        ActionApproved { tool } => {
+            println!("  ✓ {tool} approved");
         }
         ActionRejected { tool, reason } => {
             println!("  ✗ {tool} rejected: {reason}")
@@ -294,6 +294,13 @@ pub fn print_event(event: &JockeyEvent) {
         VerificationFailed { step_id, output } => {
             println!("  ✗ [{step_id}] verification failed:");
             println!("    {}", first_lines(output, 6));
+        }
+        WranglerGate {
+            gate,
+            action,
+            brief,
+        } => {
+            println!("  🛡 aiwrangler [{gate}] {action}: {brief}");
         }
         RolledBack { step_id, to_commit } => {
             println!("  ↺ [{step_id}] rolled back to {to_commit}")
@@ -344,11 +351,10 @@ pub fn print_summary(state: &RunState) {
         state.ledger.worker_completion_tokens
     );
     println!(
-        "jev    : {} calls (+{} cached), {} in + {} out tokens",
-        state.ledger.jev_calls,
-        state.ledger.jev_cache_hits,
-        state.ledger.jev_input_tokens,
-        state.ledger.jev_output_tokens
+        "wrangler: {} check gates, {} in + {} out judgment tokens",
+        state.ledger.wrangler_calls,
+        state.ledger.wrangler_input_tokens,
+        state.ledger.wrangler_output_tokens
     );
     println!(
         "frontier: {} calls, {} prompt + {} completion tokens",
@@ -445,6 +451,57 @@ pub async fn clean_run(run_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// `seekr ack <run_id>`: inspect pending AiWrangler human-severity
+/// findings for a run, and — after the owner has reviewed and approved
+/// them — record the acknowledgment so the next check passes them for
+/// that exact diff.
+pub async fn ack_run(
+    run_id: &str,
+    rules: &[String],
+    note: Option<&str>,
+) -> Result<()> {
+    let state = RunState::load(run_id).context("run not found")?;
+    let config = AppConfig::load().context("config load failed")?;
+    let command = config.jockey.wrangler_command.unwrap_or_else(|| {
+        crate::config::default_wrangler_command().to_string()
+    });
+    let state_dir = RunState::state_dir(run_id)
+        .ok_or_else(|| anyhow::anyhow!("cannot determine state directory"))?;
+    ensure_gate_config(&state.worktree, &state_dir)
+        .context("bootstrap gate config")?;
+    let mut client = crate::wrangler::WranglerClient::new(
+        &command,
+        &state.worktree,
+        std::time::Duration::from_secs(config.jockey.wrangler_timeout_secs),
+    );
+    client.connect().await.context("spawn aiwrangler-mcp")?;
+
+    if rules.is_empty() {
+        let pending = client
+            .pending_ack()
+            .await
+            .context("listing pending human findings")?;
+        println!("{pending}");
+        if !pending.contains("no pending") && !pending.trim().is_empty() {
+            println!(
+                "\nafter reviewing, acknowledge with:\n  seekr ack {run_id} \
+--rules RULE-10,RULE-11 --note \"what you approved and why\""
+            );
+        }
+    } else {
+        let report = client
+            .ack(rules, note)
+            .await
+            .context("recording acknowledgment")?;
+        println!("{report}");
+        println!(
+            "\nre-run or resume the step: seekr resume {run_id} (the \
+acknowledged findings will pass for that exact diff)"
+        );
+    }
+    Ok(())
+}
+
 /// Sanity checks with actionable output (replaces the old doctor).
 pub async fn doctor() -> Result<()> {
     println!("seekr {}\n", env!("CARGO_PKG_VERSION"));
@@ -467,26 +524,22 @@ pub async fn doctor() -> Result<()> {
         ),
     }
 
-    let jev = JevClient::from_env();
-    match jev.unavailable() {
-        None => {
-            let set = crate::jev::QuestionSet::new().add(
-                "health",
-                crate::jev::noul(
-                    crate::jev::instructions("Is 1+1=2?", "arithmetic"),
-                    None,
-                    None,
-                ),
-            );
-            match jev.ask(&json!({"probe": "doctor"}), &set).await {
-                Ok(r) => println!("jev         : ok (model {})", r.model),
-                Err(e) => {
-                    println!("jev         : KEY SET BUT CALL FAILED: {e}")
-                }
-            }
+    let wrangler_cmd =
+        config.jockey.wrangler_command.clone().unwrap_or_else(|| {
+            crate::config::default_wrangler_command().to_string()
+        });
+    match wrangler_health(&wrangler_cmd).await {
+        Ok(report) => {
+            let model = report
+                .lines()
+                .find(|l| l.starts_with("model:"))
+                .map(|l| format!(" ({})", l.trim()))
+                .unwrap_or_default();
+            println!("aiwrangler  : ok{model} [{wrangler_cmd}]");
         }
-        Some(reason) => println!(
-            "jev         : unavailable ({reason:?}) — writes will be blocked"
+        Err(e) => println!(
+            "aiwrangler  : UNREACHABLE ({e}) — install AiWrangler and ensure \
+`{wrangler_cmd}` runs, or set [jj] wrangler_command; gates will fail closed"
         ),
     }
 

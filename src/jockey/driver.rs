@@ -7,11 +7,8 @@ use tokio::sync::mpsc;
 
 use crate::api::client::ApiClient;
 use crate::config::AppConfig;
-use crate::jev::JevClient;
 use crate::jockey::dag::{DagStep, StepStatus, TaskDag};
-use crate::jockey::interceptor::{
-    AttemptRecord, InterceptVerdict, Interceptor,
-};
+use crate::jockey::interceptor::{self, AttemptRecord, InterceptVerdict};
 use crate::jockey::ledger::{CostLedger, EventLog, JockeyEvent};
 use crate::jockey::worker::{
     TOOL_EDIT_FILE, TOOL_FINISH_STEP, TOOL_READ_FILE, TOOL_RUN_COMMAND,
@@ -20,6 +17,9 @@ use crate::jockey::worker::{
 use crate::sandbox::git::GitSandbox;
 use crate::sandbox::paths::PathSandbox;
 use crate::sandbox::run_command;
+use crate::wrangler::{
+    CheckAction, PlanAction, WranglerClient, ensure_gate_config,
+};
 
 const MAX_ACTIONS_PER_ATTEMPT: usize = 16;
 const MAX_REJECTIONS_PER_ATTEMPT: usize = 6;
@@ -110,13 +110,15 @@ pub enum RunOutcome {
     Failed(String),
 }
 
-/// The autonomous governor: drives the DAG through the 4-tier loop
-/// (worker -> interceptor -> deterministic gate -> triage/escalation).
+/// The autonomous governor: drives the DAG through the loop
+/// (worker -> deterministic interceptor -> verification + AiWrangler
+/// gates -> triage/escalation).
 pub struct Governor {
     pub state: RunState,
     worker: Worker,
     frontier: Option<(ApiClient, String)>,
-    interceptor: Interceptor,
+    wrangler: WranglerClient,
+    ground_truth: Option<String>,
     sandbox: GitSandbox,
     jj: crate::config::JockeyConfig,
     shell_blocklist: Vec<String>,
@@ -133,7 +135,6 @@ impl Governor {
         config: &AppConfig,
         worker: Worker,
         frontier: Option<(ApiClient, String)>,
-        jev: JevClient,
         sandbox: GitSandbox,
         goal: String,
         dag: TaskDag,
@@ -144,6 +145,19 @@ impl Governor {
         })?;
         let event_log = EventLog::create(&state_dir)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        // The worktree must have a discoverable AiWrangler config before
+        // any gate runs; generated ones keep their ledger in the state dir.
+        let origin = ensure_gate_config(sandbox.worktree(), &state_dir)?;
+        let wrangler = WranglerClient::new(
+            config
+                .jockey
+                .wrangler_command
+                .as_deref()
+                .unwrap_or(crate::config::default_wrangler_command()),
+            sandbox.worktree(),
+            std::time::Duration::from_secs(config.jockey.wrangler_timeout_secs),
+        );
+        let _ = origin;
         let state = RunState {
             run_id: run_id.clone(),
             goal,
@@ -160,7 +174,8 @@ impl Governor {
             state,
             worker,
             frontier,
-            interceptor: Interceptor::new(jev, &config.jockey),
+            wrangler,
+            ground_truth: None,
             sandbox,
             jj: config.jockey.clone(),
             shell_blocklist: config.agent.shell_blocklist.clone(),
@@ -178,7 +193,6 @@ impl Governor {
         config: &AppConfig,
         worker: Worker,
         frontier: Option<(ApiClient, String)>,
-        jev: JevClient,
         sandbox: GitSandbox,
         mut state: RunState,
     ) -> Result<Self, GovernorError> {
@@ -188,12 +202,23 @@ impl Governor {
             })?;
         let event_log = EventLog::create(&state_dir)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let _ = ensure_gate_config(&state.worktree, &state_dir)?;
+        let wrangler = WranglerClient::new(
+            config
+                .jockey
+                .wrangler_command
+                .as_deref()
+                .unwrap_or(crate::config::default_wrangler_command()),
+            &state.worktree,
+            std::time::Duration::from_secs(config.jockey.wrangler_timeout_secs),
+        );
         state.status = "running".to_string();
         Ok(Self {
             state,
             worker,
             frontier,
-            interceptor: Interceptor::new(jev, &config.jockey),
+            wrangler,
+            ground_truth: None,
             sandbox,
             jj: config.jockey.clone(),
             shell_blocklist: config.agent.shell_blocklist.clone(),
@@ -231,6 +256,12 @@ impl Governor {
         self.emit(JockeyEvent::PlanReady {
             summary: self.state.dag.render_summary(),
         });
+
+        // Phase 0 gate: AiWrangler judges the goal+DAG against ground
+        // truth before any code is written.
+        if let Some(outcome) = self.plan_gate().await? {
+            return Ok(outcome);
+        }
 
         loop {
             let ready: Vec<String> = self
@@ -285,6 +316,88 @@ impl Governor {
             RunOutcome::Failed(reason)
         };
         Ok(outcome)
+    }
+
+    /// Pre-flight AiWrangler plan gate. Returns `Some(outcome)` when the
+    /// run must stop before any work, `None` to proceed. On Pass, the
+    /// report's ground-truth context pack is captured for every worker
+    /// prompt.
+    async fn plan_gate(&mut self) -> Result<Option<RunOutcome>, GovernorError> {
+        let plan =
+            serde_json::to_string(&self.state.dag.steps).unwrap_or_default();
+        let verdict = self
+            .wrangler
+            .plan(&self.state.goal, Some(truncate_str(&plan, 6000)))
+            .await;
+        self.state.ledger.add_wrangler(None);
+        self.emit(JockeyEvent::WranglerGate {
+            gate: "plan".to_string(),
+            action: format!("{:?}", verdict.action),
+            brief: truncate_str(verdict.raw.lines().next().unwrap_or(""), 200)
+                .to_string(),
+        });
+
+        match verdict.action {
+            PlanAction::Pass => {
+                // Keep the context pack (ground truth the worker must
+                // honor); drop the verdict lines to stay bounded.
+                let pack = verdict
+                    .raw
+                    .split_once("context pack:")
+                    .map(|(_, p)| p.trim().to_string())
+                    .filter(|p| !p.is_empty());
+                self.ground_truth =
+                    pack.map(|p| truncate_str(&p, 8000).to_string());
+                Ok(None)
+            }
+            PlanAction::Clarify => Ok(Some(self.stop_run(
+                "needs_input",
+                format!(
+                    "aiwrangler plan gate: CLARIFY — resolve before coding:\n{}",
+                    truncate_str(&verdict.raw, 2000)
+                ),
+            ))),
+            PlanAction::Human => Ok(Some(self.stop_run(
+                "needs_owner",
+                format!(
+                    "aiwrangler plan gate: HUMAN — owner decision required:\n{}",
+                    truncate_str(&verdict.raw, 2000)
+                ),
+            ))),
+            PlanAction::Inactive | PlanAction::Unreachable => {
+                if self.jj.allow_degraded {
+                    self.emit(JockeyEvent::WranglerGate {
+                        gate: "plan".to_string(),
+                        action: "degraded-pass".to_string(),
+                        brief: "gate unavailable; allow_degraded is set, \
+continuing without ground truth"
+                            .to_string(),
+                    });
+                    Ok(None)
+                } else {
+                    Ok(Some(self.stop_run(
+                        "failed",
+                        format!(
+                            "aiwrangler plan gate unavailable (fail-closed); \
+set --allow-degraded to run without it:\n{}",
+                            truncate_str(&verdict.raw, 1000)
+                        ),
+                    )))
+                }
+            }
+        }
+    }
+
+    /// Marks the run stopped with a terminal status and returns the
+    /// failure outcome.
+    fn stop_run(&mut self, status: &str, reason: String) -> RunOutcome {
+        self.state.status = status.to_string();
+        self.state.save().ok();
+        self.emit(JockeyEvent::RunFailed {
+            reason: reason.clone(),
+            ledger: self.state.ledger.clone(),
+        });
+        RunOutcome::Failed(reason)
     }
 
     async fn run_step(
@@ -384,6 +497,12 @@ impl Governor {
 
             let mut context: Vec<String> =
                 self.extra_context.remove(step_id).unwrap_or_default();
+            if let Some(pack) = &self.ground_truth {
+                context.push(format!(
+                    "GROUND TRUTH (AiWrangler context pack — honor while \
+implementing):\n{pack}"
+                ));
+            }
             if let Some(err) = &last_error {
                 context
                     .push(format!("LAST ATTEMPT FAILED verification:\n{err}"));
@@ -408,6 +527,17 @@ impl Governor {
             match outcome {
                 AttemptOutcome::Verified => {
                     return Ok(true);
+                }
+                AttemptOutcome::NeedsOwner(reason) => {
+                    self.emit(JockeyEvent::StepFailed {
+                        step_id: step_id.to_string(),
+                        reason: format!(
+                            "{reason}\nOwner action required: review the \
+findings above, then `seekr ack {}` (or re-run with a refined goal).",
+                            self.state.run_id
+                        ),
+                    });
+                    return Ok(false);
                 }
                 AttemptOutcome::VerificationFailed(output) => {
                     self.attempts
@@ -539,7 +669,14 @@ impl Governor {
                     live_context.push(
                         "GOVERNOR: action cap reached with unverified changes — running verification automatically.".to_string(),
                     );
-                    return (self.verify(step_id).await, records);
+                    return (
+                        self.verify(
+                            step_id,
+                            Some("governor auto-finish at action cap"),
+                        )
+                        .await,
+                        records,
+                    );
                 }
                 return (
                     AttemptOutcome::NoAction(format!(
@@ -611,7 +748,16 @@ impl Governor {
                 let action =
                     relativize_action(raw_action, &self.state.worktree);
                 if action.tool == TOOL_FINISH_STEP {
-                    return (self.verify(step_id).await, records);
+                    let summary = action
+                        .args
+                        .get("summary")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("(no summary)")
+                        .to_string();
+                    return (
+                        self.verify(step_id, Some(&summary)).await,
+                        records,
+                    );
                 }
 
                 let brief = crate::jockey::interceptor::action_brief(&action);
@@ -703,45 +849,13 @@ impl Governor {
                 let failed =
                     self.attempts.get(step_id).cloned().unwrap_or_default();
                 let deterministic = self.deterministic_check(&action, sandbox);
-                let step_view = self.step_view(step_id);
-                let review = match (
-                    &action.tool,
-                    action
-                        .args
-                        .get("command")
-                        .and_then(|c| c.as_str())
-                        .map(crate::sandbox::exec::is_readonly_command),
-                ) {
-                    (t, Some(true))
-                        if t == TOOL_RUN_COMMAND && deterministic.is_none() =>
-                    {
-                        crate::jockey::interceptor::Review {
-                            verdict: InterceptVerdict::Approved {
-                                scope_p: None,
-                                novelty: None,
-                            },
-                            jev_usage: None,
-                        }
-                    }
-                    _ => {
-                        self.interceptor
-                            .review(&action, &step_view, &failed, deterministic)
-                            .await
-                    }
-                };
-                if let Some(usage) = &review.jev_usage {
-                    self.state.ledger.add_jev_usage(false, usage);
-                    self.emit(JockeyEvent::Usage {
-                        ledger: self.state.ledger.clone(),
-                    });
-                }
+                let verdict =
+                    interceptor::review(&action, &failed, deterministic);
 
-                match review.verdict {
-                    InterceptVerdict::Approved { scope_p, novelty } => {
+                match verdict {
+                    InterceptVerdict::Approved => {
                         self.emit(JockeyEvent::ActionApproved {
                             tool: action.tool.clone(),
-                            scope_p,
-                            novelty,
                         });
                         let is_mutating = match action.tool.as_str() {
                             TOOL_WRITE_FILE | TOOL_EDIT_FILE => true,
@@ -784,7 +898,9 @@ impl Governor {
                         if is_mutating && ok {
                             records.push(AttemptRecord {
                                 fingerprint:
-                                    crate::jockey::interceptor::Interceptor::fingerprint(&action),
+                                    crate::jockey::interceptor::fingerprint(
+                                        &action,
+                                    ),
                                 brief,
                             });
                         }
@@ -808,7 +924,10 @@ impl Governor {
                             crate::jockey::interceptor::action_brief(&action),
                             reason
                         );
-                        if reason.contains("out of scope") {
+                        if reason.contains("out of scope")
+                            || reason.contains("allowed_paths")
+                            || reason.contains("outside")
+                        {
                             guidance.push_str(&format!(
                                 "\nThat work seems to belong to a DIFFERENT step of the plan. Do ONLY this step's invariants: {}\nRe-propose a SMALLER edit focused on this step — do not stop making changes.",
                                 invariants.join(" | ")
@@ -957,105 +1076,165 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
         tool_ctx.execute(action).await
     }
 
-    async fn verify(&mut self, step_id: &str) -> AttemptOutcome {
-        let command = self
-            .state
-            .dag
-            .step(step_id)
-            .and_then(|s| s.verification_command.clone());
-        let Some(command) = command else {
-            return AttemptOutcome::Verified;
+    /// Step completion gate: the deterministic verification command (if
+    /// planned), then AiWrangler's `wrangler_check` battery over the dirty
+    /// worktree (scope discipline, claims vs diff, injection defense,
+    /// test quality). PASS checkpoints; FIX REQUIRED feeds cited findings
+    /// back as the next attempt's error; HUMAN REVIEW parks the step for
+    /// the owner; DEGRADED/unreachable fail closed unless allow_degraded.
+    async fn verify(
+        &mut self,
+        step_id: &str,
+        finish_summary: Option<&str>,
+    ) -> AttemptOutcome {
+        let step = self.state.dag.step(step_id);
+        let (command, description, invariants) = match step {
+            Some(s) => (
+                s.verification_command.clone(),
+                s.description.clone(),
+                s.invariants.clone(),
+            ),
+            None => (None, String::new(), vec![]),
         };
-        self.emit(JockeyEvent::VerificationStarted {
-            step_id: step_id.to_string(),
-            command: command.clone(),
-        });
-        let start = std::time::Instant::now();
-        let outcome = run_command(
-            &self.state.worktree,
-            &command,
-            self.jj.verification_timeout_secs,
-            &self.shell_blocklist,
-        )
-        .await
-        .unwrap_or_else(|e| crate::sandbox::CommandOutcome {
-            success: false,
-            exit_code: None,
-            timed_out: false,
-            stdout: String::new(),
-            stderr: format!("spawn failed: {e}"),
-        });
 
-        if outcome.success {
+        let mut tool_output = String::new();
+        if let Some(command) = &command {
+            self.emit(JockeyEvent::VerificationStarted {
+                step_id: step_id.to_string(),
+                command: command.clone(),
+            });
+            let start = std::time::Instant::now();
+            let outcome = run_command(
+                &self.state.worktree,
+                command,
+                self.jj.verification_timeout_secs,
+                &self.shell_blocklist,
+            )
+            .await
+            .unwrap_or_else(|e| crate::sandbox::CommandOutcome {
+                success: false,
+                exit_code: None,
+                timed_out: false,
+                stdout: String::new(),
+                stderr: format!("spawn failed: {e}"),
+            });
+
+            if !outcome.success {
+                let output = outcome.combined();
+                self.emit(JockeyEvent::VerificationFailed {
+                    step_id: step_id.to_string(),
+                    output: truncate_str(&output, 2000).to_string(),
+                });
+                return AttemptOutcome::VerificationFailed(output);
+            }
+            tool_output = truncate_str(&outcome.combined(), 4000).to_string();
             self.emit(JockeyEvent::VerificationPassed {
                 step_id: step_id.to_string(),
                 commit: String::new(),
                 duration_secs: start.elapsed().as_secs_f64(),
             });
-            AttemptOutcome::Verified
-        } else {
-            let output = outcome.combined();
-            self.emit(JockeyEvent::VerificationFailed {
-                step_id: step_id.to_string(),
-                output: truncate_str(&output, 2000).to_string(),
-            });
-            AttemptOutcome::VerificationFailed(output)
+        }
+
+        // AiWrangler check gate over the dirty worktree.
+        let task = format!(
+            "step {step_id}: {description}\ninvariants: {}",
+            invariants.join(" | ")
+        );
+        let verdict = self
+            .wrangler
+            .check(
+                Some(&task),
+                finish_summary,
+                (!tool_output.is_empty()).then_some(tool_output.as_str()),
+            )
+            .await;
+        self.state.ledger.add_wrangler(verdict.usage);
+        self.emit(JockeyEvent::Usage {
+            ledger: self.state.ledger.clone(),
+        });
+        self.emit(JockeyEvent::WranglerGate {
+            gate: "check".to_string(),
+            action: format!("{:?}", verdict.action),
+            brief: truncate_str(verdict.raw.lines().next().unwrap_or(""), 200)
+                .to_string(),
+        });
+
+        let findings = excerpt_findings(&verdict.raw);
+        match verdict.action {
+            CheckAction::Pass => AttemptOutcome::Verified,
+            CheckAction::FixRequired => AttemptOutcome::VerificationFailed(
+                format_wrangler_failure("fix required", &verdict, &findings),
+            ),
+            CheckAction::HumanReview => {
+                AttemptOutcome::NeedsOwner(format_wrangler_failure(
+                    "human review required",
+                    &verdict,
+                    &findings,
+                ))
+            }
+            CheckAction::Degraded => {
+                if findings.is_empty() {
+                    if self.jj.allow_degraded {
+                        AttemptOutcome::Verified
+                    } else {
+                        AttemptOutcome::VerificationFailed(
+                            format_wrangler_failure(
+                                "semantic gate degraded",
+                                &verdict,
+                                "",
+                            ),
+                        )
+                    }
+                } else {
+                    // Deterministic findings still block even degraded.
+                    AttemptOutcome::VerificationFailed(format_wrangler_failure(
+                        "fix required (degraded)",
+                        &verdict,
+                        &findings,
+                    ))
+                }
+            }
+            CheckAction::Inactive | CheckAction::Unreachable => {
+                if self.jj.allow_degraded {
+                    AttemptOutcome::Verified
+                } else {
+                    AttemptOutcome::VerificationFailed(format!(
+                        "AiWrangler check gate unavailable — failing closed. \
+Set --allow-degraded to accept deterministic-only verification.\n{}",
+                        truncate_str(&verdict.raw, 1000)
+                    ))
+                }
+            }
         }
     }
 
+    /// Triage of a failed attempt. The old Jev choice call is gone;
+    /// classification is deterministic: an error that points at a file
+    /// the worker hasn't seen → inject it (read_context); AiWrangler's
+    /// open circuit breaker (same findings cycling) or a hopeless repeat
+    /// → deadlock → frontier escalation; anything else retries with the
+    /// failure output inline (syntax_fix).
     async fn triage(
         &mut self,
         step_id: &str,
-        description: &str,
-        invariants: &[String],
+        _description: &str,
+        _invariants: &[String],
         error: &Option<String>,
     ) -> TriageVerdict {
-        let state = json!({
-            "step": { "id": step_id, "description": description, "invariants": invariants },
-            "verification_failure": truncate_str(error.as_deref().unwrap_or(""), 4000),
+        let error_text = error.as_deref().unwrap_or("");
+        let verdict = if error_text.contains("CIRCUIT BREAKER OPEN") {
+            TriageVerdict::Deadlock
+        } else if self.read_context_for_error(error).is_some() {
+            TriageVerdict::ReadContext
+        } else {
+            TriageVerdict::SyntaxFix
+        };
+        self.emit(JockeyEvent::Triage {
+            step_id: step_id.to_string(),
+            verdict: format!("{verdict:?}").to_lowercase(),
+            confidence: 1.0,
         });
-        let mut criteria = std::collections::BTreeMap::new();
-        criteria.insert("syntax_fix".to_string(), json!("A concrete compiler, linter, or test error whose fix is mechanical and visible in the failure output"));
-        criteria.insert("read_context".to_string(), json!("The failure implies the worker lacks necessary context about existing code (wrong API use, missing import, misunderstanding of a file)"));
-        criteria.insert("deadlock".to_string(), json!("The step's approach cannot succeed without changing strategy or the plan itself; local retries will repeat the failure"));
-
-        let set = crate::jev::QuestionSet::new().add(
-            "triage",
-            crate::jev::choice(
-                crate::jev::instructions(
-                    "Classify the single root cause of `verification_failure` for `step`.",
-                    "Choose the action that best unblocks the local worker's NEXT attempt.",
-                ),
-                criteria,
-            ),
-        );
-        match self.interceptor.jev_client().ask(&state, &set).await {
-            Ok(result) => {
-                self.state.ledger.add_jev(&result);
-                if let Some(ans) = result.answers.get("triage")
-                    && let Some((choice, confidence)) = ans.as_choice()
-                {
-                    self.emit(JockeyEvent::Triage {
-                        step_id: step_id.to_string(),
-                        verdict: choice.to_string(),
-                        confidence,
-                    });
-                    return match choice {
-                        "read_context" => TriageVerdict::ReadContext,
-                        "deadlock" => TriageVerdict::Deadlock,
-                        _ => TriageVerdict::SyntaxFix,
-                    };
-                }
-                TriageVerdict::SyntaxFix
-            }
-            Err(_) => {
-                if self.jj.allow_degraded {
-                    TriageVerdict::SyntaxFix
-                } else {
-                    TriageVerdict::Deadlock
-                }
-            }
-        }
+        verdict
     }
 
     fn read_context_for_error(&self, error: &Option<String>) -> Option<String> {
@@ -1220,7 +1399,11 @@ Never restate the problem; fix or direct. Keep it minimal.\n";
                     match self.sandbox.apply_patch(&patch).await {
                         Ok(()) => {
                             if matches!(
-                                self.verify(step_id).await,
+                                self.verify(
+                                    step_id,
+                                    Some("frontier escalation patch"),
+                                )
+                                .await,
                                 AttemptOutcome::Verified
                             ) {
                                 return Ok(EscalationOutcome::PatchVerified);
@@ -1264,6 +1447,9 @@ enum AttemptOutcome {
     Verified,
     VerificationFailed(String),
     NoAction(String),
+    /// AiWrangler returned HUMAN REVIEW: the step parks until the owner
+    /// runs `seekr ack <run-id>`; no further local attempts.
+    NeedsOwner(String),
 }
 
 enum EscalationOutcome {
@@ -1279,8 +1465,62 @@ enum TriageVerdict {
     Deadlock,
 }
 
+/// Extracts the actionable findings sections from a wrangler check
+/// report (deterministic + semantic), skipping verdict/usage noise.
+fn excerpt_findings(report: &str) -> String {
+    let mut out: Vec<&str> = Vec::new();
+    let mut in_findings = false;
+    for line in report.lines() {
+        let t = line.trim();
+        if t.starts_with("deterministic findings:")
+            || t.starts_with("semantic findings:")
+        {
+            in_findings = true;
+            continue;
+        }
+        if in_findings {
+            if t.is_empty() {
+                // A blank line ends the block unless another findings
+                // section follows; handled by the next non-empty check.
+                out.push("");
+                continue;
+            }
+            if t.ends_with(':') && !t.starts_with("  ") && !t.starts_with("- ")
+            {
+                // Next section header (e.g. "routing reasons:", "context
+                // pack:") ends the excerpt.
+                break;
+            }
+            out.push(line);
+        }
+    }
+    while out.last().is_some_and(|l| l.trim().is_empty()) {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+/// Formats a wrangler check failure for the worker's next attempt.
+fn format_wrangler_failure(
+    label: &str,
+    verdict: &crate::wrangler::CheckVerdict,
+    findings: &str,
+) -> String {
+    let mut out = format!(
+        "AIWRANGLER CHECK: {label}\n{}",
+        truncate_str(&verdict.raw, 1500)
+    );
+    if !findings.is_empty() {
+        out.push_str(&format!(
+            "\n\nCITED FINDINGS (fix every one, then finish_step again):\n{}",
+            truncate_str(findings, 3000)
+        ));
+    }
+    out
+}
+
 /// Rewrites absolute worktree-rooted paths in action arguments to
-/// workspace-relative form, keeping fingerprints and Jev state canonical.
+/// workspace-relative form, keeping fingerprints canonical.
 fn relativize_action(mut action: WorkerAction, root: &Path) -> WorkerAction {
     let prefix = format!("{}/", root.display());
     let relative = action

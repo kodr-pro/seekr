@@ -31,12 +31,20 @@
           "href": "/ui"
         },
         {
-          "title": "The Agent Loop",
+          "title": "The Governor Loop",
           "href": "/agent"
         },
         {
-          "title": "Model Context Protocol",
+          "title": "AiWrangler Integration",
           "href": "/mcp"
+        },
+        {
+          "title": "Architecture",
+          "href": "/architecture"
+        },
+        {
+          "title": "Live Validation & Probes",
+          "href": "/custom-skills"
         }
       ]
     }
