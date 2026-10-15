@@ -1,0 +1,31 @@
+{
+  "goal": "Implement an append-only write-ahead log with FNV-1a checksums and torn-tail recovery.",
+  "steps": [
+    {
+      "id": "wal_append",
+      "description": "Implement checksum (FNV-1a 32-bit), WalWriter::open (append mode, create if missing), and append with little-endian [checksum][len][payload] framing",
+      "depends_on": [],
+      "invariants": [
+        "checksum matches the FNV-1a reference values for '', 'a', 'foobar'",
+        "append assigns 1-based sequential sequence numbers, continuing across reopen",
+        "empty payloads are valid records",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test --test step1_tests"
+    },
+    {
+      "id": "wal_recovery",
+      "description": "Implement recover: scan records, verify checksums, stop at the first torn or corrupted tail, truncate it in place",
+      "depends_on": ["wal_append"],
+      "invariants": [
+        "all intact records are returned in write order",
+        "a torn (truncated) final record is discarded and the file is truncated so appends continue with the right sequence",
+        "a corrupted final record (checksum mismatch) is discarded",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test"
+    }
+  ]
+}

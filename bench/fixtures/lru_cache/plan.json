@@ -1,0 +1,32 @@
+{
+  "goal": "Implement a bounded LRU cache with O(1) get/put and eviction on overflow.",
+  "steps": [
+    {
+      "id": "lru_core",
+      "description": "Implement LruCache::new, len, is_empty, get, and the insert-or-update path of put (without eviction yet)",
+      "depends_on": [],
+      "invariants": [
+        "new(0) panics",
+        "get returns a copy of the value and reports None for missing keys",
+        "put inserts new keys and updates existing keys without growing len on update",
+        "len and is_empty reflect the current entry count",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test --test step1_tests"
+    },
+    {
+      "id": "lru_eviction",
+      "description": "Implement eviction of the least recently used entry when put would exceed capacity",
+      "depends_on": ["lru_core"],
+      "invariants": [
+        "put evicts the least recently used entry (recency refreshed by both get and put)",
+        "eviction respects access order, not insertion order",
+        "capacity 1 cycles cleanly",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "goal": "Implement RFC 4180-style CSV field parsing with quoting, plus canonical re-encoding.",
+  "steps": [
+    {
+      "id": "csv_parse",
+      "description": "Implement parse_record: comma splitting, quoted fields with doubled quotes, verbatim whitespace, malformed-quote errors",
+      "depends_on": [],
+      "invariants": [
+        "plain fields split on commas; empty line yields one empty field; trailing comma yields a trailing empty field",
+        "quoted fields may contain commas and doubled quotes; unterminated quotes are Err",
+        "unquoted fields keep whitespace verbatim",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test --test step1_tests"
+    },
+    {
+      "id": "csv_encode",
+      "description": "Implement encode_record with canonical quoting that round-trips through parse_record",
+      "depends_on": ["csv_parse"],
+      "invariants": [
+        "fields containing commas or quotes are quoted with doubled inner quotes; plain fields stay bare",
+        "for every field list, parse_record(encode_record(fields)) == fields",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test"
+    }
+  ]
+}
