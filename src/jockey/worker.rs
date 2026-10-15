@@ -19,7 +19,7 @@ pub const TOOL_WEB_FETCH: &str = "web_fetch";
 pub const TOOL_DIAGNOSTICS: &str = "diagnostics";
 pub const TOOL_REPORT: &str = "report";
 
-const CORE_TOOLS: [&str; 9] = [
+const CORE_TOOLS: [&str; 8] = [
     TOOL_READ_FILE,
     TOOL_WRITE_FILE,
     TOOL_EDIT_FILE,
@@ -28,7 +28,6 @@ const CORE_TOOLS: [&str; 9] = [
     TOOL_GREP,
     TOOL_GLOB,
     TOOL_LIST,
-    TOOL_TODO,
 ];
 
 /// One proposed action from the worker (tool name + parsed arguments).
@@ -187,17 +186,6 @@ impl Worker {
                     "timeout_secs": { "type": "integer", "description": "wall-clock budget, default 600" }
                 }),
                 &["command"],
-            ),
-            def(
-                TOOL_TODO,
-                "Track your own subtasks for this step. Set exactly one to in_progress. Replaces your whole list each call.",
-                json!({
-                    "todos": { "type": "array", "items": { "type": "object", "properties": {
-                        "content": { "type": "string" },
-                        "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
-                    }, "required": ["content", "status"] } }
-                }),
-                &["todos"],
             ),
             def(
                 TOOL_FINISH_STEP,
@@ -398,9 +386,8 @@ Hard rules:\n\
 3. Make the smallest change that satisfies the step invariants. Do not refactor, rename, or 'improve' anything else — work belonging to OTHER steps will be rejected.\n\
 4. Search first: use grep/glob to locate code instead of reading whole files. Do not re-read a file you have already seen in this attempt.\n\
 5. run_command is for deterministic checks only (build/test/lint). Never run interactive, network-installing, or destructive commands.\n\
-6. Use todo to plan your subtasks at the start, keep one in_progress, and update as you go.\n\
-7. Call finish_step exactly when you believe every invariant holds. Its summary must state how each invariant is satisfied.\n\
-8. Reply with one or more tool calls. Batch independent read/grep/glob calls together in one reply; mutations one at a time. NEVER reply with prose only.\n",
+6. Call finish_step exactly when you believe every invariant holds. Its summary must state how each invariant is satisfied.\n\
+7. Reply with one or more tool calls. Batch independent read/grep/glob calls together in one reply; mutations one at a time. NEVER reply with prose only.\n",
     );
     if let Some(reason) = repair {
         system.push_str(&format!(
@@ -494,6 +481,10 @@ mod tests {
             assert!(names.contains(&expected), "missing core tool {expected}");
         }
         assert!(!names.contains(&TOOL_SUBAGENT));
+        assert!(
+            !names.contains(&TOOL_TODO),
+            "todo is opt-out: SLMs fixate on it"
+        );
         let extra = vec![TOOL_SUBAGENT.to_string(), TOOL_WEB_FETCH.to_string()];
         let defs = Worker::tool_definitions(&extra);
         assert_eq!(defs.len(), CORE_TOOLS.len() + 2);

@@ -480,14 +480,14 @@ async fn parallel_reads_todo_and_grep_flow() {
     let jev_server = MockServer::start().await;
     isolate_state_dir();
 
-    // turn 1: batched parallel reads + grep in ONE reply, plus a todo update
+    // turn 1: batched parallel reads + grep + list in ONE reply
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "choices": [{"message": {"role": "assistant", "content": "", "tool_calls": [
                 {"id": "c1", "type": "function", "function": {"name": "read_file", "arguments": "{\"path\": \"src/lib.rs\"}"}},
                 {"id": "c2", "type": "function", "function": {"name": "grep", "arguments": "{\"pattern\": \"original\"}"}},
-                {"id": "c3", "type": "function", "function": {"name": "todo", "arguments": "{\"todos\": [{\"content\": \"patch lib.rs\", \"status\": \"in_progress\"}]}"}}]}}],
+                {"id": "c3", "type": "function", "function": {"name": "list", "arguments": "{\"path\": \"src\"}"}}]}}],
             "usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}
         })))
         .up_to_n_times(1_u64)

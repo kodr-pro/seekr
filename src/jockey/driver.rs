@@ -502,6 +502,8 @@ impl Governor {
         let mut live_context: Vec<String> = context.to_vec();
         let mut records: Vec<AttemptRecord> = Vec::new();
         let mut todos: Vec<(String, String)> = Vec::new();
+        let mut todo_calls = 0usize;
+        let mut no_op_strikes = 0usize;
         let mut read_cache: std::collections::HashMap<
             String,
             (usize, u64, std::time::SystemTime),
@@ -531,6 +533,14 @@ impl Governor {
             if actions_done >= MAX_ACTIONS_PER_ATTEMPT
                 || rejections >= MAX_REJECTIONS_PER_ATTEMPT
             {
+                if !records.is_empty() {
+                    // Auto-finish: the worker made real changes but stalled;
+                    // the governor runs the deterministic gate on its behalf.
+                    live_context.push(
+                        "GOVERNOR: action cap reached with unverified changes — running verification automatically.".to_string(),
+                    );
+                    return (self.verify(step_id).await, records);
+                }
                 return (
                     AttemptOutcome::NoAction(format!(
                         "attempt aborted: {} actions done, {} rejections (caps {MAX_ACTIONS_PER_ATTEMPT}/{MAX_REJECTIONS_PER_ATTEMPT})",
@@ -588,8 +598,18 @@ impl Governor {
                 ledger: self.state.ledger.clone(),
             });
 
-            for action in turn.actions {
-                let action = relativize_action(action, &self.state.worktree);
+            const MAX_ACTIONS_PER_TURN: usize = 6;
+            let mut effective_this_turn = 0usize;
+            for (turn_index, raw_action) in turn.actions.into_iter().enumerate()
+            {
+                if turn_index >= MAX_ACTIONS_PER_TURN {
+                    live_context.push(
+                        "NOTE: your reply contained too many tool calls; only the first {MAX_ACTIONS_PER_TURN} were executed. Batch fewer actions.".to_string(),
+                    );
+                    break;
+                }
+                let action =
+                    relativize_action(raw_action, &self.state.worktree);
                 if action.tool == TOOL_FINISH_STEP {
                     return (self.verify(step_id).await, records);
                 }
@@ -597,7 +617,13 @@ impl Governor {
                 let brief = crate::jockey::interceptor::action_brief(&action);
 
                 if action.tool == crate::jockey::worker::TOOL_TODO {
-                    actions_done += 1;
+                    todo_calls += 1;
+                    if todo_calls > 8 {
+                        live_context.push(
+                            "ACTION (todo): todo budget exhausted — take a real action (edit_file/write_file/run_command) now.".to_string(),
+                        );
+                        continue;
+                    }
                     todos = action
                         .args
                         .get("todos")
@@ -620,8 +646,7 @@ impl Governor {
                         })
                         .unwrap_or_default();
                     live_context.push(format!(
-                        "ACTION {}: todo list updated ({} items)",
-                        actions_done,
+                        "ACTION (todo): list updated ({} items)",
                         todos.len()
                     ));
                     continue;
@@ -668,11 +693,10 @@ impl Governor {
                         read_cache.get(path)
                     && modified == *prev_modified
                 {
-                    actions_done += 1;
                     live_context.push(format!(
-                            "ACTION {}: read_file {path} -> (unchanged since ACTION {idx}, {len} bytes; do not re-read)",
-                            actions_done
-                        ));
+                        "ACTION (cached): read_file {path} -> (unchanged since ACTION {idx}, \
+{len} bytes — already in your context; do something new)"
+                    ));
                     continue;
                 }
 
@@ -793,6 +817,37 @@ impl Governor {
                         live_context.push(guidance);
                     }
                 }
+                if matches!(
+                    action.tool.as_str(),
+                    TOOL_WRITE_FILE
+                        | TOOL_EDIT_FILE
+                        | TOOL_RUN_COMMAND
+                        | TOOL_READ_FILE
+                        | crate::jockey::worker::TOOL_GREP
+                        | crate::jockey::worker::TOOL_GLOB
+                        | crate::jockey::worker::TOOL_LIST
+                        | crate::jockey::worker::TOOL_DIAGNOSTICS
+                        | crate::jockey::worker::TOOL_SUBAGENT
+                        | crate::jockey::worker::TOOL_WEB_FETCH
+                ) {
+                    effective_this_turn += 1;
+                }
+            }
+            if effective_this_turn == 0 {
+                no_op_strikes += 1;
+                live_context.push(
+                    "WARNING: that reply made no effective progress (only repeats/todo). Propose an edit_file, write_file, run_command, or a NEW search now.".to_string(),
+                );
+                if no_op_strikes >= 3 {
+                    return (
+                        AttemptOutcome::NoAction(
+                            "worker repeated already-done actions and todo updates without making progress".to_string(),
+                        ),
+                        records,
+                    );
+                }
+            } else {
+                no_op_strikes = 0;
             }
         }
     }
