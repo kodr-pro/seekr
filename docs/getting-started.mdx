@@ -1,9 +1,7 @@
-# Installation
+# Getting Started
 
-Getting **seekr** running takes three things: the binary, an
-OpenAI-compatible model endpoint, and
-[AiWrangler](https://github.com/kodr-pro/AiWrangler) for the gate
-lifecycle.
+Seekr is the async lane: queue a well-specified task, walk away, review
+the result. This page walks the full loop once.
 
 ## Prerequisites
 
@@ -11,28 +9,26 @@ lifecycle.
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
-- **git** — runs live in linked worktrees.
-- **Node 20+** with AiWrangler built:
+- **git** — runs live in linked worktrees; your checkout is never touched.
+- **Node 20+** with [AiWrangler](https://github.com/kodr-pro/AiWrangler):
   ```bash
   git clone https://github.com/kodr-pro/AiWrangler.git
   cd AiWrangler && npm install && npm run build && npm link
   ```
 - **A local model endpoint** — any OpenAI-compatible server (Ollama,
-  vLLM, llama.cpp server). A small coder model works well; seekr was
-  tuned against `qwen3.5`.
-- **A frontier model key** — for Phase 0 planning and escalations (any
-  OpenAI/Anthropic/Gemini-compatible provider).
-- **`TYPESAFE_API_KEY`** — powers AiWrangler's semantic battery. Without
-  it, completed steps come back DEGRADED and runs fail closed.
+  vLLM, llama.cpp). Tuned against `qwen3.5`.
+- **A frontier model key** — planning and stuck-step rescue.
+- **`TYPESAFE_API_KEY`** — AiWrangler's semantic battery. Without it,
+  completed steps come back DEGRADED and runs fail closed.
 
-## Install seekr
+## Install and verify
 
 ```bash
 cargo install --path .
 seekr doctor
 ```
 
-`doctor` verifies providers, worker/frontier roles, and does a live
+`doctor` checks providers, worker/frontier roles, and does a live
 spawn + config round-trip against the AiWrangler server.
 
 ## Configure
@@ -54,32 +50,63 @@ model = "glm-5.3"
 [jj]
 worker_provider = "qwen-local"
 frontier_provider = "glm-frontier"
-# optional; default is "aiwrangler-mcp" resolved from PATH
-wrangler_command = "node /path/to/AiWrangler/dist/mcp.js"
+wrangler_command = "node /path/to/AiWrangler/dist/mcp.js"   # optional
 ```
 
-For Ollama thinking models, export
-`SEEKR_WORKER_REASONING=none` — 2s/turn instead of 70s.
+## The loop, once through
 
-## First run
+**1. Queue.** Describe the outcome, not the steps — the planner builds
+the steps:
 
 ```bash
-seekr .                                # TUI: goal → clarify → plan review → dashboard
-seekr run . --goal "add a bounded LRU cache in src/lru.rs with tests"
-seekr run . --goal "..." --headless --json | jq -c 'select(.type=="step_completed")'
+seekr run . --goal "backfill table-driven tests for every exported func in ring/"
 ```
 
-Watch the run land on a `jj/<run-id>` branch in a worktree under
-`<repo>/../.jj-worktrees/`. Inspect, then:
+The AiWrangler plan gate runs before anything touches disk: ambiguous
+goals stop for answers (CLARIFY), one-way doors stop for you (HUMAN).
 
-```bash
-seekr merge <run-id>     # merge the branch back and clean the worktree
+**2. Walk away.** The local worker grinds each step under the
+interceptor; every completed step passes its verification command and
+the AiWrangler check battery. Two stalled attempts and the frontier
+finishes the step. Watch live in the TUI (`seekr .`) or check in with
+`seekr summary <run-id>`.
+
+**3. Review.** The summary is built for returning after hours —
+severity first, nothing important below the fold:
+
+```
+╠═ needs attention
+║   ⚠ human review: bucket_core  → seekr ack jj-20261016-...
+║   ● 2 review-severity finding(s) — see notes below
+╠═ steps
+║   ✓ ring_core       2 attempts  finished by worker
+║   ✗ bucket_core     2 attempts  finished by worker
+╠═ findings (review notes)
+║   [review] RULE-1  ring/ring.go:24
 ```
 
-If AiWrangler returns HUMAN REVIEW on a step, the run parks:
+If a step parked for HUMAN REVIEW:
 
 ```bash
-seekr ack <run-id>                          # see the findings
+seekr ack <run-id>                                    # see the findings
 seekr ack <run-id> --rules RULE-10 --note "reviewed: intentional"
 seekr resume <run-id>
 ```
+
+**4. Merge.** The gate findings ride along as review notes in the
+merge commit:
+
+```bash
+seekr merge <run-id>
+```
+
+The run lived on branch `jj/<run-id>` in its own worktree under
+`<repo>/../.jj-worktrees/` — your checkout was never touched, and the
+branch survives even after merge cleanup.
+
+## What makes a good task
+
+Verification-friendly work is where seekr shines: the task should have
+a command that proves done (`go test ./...`, `cargo test`, a script
+that exits 0). If you can't state the invariants and a check, use your
+interactive agent instead — the gates will have nothing to anchor to.
