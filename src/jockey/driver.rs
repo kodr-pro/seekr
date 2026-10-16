@@ -23,6 +23,7 @@ use crate::wrangler::{
 
 const MAX_ACTIONS_PER_ATTEMPT: usize = 16;
 const MAX_REJECTIONS_PER_ATTEMPT: usize = 6;
+const MAX_PROSE_RETRIES_PER_ATTEMPT: usize = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum GovernorError {
@@ -127,6 +128,10 @@ pub struct Governor {
     event_log: EventLog,
     attempts: BTreeMap<String, Vec<AttemptRecord>>,
     extra_context: BTreeMap<String, Vec<String>>,
+    /// Steps parked by AiWrangler HUMAN REVIEW. Their dirty worktree is
+    /// deliberately preserved: `seekr ack` matches findings to the
+    /// exact diff, and resume re-runs the gate against it.
+    parked: std::collections::HashSet<String>,
 }
 
 impl Governor {
@@ -183,6 +188,7 @@ impl Governor {
             event_rx: Some(event_rx),
             event_log,
             attempts: BTreeMap::new(),
+            parked: std::collections::HashSet::new(),
             extra_context: BTreeMap::new(),
         })
     }
@@ -202,6 +208,14 @@ impl Governor {
             })?;
         let event_log = EventLog::create(&state_dir)?;
         let (event_tx, event_rx) = mpsc::unbounded_channel();
+        // An explicit resume is a request to try again: rolled-back
+        // steps (including HUMAN REVIEW parks acked via `seekr ack`)
+        // return to Pending so the governor picks them up.
+        for step in &mut state.dag.steps {
+            if matches!(step.status, StepStatus::RolledBack) {
+                step.status = StepStatus::Pending;
+            }
+        }
         let _ = ensure_gate_config(&state.worktree, &state_dir)?;
         let wrangler = WranglerClient::new(
             config
@@ -226,6 +240,7 @@ impl Governor {
             event_rx: Some(event_rx),
             event_log,
             attempts: BTreeMap::new(),
+            parked: std::collections::HashSet::new(),
             extra_context: BTreeMap::new(),
         })
     }
@@ -450,6 +465,13 @@ set --allow-degraded to run without it:\n{}",
                     });
                     Ok(StepResult::Completed)
                 } else {
+                    // Failed steps roll their worktree back to the last
+                    // checkpoint so nothing unverified lingers. Parked
+                    // (HUMAN REVIEW) steps keep their dirty diff — the
+                    // ack flow and resume judge that exact diff.
+                    if !self.parked.contains(step_id) {
+                        self.sandbox.rollback().await?;
+                    }
                     if let Some(step) = self.state.dag.step_mut(step_id) {
                         step.status = StepStatus::RolledBack;
                     }
@@ -503,6 +525,22 @@ set --allow-degraded to run without it:\n{}",
 implementing):\n{pack}"
                 ));
             }
+            // Write-shyness guard: if no prior attempt mutated anything,
+            // say so bluntly — the worker must act, not re-inspect.
+            let prior_mutations = self
+                .attempts
+                .get(step_id)
+                .map(|recs| recs.len())
+                .unwrap_or(0);
+            if attempt > 1 && prior_mutations == 0 {
+                context.push(
+                    "GOVERNOR: every previous attempt ended with ZERO file \
+changes — reading alone has already failed. Start this attempt by proposing \
+edit_file or write_file on an allowed path immediately after (at most one) \
+targeted read."
+                        .to_string(),
+                );
+            }
             if let Some(err) = &last_error {
                 context
                     .push(format!("LAST ATTEMPT FAILED verification:\n{err}"));
@@ -529,6 +567,11 @@ implementing):\n{pack}"
                     return Ok(true);
                 }
                 AttemptOutcome::NeedsOwner(reason) => {
+                    self.parked.insert(step_id.to_string());
+                    self.attempts
+                        .entry(step_id.to_string())
+                        .or_default()
+                        .extend(records);
                     self.emit(JockeyEvent::StepFailed {
                         step_id: step_id.to_string(),
                         reason: format!(
@@ -606,13 +649,46 @@ findings above, then `seekr ack {}` (or re-run with a refined goal).",
                         .or_default()
                         .extend(records);
                     if attempt >= self.jj.max_attempts_per_step {
-                        self.emit(JockeyEvent::StepFailed {
-                            step_id: step_id.to_string(),
-                            reason,
-                        });
-                        return Ok(false);
+                        // A stalled worker is as escalation-worthy as a
+                        // failed verification: give the frontier one
+                        // guidance round before giving up.
+                        match self
+                            .escalate(
+                                step_id,
+                                description,
+                                invariants,
+                                &Some(reason.clone()),
+                            )
+                            .await?
+                        {
+                            EscalationOutcome::PatchVerified => {
+                                return Ok(true);
+                            }
+                            EscalationOutcome::Guidance(g) => {
+                                if guidance_used {
+                                    self.emit(JockeyEvent::StepFailed {
+                                        step_id: step_id.to_string(),
+                                        reason: format!(
+                                            "{reason}; frontier guidance \
+already tried once"
+                                        ),
+                                    });
+                                    return Ok(false);
+                                }
+                                guidance_used = true;
+                                guidance = Some(g);
+                            }
+                            EscalationOutcome::Exhausted(esc) => {
+                                self.emit(JockeyEvent::StepFailed {
+                                    step_id: step_id.to_string(),
+                                    reason: format!("{reason}; {esc}"),
+                                });
+                                return Ok(false);
+                            }
+                        }
+                    } else {
+                        last_error = Some(reason);
                     }
-                    last_error = Some(reason);
                 }
             }
         }
@@ -629,6 +705,7 @@ findings above, then `seekr ack {}` (or re-run with a refined goal).",
     ) -> (AttemptOutcome, Vec<AttemptRecord>) {
         let mut actions_done = 0usize;
         let mut rejections = 0usize;
+        let mut prose_retries = 0usize;
         let mut live_context: Vec<String> = context.to_vec();
         let mut records: Vec<AttemptRecord> = Vec::new();
         let mut todos: Vec<(String, String)> = Vec::new();
@@ -723,6 +800,23 @@ findings above, then `seekr ack {}` (or re-run with a refined goal).",
             let turn = match self.worker.propose(&prompt).await {
                 Ok(t) => t,
                 Err(e) => {
+                    let msg = e.to_string();
+                    // Small models sometimes reply with planning prose
+                    // (or nothing) instead of tool calls. That is a soft
+                    // failure: demand a tool call and retry the turn
+                    // without consuming the attempt.
+                    if msg.contains("no tool call in reply")
+                        && prose_retries < MAX_PROSE_RETRIES_PER_ATTEMPT
+                    {
+                        prose_retries += 1;
+                        live_context.push(format!(
+                            "GOVERNOR: your last reply contained NO tool \
+calls (only prose). That reply is discarded. Reply NOW with a tool call \
+— edit_file/write_file to implement, or a search you have not run. \
+Never reply with prose only. (soft retry {prose_retries}/{MAX_PROSE_RETRIES_PER_ATTEMPT})"
+                        ));
+                        continue;
+                    }
                     self.state.ledger.add_worker(None);
                     return (
                         AttemptOutcome::NoAction(format!("worker error: {e}")),

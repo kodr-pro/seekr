@@ -619,6 +619,119 @@ async fn plan_gate_context_pack_reaches_the_worker() {
 }
 
 #[tokio::test]
+async fn prose_only_replies_soft_retry_then_recover() {
+    let (_tmp, root) = init_repo().await;
+    let worker_server = MockServer::start().await;
+
+    // turn 1: planning prose, no tool calls — must be a soft retry,
+    // not a dead attempt
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{"message": {"role": "assistant",
+                "content": "I need to analyze the file first. Let me think about the approach."}}],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}
+        })))
+        .up_to_n_times(2_u64)
+        .mount(&worker_server)
+        .await;
+    mount_worker_reply(
+        &worker_server,
+        "write_file",
+        json!({"path": "src/lib.rs", "content": "pub fn changed() {}\n"}),
+        1,
+    )
+    .await;
+    mount_worker_reply(
+        &worker_server,
+        "finish_step",
+        json!({"summary": "done"}),
+        5,
+    )
+    .await;
+
+    let (client, model) = api_client(&worker_server, "worker");
+    let worker = Worker::new(client, model, 0.2, 1024, None);
+    let sandbox = GitSandbox::create(&root, "e2e-prose").await.unwrap();
+    let config = wrangler_config(json!({}));
+
+    let (outcome, _events) = drive(
+        &config,
+        worker,
+        None,
+        sandbox.clone(),
+        one_step_dag(vec!["src"], "true"),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        RunOutcome::Success,
+        "two prose replies must not kill the attempt"
+    );
+    assert_eq!(
+        std::fs::read_to_string(sandbox.worktree().join("src/lib.rs")).unwrap(),
+        "pub fn changed() {}\n"
+    );
+    sandbox.dispose().await.unwrap();
+}
+
+#[tokio::test]
+async fn stalled_step_escalates_to_frontier_before_failing() {
+    let (_tmp, root) = init_repo().await;
+    let worker_server = MockServer::start().await;
+    let frontier_server = MockServer::start().await;
+
+    // worker: never proposes anything usable (worker errors -> NoAction)
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+        .mount(&worker_server)
+        .await;
+
+    // frontier: one guidance round that unblocks the worker
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{"message": {"role": "assistant",
+                "content": "GUIDANCE: write fixed.txt with content ok, then finish."}}],
+            "usage": {"prompt_tokens": 500, "completion_tokens": 50, "total_tokens": 550}
+        })))
+        .mount(&frontier_server)
+        .await;
+
+    let (client, model) = api_client(&worker_server, "worker");
+    let worker = Worker::new(client, model, 0.2, 1024, None);
+    let (frontier_client, _) = api_client(&frontier_server, "frontier");
+    let sandbox = GitSandbox::create(&root, "e2e-stall").await.unwrap();
+    let mut config = wrangler_config(json!({}));
+    config.jockey.max_attempts_per_step = 2;
+
+    let (outcome, events) = drive(
+        &config,
+        worker,
+        Some(frontier_client),
+        sandbox.clone(),
+        one_step_dag(vec!["src", "fixed.txt"], "test -f fixed.txt"),
+    )
+    .await;
+
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, seekr::jockey::JockeyEvent::Escalated { .. })),
+        "a stalled (NoAction) step must reach the frontier tier"
+    );
+    assert!(matches!(outcome, RunOutcome::Failed(_)));
+    let status = run(sandbox.worktree(), &["status", "--porcelain"]).await;
+    assert!(
+        status.trim().is_empty(),
+        "failed step must leave a rolled-back clean tree, got: {status}"
+    );
+    sandbox.dispose().await.unwrap();
+}
+
+#[tokio::test]
 async fn parallel_reads_grep_and_list_flow() {
     let (_tmp, root) = init_repo().await;
     let worker_server = MockServer::start().await;
