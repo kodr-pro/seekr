@@ -1,8 +1,8 @@
 [package]
 name = "seekr"
-version = "0.3.1"
+version = "0.5.0"
 edition = "2024"
-description = "Async Agentic System Operator"
+description = "Autonomous, cost-guarded coding agent governed by AiWrangler"
 license = "Polyform-Prosperity-1.0.0"
 
 [lib]
@@ -13,9 +13,14 @@ path = "src/lib.rs"
 name = "seekr"
 path = "src/main.rs"
 
+# Hermetic stand-in for the aiwrangler-mcp stdio server, used by the test
+# suite (CARGO_BIN_EXE_mock_aiwrangler) and usable directly to smoke-test
+# a seekr install without spending judgment tokens. Auto-discovered from
+# src/bin/mock_aiwrangler.rs.
+
 [dependencies]
 # TUI
-ratatui = "0.30"
+ratatui = "0.30.2"
 crossterm = { version = "0.29", features = ["event-stream"] }
 
 # Async runtime
@@ -54,6 +59,13 @@ scraper = "0.22"
 # For unique IDs
 uuid = { version = "1", features = ["v4"] }
 
+# For grep/glob tools
+regex = "1"
+glob = "0.3"
+
+# For Jev cache keys
+sha2 = "0.10"
+
 # For timestamps
 chrono = { version = "0.4", features = ["serde"] }
 
@@ -69,12 +81,29 @@ semver = "1.0.27"
 axum = "0.8.8"
 tower-http = { version = "0.6.8", features = ["cors"] }
 clap = { version = "4.6.0", features = ["derive"] }
+clap_complete = "4"
 futures-util = "0.3.32"
 tokio-util = { version = "0.7.18", features = ["io"] }
 reqwest-eventsource = "0.6.0"
 lsp-types = "0.97"
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-python = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.23"
+tree-sitter-c = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+streaming-iterator = "0.1"
+getrandom = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
+wiremock = "0.6"
 
 

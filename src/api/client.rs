@@ -23,6 +23,14 @@ pub struct ApiClient {
     provider: Arc<dyn Provider>,
 }
 
+/// Non-streaming completion result with token usage when the provider reports it.
+#[derive(Clone, Debug)]
+pub struct CompletionOutcome {
+    pub content: String,
+    pub usage: Option<Usage>,
+    pub tool_calls: Vec<crate::api::types::ToolCall>,
+}
+
 impl ApiClient {
     pub fn new(config: &AppConfig) -> Self {
         Self::new_for_provider(config, config.current_provider())
@@ -32,23 +40,24 @@ impl ApiClient {
         _config: &AppConfig,
         provider_cfg: &crate::config::ProviderConfig,
     ) -> Self {
-        let mut client_builder = Client::builder();
-        if let Some(timeout_secs) = provider_cfg.timeout {
-            client_builder = client_builder.timeout(Duration::from_secs(timeout_secs));
-        }
-        let http = client_builder.build().unwrap_or_else(|_| Client::new());
+        let timeout_secs = provider_cfg.timeout.unwrap_or(120);
+        let http = Client::builder()
+            .timeout(Duration::from_secs(timeout_secs))
+            .build()
+            .unwrap_or_else(|_| Client::new());
 
-        let provider: Arc<dyn Provider> = if provider_cfg.base_url.contains("anthropic.com") {
-            Arc::new(AnthropicProvider)
-        } else if provider_cfg
-            .base_url
-            .contains("generativelanguage.googleapis.com")
-            || provider_cfg.model.contains("gemini")
-        {
-            Arc::new(super::gemini::GeminiProvider)
-        } else {
-            Arc::new(OpenAiProvider)
-        };
+        let provider: Arc<dyn Provider> =
+            if provider_cfg.base_url.contains("anthropic.com") {
+                Arc::new(AnthropicProvider)
+            } else if provider_cfg
+                .base_url
+                .contains("generativelanguage.googleapis.com")
+                || provider_cfg.model.contains("gemini")
+            {
+                Arc::new(super::gemini::GeminiProvider)
+            } else {
+                Arc::new(OpenAiProvider)
+            };
 
         Self {
             http,
@@ -76,14 +85,17 @@ impl ApiClient {
                         return Ok(response);
                     }
                     let status = response.status();
-                    if status.is_server_error() || status == StatusCode::TOO_MANY_REQUESTS {
-                        let error_body = response.text().await.unwrap_or_default();
-                        last_error = Some(ApiError::HttpStatus(status, error_body));
+                    if status.is_server_error()
+                        || status == StatusCode::TOO_MANY_REQUESTS
+                    {
+                        let error_body =
+                            response.text().await.unwrap_or_default();
+                        last_error =
+                            Some(ApiError::HttpStatus(status, error_body));
                     } else {
-                        let body = response
-                            .text()
-                            .await
-                            .unwrap_or_else(|_| "Failed to read error body".to_string());
+                        let body = response.text().await.unwrap_or_else(|_| {
+                            "Failed to read error body".to_string()
+                        });
                         return Err(ApiError::HttpStatus(status, body));
                     }
                 }
@@ -93,11 +105,14 @@ impl ApiClient {
             }
             if attempt < MAX_RETRIES {
                 let delay = BASE_DELAY_MS * 2u64.pow(attempt);
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(delay))
+                    .await;
             }
         }
         Err(last_error.unwrap_or_else(|| {
-            ApiError::InvalidProvider("Maximum retries exceeded with no recorded error".to_string())
+            ApiError::InvalidProvider(
+                "Maximum retries exceeded with no recorded error".to_string(),
+            )
         }))
     }
 
@@ -123,6 +138,7 @@ impl ApiClient {
             response_format: None,
             tools,
             tool_choice: None,
+            reasoning_effort: None,
         };
 
         let request_body = self.provider.format_request(&request);
@@ -146,15 +162,21 @@ impl ApiClient {
 
         tokio::spawn(async move {
             if is_anthropic {
-                if let Err(e) =
-                    crate::api::stream::parse_anthropic_sse_stream(response, tx.clone()).await
+                if let Err(e) = crate::api::stream::parse_anthropic_sse_stream(
+                    response,
+                    tx.clone(),
+                )
+                .await
                 {
                     let _ = tx.send(StreamEvent::Error(format!(
                         "Anthropic Stream parse error: {e}"
                     )));
                 }
             } else {
-                if let Err(e) = crate::api::stream::parse_sse_stream(response, tx.clone()).await {
+                if let Err(e) =
+                    crate::api::stream::parse_sse_stream(response, tx.clone())
+                        .await
+                {
                     let _ = tx.send(StreamEvent::Error(format!(
                         "OpenAI Stream parse error: {e}"
                     )));
@@ -186,6 +208,7 @@ impl ApiClient {
             response_format: None,
             tools: None,
             tool_choice: None,
+            reasoning_effort: None,
         };
 
         let request_body = self.provider.format_request(&request);
@@ -230,7 +253,9 @@ impl ApiClient {
                 "Anthropic response content".to_string(),
             ))
         } else {
-            if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
+            if let Some(content) =
+                result["choices"][0]["message"]["content"].as_str()
+            {
                 Ok(content.to_string())
             } else {
                 Err(ApiError::MissingContent(
@@ -239,6 +264,109 @@ impl ApiClient {
             }
         }
     } // chat_completion
+
+    /// Non-streaming completion returning content, tool calls, and token
+    /// usage, with explicit sampling controls for programmatic callers.
+    pub async fn chat_completion_with_usage(
+        &self,
+        messages: Vec<ChatMessage>,
+        model: &str,
+        temperature: Option<f64>,
+        max_tokens: Option<u32>,
+        tools: Option<Vec<ToolDefinition>>,
+        reasoning_effort: Option<&str>,
+    ) -> Result<CompletionOutcome, ApiError> {
+        let is_anthropic = self.provider.name() == "Anthropic";
+
+        let request = ChatCompletionRequest {
+            model: model.to_string(),
+            messages,
+            temperature,
+            max_tokens,
+            top_p: None,
+            stream: false,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop: None,
+            response_format: None,
+            tools,
+            tool_choice: None,
+            reasoning_effort: reasoning_effort.map(|s| s.to_string()),
+        };
+
+        let request_body = self.provider.format_request(&request);
+        let headers = self.provider.auth_headers(&self.api_key);
+
+        let url = if is_anthropic {
+            format!("{}/messages", self.base_url)
+        } else {
+            format!("{}/chat/completions", self.base_url)
+        };
+
+        let response = self
+            .send_request_with_retry(|| {
+                self.http
+                    .post(&url)
+                    .headers(headers.clone())
+                    .json(&request_body)
+            })
+            .await?;
+
+        let result: serde_json::Value = response.json().await?;
+        let usage = result.get("usage").and_then(|u| {
+            Some(Usage {
+                prompt_tokens: u.get("prompt_tokens")?.as_u64()? as u32,
+                completion_tokens: u.get("completion_tokens")?.as_u64()? as u32,
+                total_tokens: u.get("total_tokens")?.as_u64()? as u32,
+            })
+        });
+        let tool_calls: Vec<crate::api::types::ToolCall> = result
+            .get("choices")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.get("tool_calls"))
+            .and_then(|tc| serde_json::from_value(tc.clone()).ok())
+            .unwrap_or_default();
+
+        if is_anthropic {
+            if let Some(content_array) = result["content"].as_array() {
+                for content_block in content_array {
+                    if content_block["type"] == "text"
+                        && let Some(text) = content_block["text"].as_str()
+                    {
+                        return Ok(CompletionOutcome {
+                            content: text.to_string(),
+                            usage,
+                            tool_calls,
+                        });
+                    }
+                }
+            }
+            Err(ApiError::MissingContent(
+                "Anthropic response content".to_string(),
+            ))
+        } else {
+            if let Some(content) =
+                result["choices"][0]["message"]["content"].as_str()
+            {
+                Ok(CompletionOutcome {
+                    content: content.to_string(),
+                    usage,
+                    tool_calls,
+                })
+            } else if !tool_calls.is_empty() {
+                Ok(CompletionOutcome {
+                    content: String::new(),
+                    usage,
+                    tool_calls,
+                })
+            } else {
+                Err(ApiError::MissingContent(
+                    "OpenAI message content".to_string(),
+                ))
+            }
+        }
+    } // chat_completion_with_usage
 
     /// Retrieves a list of available models from the provider.
     pub async fn list_models(&self) -> Result<Vec<String>, ApiError> {
@@ -273,7 +401,11 @@ impl ApiClient {
     } // list_models
 
     /// Tests the validity of an API key and base URL by sending a minimal test request.
-    pub async fn validate_key(api_key: &str, base_url: &str, model: &str) -> Result<bool> {
+    pub async fn validate_key(
+        api_key: &str,
+        base_url: &str,
+        model: &str,
+    ) -> Result<bool> {
         let client = Client::new();
         let is_anthropic = base_url.contains("anthropic.com");
 
@@ -298,6 +430,7 @@ impl ApiClient {
             response_format: None,
             tools: None,
             tool_choice: None,
+            reasoning_effort: None,
         };
 
         let request_body = provider.format_request(&request);

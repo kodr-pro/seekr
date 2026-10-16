@@ -1,78 +1,64 @@
 # Configuration
 
-**seekr** uses a TOML configuration file located at `~/.config/seekr/config.toml`.
+seekr reads `~/.config/seekr/config.toml`. Everything the governor loop
+needs lives under `[jj]`; providers are shared across the app.
 
-## Configuration Options
-
-The config file is split into main sections for providers, agent, and ui settings.
-
-### [[providers]]
-
-Settings related to your configured LLM API connections. Seekr supports multi-model configuration via the `providers` array in combination with `active_provider`.
-
-| Key | Default | Description |
-| :--- | :--- | :--- |
-| `name` | `"Seekr AI"` | A display name for the provider. |
-| `key` | `""` | Your API Key for the provider. |
-| `model` | `"gpt-4o"` | The model ID to use (e.g., `deepseek-chat`, `gpt-4o`). |
-| `base_url` | `"https://api.openai.com/v1"` | The base URL for the API. |
-
-### active_provider
-
-| Key | Default | Description |
-| :--- | :--- | :--- |
-| `active_provider` | `0` | The integer index of the currently active provider in the `providers` array. |
-
-### [agent]
-
-Controls the behavior and constraints of the AI agent.
-
-| Key | Default | Description |
-| :--- | :--- | :--- |
-| `max_iterations` | `25` | Maximum number of tool-use steps per task. |
-| `auto_approve_tools` | `false` | If true, the agent will run tools without asking for permission. |
-| `working_directory` | `"."` | The default directory where the agent operates. |
-| `context_window_threshold` | `40` | Sum of input+output messages before triggering pruning. |
-| `context_window_keep` | `10` | Number of most recent messages to keep after pruning. |
-| `shell_blocklist` | `[...]` | List of substrings to block in shell commands. |
-| `show_shell_warnings` | `true` | Show warnings when running potentially dangerous commands. |
-
-### [ui]
-
-Customizes the look and feel of the terminal interface.
-
-| Key | Default | Description |
-| :--- | :--- | :--- |
-| `theme` | `"dark"` | UI Theme (currently supports `dark`). |
-| `show_reasoning` | `true` | Whether to show the agent's internal reasoning steps. |
-
-## Example Config
+## Providers
 
 ```toml
 [[providers]]
-name = "DeepSeek"
-key = "sk-..."
-model = "deepseek-reasoner"
-base_url = "https://api.deepseek.com"
-
-[[providers]]
-name = "OpenAI"
-key = "sk-..."
-model = "gpt-4o"
-base_url = "https://api.openai.com/v1"
-
-active_provider = 0
-
-[agent]
-max_iterations = 50
-auto_approve_tools = true
-working_directory = "/home/user/projects"
-
-[ui]
-theme = "dark"
-show_reasoning = true
+name = "qwen-local"              # referenced by [jj] roles
+key = ""                         # or QWEN_LOCAL_API_KEY env
+base_url = "http://server:11434/v1"   # any OpenAI-compatible endpoint
+model = "qwen3.5:latest"
+timeout = 300                    # optional, seconds per HTTP call
 ```
 
----
+Key resolution order: `<NAME>_API_KEY` env → `SEEKR_API_KEY` env →
+keyring → the `key` field.
 
-[Next: Tools](/tools)
+## `[jj]` — the governor
+
+| Key | Default | Meaning |
+|---|---|---|
+| `worker_provider` | active provider | local SLM that grinds steps |
+| `frontier_provider` | none | planner + escalation tier; without it only `--plan` runs work |
+| `max_attempts_per_step` | 3 | local attempts before frontier escalation |
+| `max_frontier_calls` | 5 | hard ceiling on frontier calls per run |
+| `verification_timeout_secs` | 600 | wall clock per verification command |
+| `step_timeout_secs` | 3600 | wall clock per step (all attempts) |
+| `worker_temperature` | 0.2 | worker sampling |
+| `worker_max_tokens` | 8192 | worker reply budget |
+| `worker_reasoning` | `"none"` | reasoning-effort hint; silences thinking tokens on Ollama models |
+| `worker_read_lines` | 400 | read_file line window |
+| `wrangler_command` | `"aiwrangler-mcp"` | how seekr launches the AiWrangler MCP server (argv, whitespace-split) |
+| `wrangler_timeout_secs` | 300 | per-call gate round-trip timeout |
+| `allow_degraded` | false | let runs proceed when the semantic gate is unreachable |
+| `allow_web` | false | give the worker `web_fetch` (fetched content is fenced untrusted) |
+| `allow_subagent` | true | give the worker read-only explorer subagents |
+
+## `[agent]` — shell policy
+
+`shell_blocklist` is a substring list applied to every command the
+worker proposes and every verification command. The defaults block the
+usual disk-shredding suspects; add your own.
+
+## Environment
+
+| Variable | Effect |
+|---|---|
+| `TYPESAFE_API_KEY` | powers AiWrangler's semantic battery |
+| `AIWRANGLER_EGRESS=off` | deterministic-only, zero-egress gates |
+| `AIWRANGLER_POLICY` / `AIWRANGLER_MODEL` | forwarded to AiWrangler |
+| `SEEKR_WORKER_REASONING` | beats `[jj] worker_reasoning` |
+| `SEEKR_STATE_DIR` | relocate run state (used by tests) |
+
+## AiWrangler config
+
+AiWrangler reads its own `aiwrangler.config.json` — discovered from the
+run's worktree upward. If your repo commits one, its corpus (protocol
+spec, review rules, divergence rulings, open questions) governs every
+run against that repo. If not, seekr generates a minimal gate config
+per run with the ledger under the run state dir, so gates are always
+active. Thresholds and gate flags live in AiWrangler's config, not
+seekr's — see the [AiWrangler docs](https://github.com/kodr-pro/AiWrangler).

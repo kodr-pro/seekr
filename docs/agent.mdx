@@ -1,21 +1,91 @@
-# The Agent Loop
+# The Governor Loop
 
-The "brain" of **seekr** is a sophisticated implementation of the ReAct (Reasoning and Acting) pattern. While natively optimized for DeepSeek's high-reasoning models, it fully supports multiple LLMs via OpenAPI structured integrations.
+The governor drives a task DAG through four phases per step. Every
+decision is budgeted and every failure path is defined.
 
-## The Reasoning Loop
+## Phase 0 — Plan
 
-1. **Input:** The agent receives a task and its current system prompt.
-2. **Plan (NEW):** Before executing any tools, the agent MUST output an explicit `PLAN:` block. This improves reliability by forcing the agent to reason through its next steps before acting.
-3. **Reasoning:** It analyzes the task, previous actions, and observations.
-4. **Action:** It selects one or more tools and provides the necessary arguments. **seekr** leverages multi-tool parallelism to execute independent actions concurrently.
-5. **Observation:** The results of the tool executions are fed back into the agent's context.
+The frontier model decomposes the goal into a validated DAG (schema +
+topological order). Each step carries:
 
-## System Prompts
-**seekr** uses carefully crafted system prompts that define its capabilities, limitations, and "personality". These prompts enforce explicit planning, parallel multi-tasking, and background execution for long-running commands.
+- `description` and `invariants` — what "done" means
+- `allowed_paths` — the only paths the step may touch (empty = read-only)
+- `verification_command` — the deterministic gate (e.g. `cargo test --test wal_tests`)
 
-## Memory Management
-As the conversation grows, **seekr** manages its token context using a sophisticated **Sliding-Window Memory** system. When the context threshold is reached (e.g., 40 messages), the agent automatically uses an internal **Summarization Loop** to condense the oldest parts of the conversation into a "working memory" block. This keeps the agent's context window lean while ensuring it never loses track of the overall goal or critical file paths discovered earlier in the session.
+Bounded clarification rounds resolve ambiguity with you before the DAG
+is final.
 
----
+Then AiWrangler's **plan gate** judges goal + DAG against your ground
+truth:
 
-[Back to Introduction](/)
+- **PASS** — proceed; the context pack (spec sections, rulings, open
+  questions) is injected into every worker prompt.
+- **CLARIFY** — the run stops with `needs_input` before any code is
+  written.
+- **HUMAN** — the run stops with `needs_owner`: one-way door, not the
+  agent's decision to make.
+
+## Phase 1 — Grind
+
+The worker (local SLM) gets a fresh, bounded context each attempt: goal,
+step, invariants, allowed paths, ground-truth pack, and the running
+ACTION log. It replies with one batched set of tool calls; mutations run
+one at a time. The governor enforces:
+
+- 16 actions per attempt, 6 per reply, 6 rejections per attempt
+- re-reading unchanged files is free (cache), todo chatter doesn't count
+- 3 consecutive no-op replies abort the attempt
+- near the cap, the worker is nudged to wrap up; at the cap with real
+  changes, verification runs automatically on its behalf
+
+## Phase 2 — Intercept
+
+Every proposed action passes the deterministic interceptor:
+
+1. **Path sandbox** — containment under the worktree and the step's
+   `allowed_paths`; `..`, absolute, symlink, and sibling-prefix escapes
+   rejected.
+2. **Shell blocklist** — substring match against `[agent]
+   shell_blocklist`.
+3. **Loop breaker** — an exact repeat of a failed mutating action is
+   rejected by fingerprint.
+
+Free (read-only) tools skip review entirely. There is no per-action
+network call — the semantic judgment happens at step completion where
+the whole diff is visible.
+
+## Phase 3 — Verify + gate
+
+`finish_step` (or auto-finish) triggers:
+
+1. The step's **verification command**, run in the worktree with a wall
+   clock budget. Failure rolls the worktree back to the last checkpoint
+   — including untracked files.
+2. **AiWrangler's check gate** over the dirty worktree: scope
+   discipline, claims-vs-diff (the worker's summary is checked against
+   reality), silent defaults, injection defense, test quality. Verdicts:
+   - **PASS** → checkpoint commit; the step is done.
+   - **FIX REQUIRED** → rollback; the cited findings become the next
+     attempt's error context.
+   - **HUMAN REVIEW** → the step parks with `needs_owner` until
+     `seekr ack`.
+   - **DEGRADED / unreachable** → fail closed, unless
+     `--allow-degraded`.
+
+## Phase 4 — Triage / escalate
+
+Deterministic triage classifies each failure:
+
+- the error points at a file the worker hasn't seen → **inject it**
+- otherwise → retry with the failure output inline
+- AiWrangler's circuit breaker is open (same findings cycling) or
+  attempts are exhausted → **escalate to the frontier** with a minimal
+  payload: the step, invariants, two files, the failure. The frontier
+  answers with a verified ```` ```diff ```` patch (applied + re-verified)
+  or one-shot GUIDANCE. Frontier calls are hard-capped per run.
+
+## Budgets and reversibility
+
+Every tier is accounted in the ledger (worker / gate / frontier tokens).
+Interrupted runs are resumable (`seekr resume`); failed steps leave the
+worktree exactly at the last checkpoint.

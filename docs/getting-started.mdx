@@ -1,65 +1,112 @@
-# Installation
+# Getting Started
 
-Getting started with **seekr** is straightforward. Ensure you have the necessary prerequisites installed on your system.
+Seekr is the async lane: queue a well-specified task, walk away, review
+the result. This page walks the full loop once.
 
 ## Prerequisites
 
-- **Rust:** You'll need the latest stable version of Rust. Install it via `rustup`:
+- **Rust** (to install from source):
   ```bash
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   ```
-- **API Key:** An API key for your preferred provider (DeepSeek, OpenAI, or any compatible endpoint).
+- **git** — runs live in linked worktrees; your checkout is never touched.
+- **Node 20+** with [AiWrangler](https://github.com/kodr-pro/AiWrangler):
+  ```bash
+  git clone https://github.com/kodr-pro/AiWrangler.git
+  cd AiWrangler && npm install && npm run build && npm link
+  ```
+- **A local model endpoint** — any OpenAI-compatible server (Ollama,
+  vLLM, llama.cpp). Tuned against `qwen3.5`.
+- **A frontier model key** — planning and stuck-step rescue.
+- **`TYPESAFE_API_KEY`** — AiWrangler's semantic battery. Without it,
+  completed steps come back DEGRADED and runs fail closed.
 
-## Installation
-
-### Binary Installation (Recommended)
-
-For Linux x86_64 systems, you can download the pre-compiled binary directly:
-
-1. Download the latest release from [GitHub](https://github.com/kodr-pro/seekr/releases/latest).
-2. Make it executable:
-   ```bash
-   chmod +x seekr-v0.3.1-linux-x86_64
-   ```
-3. Move it to your path:
-   ```bash
-   sudo mv seekr-v0.3.1-linux-x86_64 /usr/local/bin/seekr
-   ```
-
-### Build from Source
-
-If you prefer to build **seekr** manually, follow these steps:
-
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/kodr-pro/seekr.git
-   cd seekr
-   ```
-
-2. Install globally:
-   ```bash
-   cargo install --path .
-   ```
-
-## Running the App
-
-Start **seekr** by running the binary:
+## Install and verify
 
 ```bash
-cargo run --release
-```
-
-On the first run, the application will detect that no configuration exists and will automatically launch the **Setup Wizard**.
-
-## Troubleshooting
-If you encounter any issues with connectivity or configuration, you can run the built-in diagnostic tool:
-
-```bash
+cargo install --path .
 seekr doctor
 ```
 
-This will verify your API key, check your working directory permissions, and ensure all required system tools are available.
+`doctor` checks providers, worker/frontier roles, and does a live
+spawn + config round-trip against the AiWrangler server.
 
----
+## Configure
 
-[Next: Configuration](/schema)
+`~/.config/seekr/config.toml`:
+
+```toml
+[[providers]]
+name = "qwen-local"
+base_url = "http://server:11434/v1"
+model = "qwen3.5:latest"
+
+[[providers]]
+name = "glm-frontier"
+key = "..."                  # or GLM_FRONTIER_API_KEY env
+base_url = "https://api.z.ai/api/coding/paas/v4"
+model = "glm-5.3"
+
+[jj]
+worker_provider = "qwen-local"
+frontier_provider = "glm-frontier"
+wrangler_command = "node /path/to/AiWrangler/dist/mcp.js"   # optional
+```
+
+## The loop, once through
+
+**1. Queue.** Describe the outcome, not the steps — the planner builds
+the steps:
+
+```bash
+seekr run . --goal "backfill table-driven tests for every exported func in ring/"
+```
+
+The AiWrangler plan gate runs before anything touches disk: ambiguous
+goals stop for answers (CLARIFY), one-way doors stop for you (HUMAN).
+
+**2. Walk away.** The local worker grinds each step under the
+interceptor; every completed step passes its verification command and
+the AiWrangler check battery. Two stalled attempts and the frontier
+finishes the step. Watch live in the TUI (`seekr .`) or check in with
+`seekr summary <run-id>`.
+
+**3. Review.** The summary is built for returning after hours —
+severity first, nothing important below the fold:
+
+```
+╠═ needs attention
+║   ⚠ human review: bucket_core  → seekr ack jj-20261016-...
+║   ● 2 review-severity finding(s) — see notes below
+╠═ steps
+║   ✓ ring_core       2 attempts  finished by worker
+║   ✗ bucket_core     2 attempts  finished by worker
+╠═ findings (review notes)
+║   [review] RULE-1  ring/ring.go:24
+```
+
+If a step parked for HUMAN REVIEW:
+
+```bash
+seekr ack <run-id>                                    # see the findings
+seekr ack <run-id> --rules RULE-10 --note "reviewed: intentional"
+seekr resume <run-id>
+```
+
+**4. Merge.** The gate findings ride along as review notes in the
+merge commit:
+
+```bash
+seekr merge <run-id>
+```
+
+The run lived on branch `jj/<run-id>` in its own worktree under
+`<repo>/../.jj-worktrees/` — your checkout was never touched, and the
+branch survives even after merge cleanup.
+
+## What makes a good task
+
+Verification-friendly work is where seekr shines: the task should have
+a command that proves done (`go test ./...`, `cargo test`, a script
+that exits 0). If you can't state the invariants and a check, use your
+interactive agent instead — the gates will have nothing to anchor to.

@@ -1,0 +1,17 @@
+{
+  "goal": "Implement slugify(title) producing URL slugs.",
+  "steps": [
+    {
+      "id": "slug",
+      "description": "Implement slugify in src/lib.rs: ASCII lowercase, non-alphanumeric runs collapse to one '-', no leading/trailing '-', blank -> empty",
+      "depends_on": [],
+      "invariants": [
+        "'Hello World' -> 'hello-world'; runs of junk collapse; no edge dashes; digits kept",
+        "blank and empty input return empty string",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test --test step1_tests"
+    }
+  ]
+}

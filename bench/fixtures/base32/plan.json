@@ -1,0 +1,30 @@
+{
+  "goal": "Implement RFC 4648 base32 encoding and decoding with padding.",
+  "steps": [
+    {
+      "id": "base32_encode",
+      "description": "Implement encode: 5-byte groups to 8 characters (A-Z2-7), zero-bit padding, '=' to a multiple of 8",
+      "depends_on": [],
+      "invariants": [
+        "matches the RFC 4648 test vectors (empty through 'foobar')",
+        "output length is always a multiple of 8",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test --test step1_tests"
+    },
+    {
+      "id": "base32_decode",
+      "description": "Implement decode: case-insensitive, strict padding, errors on bad characters or group lengths",
+      "depends_on": ["base32_encode"],
+      "invariants": [
+        "decodes the RFC vectors and lowercase input",
+        "rejects invalid characters, misplaced padding, and groups not a multiple of 8",
+        "roundtrips pseudo-random data at every length 0..40",
+        "Must touch only src/lib.rs"
+      ],
+      "allowed_paths": ["src/"],
+      "verification_command": "cargo test"
+    }
+  ]
+}

@@ -12,7 +12,8 @@ impl Provider for OpenAiProvider {
 
     fn auth_headers(&self, api_key: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         if let Ok(val) = HeaderValue::from_str(&format!("Bearer {}", api_key)) {
             headers.insert(AUTHORIZATION, val);
         }
@@ -28,6 +29,18 @@ impl Provider for OpenAiProvider {
 
         if let Some(tokens) = request.max_tokens {
             body["max_tokens"] = json!(tokens);
+        }
+
+        if let Some(temperature) = request.temperature {
+            body["temperature"] = json!(temperature);
+        }
+
+        if request.stream {
+            body["stream_options"] = json!({ "include_usage": true });
+        }
+
+        if let Some(effort) = &request.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
         }
 
         if let Some(tools) = &request.tools

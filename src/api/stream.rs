@@ -63,7 +63,9 @@ impl ToolCallAccumulator {
                 let name = partial.name?;
                 Some(ToolCall {
                     id,
-                    call_type: partial.call_type.unwrap_or_else(|| "function".to_string()),
+                    call_type: partial
+                        .call_type
+                        .unwrap_or_else(|| "function".to_string()),
                     function: FunctionCall {
                         name,
                         arguments: partial.arguments,
@@ -86,7 +88,8 @@ pub async fn parse_sse_stream(
         let chunk = match chunk_result {
             Ok(bytes) => bytes,
             Err(e) => {
-                let _ = event_tx.send(StreamEvent::Error(format!("Stream error: {e}")));
+                let _ = event_tx
+                    .send(StreamEvent::Error(format!("Stream error: {e}")));
                 break;
             }
         };
@@ -107,7 +110,8 @@ pub async fn parse_sse_stream(
                 if data == "[DONE]" {
                     let tool_calls = tool_acc.finalize();
                     for tc in tool_calls {
-                        let _ = event_tx.send(StreamEvent::ToolCallComplete(tc));
+                        let _ =
+                            event_tx.send(StreamEvent::ToolCallComplete(tc));
                     }
                     let _ = event_tx.send(StreamEvent::Done);
                     return Ok(());
@@ -118,7 +122,9 @@ pub async fn parse_sse_stream(
                         process_chunk(&chunk, &mut tool_acc, &event_tx);
                     }
                     Err(e) => {
-                        tracing::warn!("Failed to parse SSE chunk: {e}, data: {data}");
+                        tracing::warn!(
+                            "Failed to parse SSE chunk: {e}, data: {data}"
+                        );
                     }
                 }
             }
@@ -158,7 +164,8 @@ fn process_chunk(
         if let Some(ref reasoning) = delta.reasoning_content
             && !reasoning.is_empty()
         {
-            let _ = event_tx.send(StreamEvent::ReasoningDelta(reasoning.clone()));
+            let _ =
+                event_tx.send(StreamEvent::ReasoningDelta(reasoning.clone()));
         }
 
         if let Some(ref tool_calls) = delta.tool_calls {
@@ -188,7 +195,8 @@ pub async fn parse_anthropic_sse_stream(
         let chunk = match chunk_result {
             Ok(bytes) => bytes,
             Err(e) => {
-                let _ = event_tx.send(StreamEvent::Error(format!("Stream error: {e}")));
+                let _ = event_tx
+                    .send(StreamEvent::Error(format!("Stream error: {e}")));
                 break;
             }
         };
@@ -215,7 +223,8 @@ pub async fn parse_anthropic_sse_stream(
                     continue;
                 }
 
-                let value_res: Result<serde_json::Value, _> = serde_json::from_str(data);
+                let value_res: Result<serde_json::Value, _> =
+                    serde_json::from_str(data);
                 if let Ok(value) = value_res {
                     match event_type.as_str() {
                         "message_start" => {
@@ -244,15 +253,20 @@ pub async fn parse_anthropic_sse_stream(
                             }
                         }
                         "content_block_delta" => {
-                            if let Some(delta_type) =
-                                value.pointer("/delta/type").and_then(|v| v.as_str())
+                            if let Some(delta_type) = value
+                                .pointer("/delta/type")
+                                .and_then(|v| v.as_str())
                             {
                                 if delta_type == "text_delta" {
-                                    if let Some(text) =
-                                        value.pointer("/delta/text").and_then(|v| v.as_str())
+                                    if let Some(text) = value
+                                        .pointer("/delta/text")
+                                        .and_then(|v| v.as_str())
                                     {
-                                        let _ = event_tx
-                                            .send(StreamEvent::ContentDelta(text.to_string()));
+                                        let _ = event_tx.send(
+                                            StreamEvent::ContentDelta(
+                                                text.to_string(),
+                                            ),
+                                        );
                                     }
                                 } else if delta_type == "input_json_delta"
                                     && let Some(text) = value
@@ -264,9 +278,10 @@ pub async fn parse_anthropic_sse_stream(
                             }
                         }
                         "content_block_stop" => {
-                            if let (Some(id), Some(name)) =
-                                (current_tool_id.take(), current_tool_name.take())
-                            {
+                            if let (Some(id), Some(name)) = (
+                                current_tool_id.take(),
+                                current_tool_name.take(),
+                            ) {
                                 let tc = ToolCall {
                                     id,
                                     call_type: "function".to_string(),
@@ -275,7 +290,8 @@ pub async fn parse_anthropic_sse_stream(
                                         arguments: current_tool_args.clone(),
                                     },
                                 };
-                                let _ = event_tx.send(StreamEvent::ToolCallComplete(tc));
+                                let _ = event_tx
+                                    .send(StreamEvent::ToolCallComplete(tc));
                                 current_tool_args.clear();
                             }
                         }
@@ -288,7 +304,8 @@ pub async fn parse_anthropic_sse_stream(
                                 let _ = event_tx.send(StreamEvent::Usage {
                                     prompt_tokens,
                                     completion_tokens,
-                                    total_tokens: prompt_tokens + completion_tokens,
+                                    total_tokens: prompt_tokens
+                                        + completion_tokens,
                                 });
                             }
                         }
@@ -297,8 +314,10 @@ pub async fn parse_anthropic_sse_stream(
                             return Ok(());
                         }
                         "error" => {
-                            let _ = event_tx
-                                .send(StreamEvent::Error(format!("Anthropic error: {}", data)));
+                            let _ = event_tx.send(StreamEvent::Error(format!(
+                                "Anthropic error: {}",
+                                data
+                            )));
                             break;
                         }
                         _ => {}

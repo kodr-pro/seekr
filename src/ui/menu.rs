@@ -1,611 +1,786 @@
-use ratatui::{
-    Frame,
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap,
 };
 
-use crate::app::{App, MenuTab};
+use crate::config::{AppConfig, ProviderConfig};
+use crate::jockey::driver::RunState;
 
-pub fn render_help_tab(frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" Menu Shortcuts ");
-
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Navigation",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::styled("    Tab / l / →  ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Next Tab"),
-        ]),
-        Line::from(vec![
-            Span::styled("    h / ←        ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Previous Tab"),
-        ]),
-        Line::from(vec![
-            Span::styled("    j / k / ↑/↓  ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Select Item"),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Actions",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::styled("    Enter        ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Activate / Switch / Toggle"),
-        ]),
-        Line::from(vec![
-            Span::styled("    d / Delete   ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Delete Session (in Sessions tab)"),
-        ]),
-        Line::from(vec![
-            Span::styled("    Esc / q      ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Close Menu"),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "  Tabs Overview",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from("    • Sessions  : Browse and resume previous chats"),
-        Line::from("    • Models    : Select AI model for the active provider"),
-        Line::from("    • Providers : Switch between configured API providers"),
-        Line::from("    • Settings  : Toggle tools, iterations, and UI options"),
-    ];
-
-    frame.render_widget(Paragraph::new(text).block(block), area);
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum MenuTab {
+    Runs,
+    Providers,
+    Settings,
+    Help,
 }
 
-pub fn render_menu(frame: &mut Frame, area: Rect, app: &App) {
-    frame.render_widget(Clear, area);
+impl MenuTab {
+    fn next(self) -> Self {
+        match self {
+            MenuTab::Runs => MenuTab::Providers,
+            MenuTab::Providers => MenuTab::Settings,
+            MenuTab::Settings => MenuTab::Help,
+            MenuTab::Help => MenuTab::Runs,
+        }
+    }
 
-    let block = Block::default()
-        .title(" Seekr - Control Center ")
-        .borders(Borders::ALL)
-        .border_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
+    fn prev(self) -> Self {
+        match self {
+            MenuTab::Runs => MenuTab::Help,
+            MenuTab::Providers => MenuTab::Runs,
+            MenuTab::Settings => MenuTab::Providers,
+            MenuTab::Help => MenuTab::Settings,
+        }
+    }
+}
 
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
+/// Inline editor for provider fields: name, base_url, model, key.
+pub struct ProviderForm {
+    pub editing: Option<usize>,
+    pub fields: [String; 4],
+    pub field: usize,
+}
 
-    let chunks = Layout::default()
+impl ProviderForm {
+    pub fn from_provider(index: usize, p: &ProviderConfig) -> Self {
+        Self {
+            editing: Some(index),
+            fields: [
+                p.name.clone(),
+                p.base_url.clone(),
+                p.model.clone(),
+                p.key.clone(),
+            ],
+            field: 0,
+        }
+    }
+
+    pub fn blank() -> Self {
+        Self {
+            editing: None,
+            fields: [
+                String::new(),
+                "https://api.openai.com/v1".into(),
+                String::new(),
+                String::new(),
+            ],
+            field: 0,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self.editing {
+            Some(_) => "edit provider (empty key keeps existing)",
+            None => "add provider",
+        }
+    }
+}
+
+pub struct MenuState {
+    pub tab: MenuTab,
+    pub runs_list: ListState,
+    pub provider_list: ListState,
+    pub settings_list: ListState,
+    pub provider_form: Option<ProviderForm>,
+    pub status: String,
+    pub runs: Vec<(String, String)>,
+    pub provider_count: usize,
+}
+
+impl MenuState {
+    pub fn new() -> Self {
+        let mut s = Self {
+            tab: MenuTab::Runs,
+            runs_list: ListState::default(),
+            provider_list: ListState::default(),
+            settings_list: ListState::default(),
+            provider_form: None,
+            status: String::new(),
+            runs: RunState::list_runs(),
+            provider_count: 0,
+        };
+        if !s.runs.is_empty() {
+            s.runs_list.select(Some(s.runs.len() - 1));
+        }
+        s
+    }
+
+    pub fn refresh_runs(&mut self) {
+        self.runs = RunState::list_runs();
+        let selected = self.runs_list.selected().unwrap_or(0);
+        self.runs_list
+            .select(Some(selected.min(self.runs.len().saturating_sub(1))));
+    }
+
+    fn list_len(&self) -> usize {
+        match self.tab {
+            MenuTab::Runs => self.runs.len(),
+            MenuTab::Providers => self.provider_count,
+            MenuTab::Settings => SETTINGS_ROWS,
+            MenuTab::Help => 0,
+        }
+    }
+
+    fn selected_list(&mut self) -> &mut ListState {
+        match self.tab {
+            MenuTab::Runs => &mut self.runs_list,
+            MenuTab::Providers => &mut self.provider_list,
+            MenuTab::Settings => &mut self.settings_list,
+            MenuTab::Help => &mut self.runs_list,
+        }
+    }
+
+    fn move_selection(&mut self, delta: i32) {
+        let len = self.list_len();
+        if len == 0 {
+            return;
+        }
+        let list = self.selected_list();
+        let current = list.selected().unwrap_or(0) as i32;
+        let next = (current + delta).clamp(0, len as i32 - 1) as usize;
+        list.select(Some(next));
+    }
+}
+
+impl Default for MenuState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What the app should do after a menu keypress.
+#[derive(Debug)]
+pub enum MenuOutcome {
+    None,
+    CloseMenu,
+    AttachRun(String),
+    ResumeRun(String),
+    MergeRun(String),
+    CleanRun(String),
+    TestProvider(usize),
+    RestartRoles,
+}
+
+pub const SETTINGS_ROWS: usize = 8;
+
+pub fn menu_hints(menu: &MenuState) -> String {
+    if menu.provider_form.is_some() {
+        return "Tab next field · Ctrl+S save · Esc cancel".to_string();
+    }
+    match menu.tab {
+        MenuTab::Runs => {
+            "Enter attach · R resume · m merge · c clean · u refresh · Tab tabs · Esc close"
+                .to_string()
+        }
+        MenuTab::Providers => {
+            "n add · e edit · d delete · t test key · w set worker · f set frontier · Esc close"
+                .to_string()
+        }
+        MenuTab::Settings => "+/- adjust · Space toggle · s save · Esc close".to_string(),
+        MenuTab::Help => "Esc close · Tab/←→ switch tabs".to_string(),
+    }
+}
+
+pub fn handle_menu_key(
+    key: KeyEvent,
+    menu: &mut MenuState,
+    config: &mut AppConfig,
+) -> MenuOutcome {
+    if let Some(form) = menu.provider_form.as_mut() {
+        match key.code {
+            KeyCode::Esc => {
+                menu.provider_form = None;
+                menu.status.clear();
+            }
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Enter => {
+                form.field = (form.field + 1) % 4;
+            }
+            KeyCode::Backspace => {
+                form.fields[form.field].pop();
+            }
+            KeyCode::Char('s')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                let form = menu.provider_form.take().unwrap();
+                let name = form.fields[0].trim().to_string();
+                let base_url = form.fields[1].trim().to_string();
+                let model = form.fields[2].trim().to_string();
+                let supplied_key = form.fields[3].trim().to_string();
+                if name.is_empty() || base_url.is_empty() || model.is_empty() {
+                    menu.status =
+                        "name, base_url and model are required".into();
+                    menu.provider_form = Some(form);
+                    return MenuOutcome::None;
+                }
+                match form.editing.and_then(|i| config.providers.get_mut(i)) {
+                    Some(p) => {
+                        let old_name = p.name.clone();
+                        p.name = name.clone();
+                        p.base_url = base_url;
+                        p.model = model;
+                        if !supplied_key.is_empty() {
+                            p.key = supplied_key;
+                        }
+                        if config.jockey.worker_provider.as_deref()
+                            == Some(old_name.as_str())
+                        {
+                            config.jockey.worker_provider = Some(name.clone());
+                        }
+                        if config.jockey.frontier_provider.as_deref()
+                            == Some(old_name.as_str())
+                        {
+                            config.jockey.frontier_provider =
+                                Some(name.clone());
+                        }
+                        menu.status = format!("updated {name}");
+                    }
+                    None => {
+                        config.providers.push(ProviderConfig {
+                            name: name.clone(),
+                            key: supplied_key,
+                            base_url,
+                            model,
+                            timeout: None,
+                        });
+                        menu.status = format!("added {name}");
+                    }
+                }
+                let _ = config.save();
+                menu.provider_count = config.providers.len();
+                return MenuOutcome::RestartRoles;
+            }
+            KeyCode::Char(c) => form.fields[form.field].push(c),
+            _ => {}
+        }
+        return MenuOutcome::None;
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.code == KeyCode::Char('g')
+    {
+        return MenuOutcome::CloseMenu;
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => return MenuOutcome::CloseMenu,
+        KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+            menu.tab = menu.tab.next()
+        }
+        KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+            menu.tab = menu.tab.prev()
+        }
+        KeyCode::Up | KeyCode::Char('k') => menu.move_selection(-1),
+        KeyCode::Down | KeyCode::Char('j') => menu.move_selection(1),
+        KeyCode::Char('1') => menu.tab = MenuTab::Runs,
+        KeyCode::Char('2') => menu.tab = MenuTab::Providers,
+        KeyCode::Char('3') => menu.tab = MenuTab::Settings,
+        KeyCode::Char('4') => menu.tab = MenuTab::Help,
+        _ => return menu.handle_tab_action(key, config),
+    }
+    MenuOutcome::None
+}
+
+impl MenuState {
+    fn handle_tab_action(
+        &mut self,
+        key: KeyEvent,
+        config: &mut AppConfig,
+    ) -> MenuOutcome {
+        match self.tab {
+            MenuTab::Runs => {
+                let Some(idx) = self.runs_list.selected() else {
+                    return MenuOutcome::None;
+                };
+                let Some((id, _)) = self.runs.get(idx).cloned() else {
+                    return MenuOutcome::None;
+                };
+                match key.code {
+                    KeyCode::Enter | KeyCode::Char('a') => {
+                        MenuOutcome::AttachRun(id)
+                    }
+                    KeyCode::Char('R') => MenuOutcome::ResumeRun(id),
+                    KeyCode::Char('m') => MenuOutcome::MergeRun(id),
+                    KeyCode::Char('c') => MenuOutcome::CleanRun(id),
+                    KeyCode::Char('u') => {
+                        self.refresh_runs();
+                        self.status = format!("{} runs", self.runs.len());
+                        MenuOutcome::None
+                    }
+                    _ => MenuOutcome::None,
+                }
+            }
+            MenuTab::Providers => {
+                let idx = self.provider_list.selected().unwrap_or(0);
+                let Some(p) = config.providers.get(idx).cloned() else {
+                    if matches!(key.code, KeyCode::Char('n')) {
+                        self.provider_form = Some(ProviderForm::blank());
+                    }
+                    return MenuOutcome::None;
+                };
+                match key.code {
+                    KeyCode::Char('n') => {
+                        self.provider_form = Some(ProviderForm::blank());
+                        MenuOutcome::None
+                    }
+                    KeyCode::Char('e') => {
+                        self.provider_form =
+                            Some(ProviderForm::from_provider(idx, &p));
+                        MenuOutcome::None
+                    }
+                    KeyCode::Char('d') => {
+                        let removed = &config.providers.remove(idx);
+                        if config.jockey.worker_provider.as_deref()
+                            == Some(removed.name.as_str())
+                        {
+                            config.jockey.worker_provider = None;
+                        }
+                        if config.jockey.frontier_provider.as_deref()
+                            == Some(removed.name.as_str())
+                        {
+                            config.jockey.frontier_provider = None;
+                        }
+                        let _ = config.save();
+                        self.provider_count = config.providers.len();
+                        let sel = self.provider_list.selected().unwrap_or(0);
+                        self.provider_list.select(Some(
+                            sel.min(self.provider_count.saturating_sub(1)),
+                        ));
+                        self.status = format!("deleted {}", removed.name);
+                        MenuOutcome::RestartRoles
+                    }
+                    KeyCode::Char('t') => MenuOutcome::TestProvider(idx),
+                    KeyCode::Char('w') => {
+                        config.jockey.worker_provider = Some(p.name.clone());
+                        let _ = config.save();
+                        self.status = format!("worker = {}", p.name);
+                        MenuOutcome::RestartRoles
+                    }
+                    KeyCode::Char('f') => {
+                        config.jockey.frontier_provider = Some(p.name.clone());
+                        let _ = config.save();
+                        self.status = format!("frontier = {}", p.name);
+                        MenuOutcome::RestartRoles
+                    }
+                    _ => MenuOutcome::None,
+                }
+            }
+            MenuTab::Settings => {
+                let idx = self.settings_list.selected().unwrap_or(0);
+                let jj = &mut config.jockey;
+                let bumped =
+                    |v: &mut u32, up: bool, step: u32, min: u32, max: u32| {
+                        if up {
+                            *v = (*v).saturating_add(step).min(max);
+                        } else {
+                            *v = (*v).saturating_sub(step).max(min);
+                        }
+                    };
+                if key.code == KeyCode::Char('s') {
+                    let _ = config.save();
+                    self.status = "settings saved".into();
+                    return MenuOutcome::None;
+                }
+                match (idx, key.code) {
+                    (0, KeyCode::Char('+')) => {
+                        bumped(&mut jj.max_attempts_per_step, true, 1, 1, 20)
+                    }
+                    (0, KeyCode::Char('-')) => {
+                        bumped(&mut jj.max_attempts_per_step, false, 1, 1, 20)
+                    }
+                    (1, KeyCode::Char('+')) => {
+                        bumped(&mut jj.max_frontier_calls, true, 1, 0, 50)
+                    }
+                    (1, KeyCode::Char('-')) => {
+                        bumped(&mut jj.max_frontier_calls, false, 1, 0, 50)
+                    }
+                    (2, KeyCode::Char('+')) => {
+                        jj.verification_timeout_secs =
+                            jj.verification_timeout_secs.saturating_add(60);
+                    }
+                    (2, KeyCode::Char('-')) => {
+                        jj.verification_timeout_secs = jj
+                            .verification_timeout_secs
+                            .saturating_sub(60)
+                            .max(30);
+                    }
+                    (3, KeyCode::Char('+')) => {
+                        jj.step_timeout_secs =
+                            jj.step_timeout_secs.saturating_add(300);
+                    }
+                    (3, KeyCode::Char('-')) => {
+                        jj.step_timeout_secs =
+                            jj.step_timeout_secs.saturating_sub(300).max(300);
+                    }
+                    (4, KeyCode::Char('+')) => {
+                        jj.worker_temperature =
+                            (jj.worker_temperature + 0.1).min(1.5);
+                    }
+                    (4, KeyCode::Char('-')) => {
+                        jj.worker_temperature =
+                            (jj.worker_temperature - 0.1).max(0.0);
+                    }
+                    (5, KeyCode::Char('+')) => {
+                        jj.worker_max_tokens = jj
+                            .worker_max_tokens
+                            .saturating_add(1024)
+                            .min(32768);
+                    }
+                    (5, KeyCode::Char('-')) => {
+                        jj.worker_max_tokens =
+                            jj.worker_max_tokens.saturating_sub(1024).max(1024);
+                    }
+                    (6, KeyCode::Char('+')) => {
+                        jj.wrangler_timeout_secs =
+                            jj.wrangler_timeout_secs.saturating_add(30);
+                    }
+                    (6, KeyCode::Char('-')) => {
+                        jj.wrangler_timeout_secs =
+                            jj.wrangler_timeout_secs.saturating_sub(30).max(30);
+                    }
+                    (7, KeyCode::Char(' ')) => {
+                        jj.allow_degraded = !jj.allow_degraded;
+                    }
+                    _ => {}
+                }
+                let _ = config.save();
+                MenuOutcome::None
+            }
+            MenuTab::Help => MenuOutcome::None,
+        }
+    }
+}
+
+pub fn render_menu(
+    f: &mut ratatui::Frame,
+    menu: &mut MenuState,
+    config: &AppConfig,
+    area: Rect,
+) {
+    let popup = centered(area, 92, 88);
+    f.render_widget(Clear, popup);
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // Tabs
-            Constraint::Min(0),    // Content
-            Constraint::Length(1), // Help Footer
+            Constraint::Length(3),
+            Constraint::Min(3),
+            Constraint::Length(2),
         ])
-        .split(inner_area);
+        .split(popup);
 
-    render_tabs(frame, chunks[0], app);
-    render_content(frame, chunks[1], app);
-    render_footer(frame, chunks[2], app);
-} // render_menu
-
-fn render_tabs(frame: &mut Frame, area: Rect, app: &App) {
-    let titles = vec![
-        " Sessions ",
-        " Models ",
-        " Providers ",
-        " Skills ",
-        " Settings ",
-        " Help ",
-    ];
-
-    let selected_tab = match app.menu_state.active_tab {
-        MenuTab::Sessions => 0,
-        MenuTab::Models => 1,
-        MenuTab::Providers => 2,
-        MenuTab::Skills => 3,
-        MenuTab::Settings => 4,
-        MenuTab::Help => 5,
-    };
-
-    let tabs = Tabs::new(titles)
+    let tabs = Tabs::new(vec![" runs ", " providers ", " settings ", " help "])
+        .select(match menu.tab {
+            MenuTab::Runs => 0,
+            MenuTab::Providers => 1,
+            MenuTab::Settings => 2,
+            MenuTab::Help => 3,
+        })
+        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
         .block(
             Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        )
-        .select(selected_tab)
-        .style(Style::default().fg(Color::Gray))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .divider("|");
+                .borders(Borders::ALL)
+                .title(" control center (Ctrl+G) "),
+        );
+    f.render_widget(tabs, rows[0]);
 
-    frame.render_widget(tabs, area);
-} // render_tabs
-
-fn render_content(frame: &mut Frame, area: Rect, app: &App) {
-    if !matches!(app.input_mode, crate::app::InputMode::Normal) {
-        render_input_overlay(frame, area, app);
-        return;
+    match menu.tab {
+        MenuTab::Runs => {
+            let items: Vec<ListItem> = menu
+                .runs
+                .iter()
+                .map(|(id, status)| {
+                    let color = if status.starts_with("success") {
+                        Color::Green
+                    } else if status.starts_with("failed")
+                        || status.starts_with("unknown")
+                    {
+                        Color::Red
+                    } else {
+                        Color::Yellow
+                    };
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            id.clone(),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::raw("  "),
+                        Span::styled(
+                            status.clone(),
+                            Style::default().fg(color),
+                        ),
+                    ]))
+                })
+                .collect();
+            let list = List::new(items)
+                .block(Block::default().borders(Borders::ALL).title(format!(
+                    " runs ({}) — Enter attach · R resume · m merge · c clean ",
+                    menu.runs.len()
+                )))
+                .highlight_style(Style::default().bg(Color::DarkGray));
+            f.render_stateful_widget(list, rows[1], &mut menu.runs_list);
+        }
+        MenuTab::Providers => {
+            let items: Vec<ListItem> = config
+                .providers
+                .iter()
+                .map(|p| {
+                    let worker = config.jockey.worker_provider.as_deref()
+                        == Some(p.name.as_str());
+                    let frontier = config.jockey.frontier_provider.as_deref()
+                        == Some(p.name.as_str());
+                    let mut spans = vec![
+                        Span::styled(
+                            format!("{:<16}", p.name),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("{:<34}", p.model),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                    ];
+                    if worker {
+                        spans.push(Span::styled(
+                            "[worker] ",
+                            Style::default().fg(Color::Green),
+                        ));
+                    }
+                    if frontier {
+                        spans.push(Span::styled(
+                            "[frontier]",
+                            Style::default().fg(Color::Yellow),
+                        ));
+                    }
+                    if p.key.is_empty()
+                        && !p.base_url.contains("localhost")
+                        && !p.base_url.contains("server")
+                    {
+                        spans.push(Span::styled(
+                            "  no key",
+                            Style::default().fg(Color::Red),
+                        ));
+                    }
+                    spans.push(Span::styled(
+                        format!("  {}", p.base_url),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                    ListItem::new(Line::from(spans))
+                })
+                .collect();
+            let list = List::new(items).block(
+                Block::default().borders(Borders::ALL).title(
+                    " providers — n add · e edit · d delete · t test · w worker · f frontier ",
+                ),
+            );
+            f.render_stateful_widget(list, rows[1], &mut menu.provider_list);
+        }
+        MenuTab::Settings => {
+            let jj = &config.jockey;
+            let rows_data = [
+                (
+                    "max_attempts_per_step",
+                    jj.max_attempts_per_step.to_string(),
+                    "1-20",
+                ),
+                (
+                    "max_frontier_calls",
+                    jj.max_frontier_calls.to_string(),
+                    "0-50",
+                ),
+                (
+                    "verification_timeout_secs",
+                    jj.verification_timeout_secs.to_string(),
+                    "±60",
+                ),
+                (
+                    "step_timeout_secs",
+                    jj.step_timeout_secs.to_string(),
+                    "±300",
+                ),
+                (
+                    "worker_temperature",
+                    format!("{:.2}", jj.worker_temperature),
+                    "±0.1",
+                ),
+                (
+                    "worker_max_tokens",
+                    jj.worker_max_tokens.to_string(),
+                    "±1024",
+                ),
+                (
+                    "wrangler_timeout_secs",
+                    jj.wrangler_timeout_secs.to_string(),
+                    "±30",
+                ),
+                (
+                    "wrangler_command",
+                    jj.wrangler_command.clone().unwrap_or_else(|| {
+                        crate::config::default_wrangler_command().to_string()
+                    }),
+                    "config file",
+                ),
+                (
+                    "allow_degraded",
+                    if jj.allow_degraded { "true" } else { "false" }
+                        .to_string(),
+                    "Space",
+                ),
+            ];
+            let items: Vec<ListItem> = rows_data
+                .iter()
+                .map(|(k, v, hint)| {
+                    ListItem::new(Line::from(vec![
+                        Span::styled(
+                            format!("{k:<26}"),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                        Span::styled(
+                            format!("{v:<10}"),
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("({hint})"),
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                    ]))
+                })
+                .collect();
+            let list =
+                List::new(items)
+                    .block(Block::default().borders(Borders::ALL).title(
+                    " [jj] settings — +/- adjust · Space toggle (auto-saves) ",
+                ));
+            f.render_stateful_widget(list, rows[1], &mut menu.settings_list);
+        }
+        MenuTab::Help => {
+            let help = vec![
+                ("global", ""),
+                ("Ctrl+G", "open / close the control center"),
+                ("?", "toggle this help"),
+                ("Ctrl+C", "quit (press twice)"),
+                ("", ""),
+                ("intake", "type goal · Enter to plan"),
+                ("clarify", "type answer · Enter for next"),
+                (
+                    "confirm",
+                    "y start · r regenerate · e edit goal · q abort · j/k scroll",
+                ),
+                ("grinding", "j/k scroll activity · q detach view"),
+                ("done", "q quit"),
+                ("", ""),
+                (
+                    "runs tab",
+                    "Enter attach (view-only) · R resume · m merge · c clean · u refresh",
+                ),
+                (
+                    "providers",
+                    "n add · e edit · d delete · t test key · w/f assign roles",
+                ),
+                ("settings", "+/- adjust · Space toggle allow_degraded"),
+            ];
+            let lines: Vec<Line> = help
+                .into_iter()
+                .map(|(k, v)| {
+                    Line::from(vec![
+                        Span::styled(
+                            format!("{k:<12}"),
+                            Style::default().fg(Color::Cyan),
+                        ),
+                        Span::raw(v),
+                    ])
+                })
+                .collect();
+            f.render_widget(
+                Paragraph::new(lines)
+                    .block(
+                        Block::default().borders(Borders::ALL).title(" keys "),
+                    )
+                    .wrap(Wrap { trim: false }),
+                rows[1],
+            );
+        }
     }
 
-    match app.menu_state.active_tab {
-        MenuTab::Sessions => render_sessions(frame, area, app),
-        MenuTab::Models => render_models(frame, area, app),
-        MenuTab::Providers => render_providers(frame, area, app),
-        MenuTab::Skills => render_skills(frame, area, app),
-        MenuTab::Settings => render_settings(frame, area, app),
-        MenuTab::Help => render_help(frame, area, app),
-    }
-} // render_content
-
-fn render_input_overlay(frame: &mut Frame, area: Rect, app: &App) {
-    let (title, prompt) = match app.input_mode {
-        crate::app::InputMode::EditingProviderKey { .. } => (" Edit API Key ", "Key: "),
-        crate::app::InputMode::EditingProviderName { .. } => (" Edit Provider Name ", "Name: "),
-        crate::app::InputMode::EditingProviderUrl { .. } => (" Edit Base URL ", "URL: "),
-        crate::app::InputMode::EditingProviderModel { .. } => (" Edit Default Model ", "Model: "),
-        _ => (" Edit Field ", "Value: "),
+    let status = if menu.status.is_empty() {
+        menu_hints(menu)
+    } else {
+        menu.status.clone()
     };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(" {status} "),
+            Style::default().fg(Color::Black).bg(Color::Blue),
+        ))),
+        rows[2],
+    );
 
-    let block = Block::default()
-        .title(title)
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
-
-    let overlay_area = centered_rect(60, 20, area);
-    frame.render_widget(Clear, overlay_area);
-
-    let inner = block.inner(overlay_area);
-    frame.render_widget(block, overlay_area);
-
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(prompt, Style::default().fg(Color::Gray)),
-            Span::styled(&app.input, Style::default().fg(Color::White)),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            " [Enter] Save  [Esc] Cancel",
+    if let Some(form) = &menu.provider_form {
+        let form_area = centered(popup, 70, 50);
+        f.render_widget(Clear, form_area);
+        let labels = ["name", "base_url", "model", "api key"];
+        let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+            form.label(),
+            Style::default().add_modifier(Modifier::BOLD),
+        ))];
+        for (i, label) in labels.iter().enumerate() {
+            let marker = if i == form.field { "▶ " } else { "  " };
+            lines.push(Line::from(vec![
+                Span::raw(marker.to_string()),
+                Span::styled(
+                    format!("{label:<10}"),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::raw(if i == 3 {
+                    mask_key(&form.fields[3])
+                } else {
+                    form.fields[i].clone()
+                }),
+                Span::styled(
+                    if i == form.field { "▏" } else { "" },
+                    Style::default().fg(Color::Cyan),
+                ),
+            ]));
+        }
+        lines.push(Line::from(Span::styled(
+            "Tab next · Ctrl+S save · Esc cancel",
             Style::default().fg(Color::DarkGray),
-        )]),
-    ];
-
-    frame.render_widget(Paragraph::new(text), inner);
-
-    // Set cursor
-    frame.set_cursor_position((
-        inner.x + prompt.len() as u16 + app.cursor_pos as u16,
-        inner.y + 1,
-    ));
+        )));
+        f.render_widget(
+            Paragraph::new(lines)
+                .block(
+                    Block::default().borders(Borders::ALL).title(" provider "),
+                )
+                .wrap(Wrap { trim: false }),
+            form_area,
+        );
+    }
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
+fn mask_key(key: &str) -> String {
+    if key.len() <= 6 {
+        "•".repeat(key.len())
+    } else {
+        format!("{}{}", &key[..4], "•".repeat(key.len().saturating_sub(4)))
+    }
+}
+
+fn centered(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
+    let v = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Percentage((100 - percent_y) / 2),
             Constraint::Percentage(percent_y),
             Constraint::Percentage((100 - percent_y) / 2),
         ])
-        .split(r);
-
-    Layout::default()
+        .split(area);
+    let h = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Percentage((100 - percent_x) / 2),
             Constraint::Percentage(percent_x),
             Constraint::Percentage((100 - percent_x) / 2),
         ])
-        .split(popup_layout[1])[1]
+        .split(v[1]);
+    h[1]
 }
-
-fn render_sessions(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = if app.session.sessions.is_empty() {
-        vec![ListItem::new(" No sessions found.")]
-    } else {
-        app.session
-            .sessions
-            .iter()
-            .map(|s| {
-                let time_str = s.updated_at.format("%Y-%m-%d %H:%M").to_string();
-                let content = format!(" {} ({})", s.title, time_str);
-                ListItem::new(content)
-            })
-            .collect()
-    };
-
-    let list = List::new(items)
-        .block(Block::default().title(" Sessions ").borders(Borders::NONE))
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
-        .highlight_symbol(">> ");
-
-    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    frame.render_stateful_widget(list, area, &mut state);
-} // render_sessions
-
-fn render_models(frame: &mut Frame, area: Rect, app: &App) {
-    let items: Vec<ListItem> = if app.session.available_models.is_empty() {
-        vec![ListItem::new(
-            " Fetching models... (Press Ctrl+g again to refresh)",
-        )]
-    } else {
-        app.session
-            .available_models
-            .iter()
-            .map(|m| {
-                let current_model = app
-                    .config
-                    .as_ref()
-                    .map(|c| c.current_provider().model.as_str())
-                    .unwrap_or("");
-                let is_active = m == current_model;
-
-                let prefix = if is_active { "★ " } else { "  " };
-                let content = format!("{}{}", prefix, m);
-                ListItem::new(content)
-            })
-            .collect()
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(" Available Models ")
-                .borders(Borders::NONE),
-        )
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
-        .highlight_symbol(">> ");
-
-    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    frame.render_stateful_widget(list, area, &mut state);
-} // render_models
-
-fn render_providers(frame: &mut Frame, area: Rect, app: &App) {
-    let empty = Vec::new();
-    let providers = app.config.as_ref().map(|c| &c.providers).unwrap_or(&empty);
-    let active_idx = app.config.as_ref().map(|c| c.active_provider).unwrap_or(0);
-
-    let items: Vec<ListItem> = providers
-        .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let is_active = i == active_idx;
-            let is_connected = app
-                .agent
-                .provider_connected
-                .get(i)
-                .copied()
-                .unwrap_or(false);
-
-            let status_dot = if is_connected {
-                Span::styled("● ", Style::default().fg(Color::Green))
-            } else {
-                Span::styled("○ ", Style::default().fg(Color::Red))
-            };
-
-            let prefix = if is_active { "✔ " } else { "  " };
-            let name_style = if is_active {
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::White)
-            };
-
-            let line = Line::from(vec![
-                status_dot,
-                Span::styled(format!("{}{}", prefix, p.name), name_style),
-                Span::raw(format!(" ({})", p.model)),
-                Span::styled(
-                    format!(" - {}", p.base_url),
-                    Style::default().fg(Color::DarkGray),
-                ),
-            ]);
-
-            ListItem::new(line)
-        })
-        .collect();
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(" API Providers ")
-                .borders(Borders::NONE),
-        )
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
-        .highlight_symbol(">> ");
-
-    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(2)])
-        .split(area);
-
-    frame.render_stateful_widget(list, chunks[0], &mut state);
-
-    let help_text = vec![
-        Line::from(vec![
-            Span::styled(" [a]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Add  "),
-            Span::styled(" [d]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Delete  "),
-            Span::styled(" [e]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Edit Key  "),
-        ]),
-        Line::from(vec![
-            Span::styled(" [n]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Rename  "),
-            Span::styled(" [u]", Style::default().fg(Color::Yellow)),
-            Span::raw(" URL  "),
-            Span::styled(" [m]", Style::default().fg(Color::Yellow)),
-            Span::raw(" Model  "),
-        ]),
-    ];
-    let help_para = Paragraph::new(help_text).block(
-        Block::default()
-            .borders(Borders::TOP)
-            .border_style(Style::default().fg(Color::DarkGray)),
-    );
-    frame.render_widget(help_para, chunks[1]);
-} // render_providers
-
-fn render_skills(frame: &mut Frame, area: Rect, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(area);
-
-    let mut items = Vec::new();
-    let mut skill_metas = Vec::new();
-
-    // Local Skills
-    if let Some(ref mgr) = app.manager {
-        for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
-            let meta = skill.metadata();
-            let line = Line::from(vec![
-                Span::styled("📦 ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    meta.name.clone(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!(" v{}", meta.version)),
-            ]);
-            items.push(ListItem::new(line));
-            skill_metas.push((meta.name.clone(), true));
-        }
-    }
-
-    // MCP Servers
-    if let Some(ref cfg) = app.config {
-        for mcp in &cfg.mcp_servers {
-            let status_dot = if mcp.enabled {
-                Span::styled("● ", Style::default().fg(Color::Green))
-            } else {
-                Span::styled("○ ", Style::default().fg(Color::DarkGray))
-            };
-
-            let line = Line::from(vec![
-                status_dot,
-                Span::styled("MCP: ", Style::default().fg(Color::Cyan)),
-                Span::styled(&mcp.name, Style::default().add_modifier(Modifier::BOLD)),
-            ]);
-            items.push(ListItem::new(line));
-            skill_metas.push((mcp.name.clone(), false));
-        }
-    }
-
-    if items.is_empty() {
-        items.push(ListItem::new(" No skills found."));
-    }
-
-    let list = List::new(items)
-        .block(Block::default().title(" Skills ").borders(Borders::RIGHT))
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
-        .highlight_symbol(">> ");
-
-    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    frame.render_stateful_widget(list, chunks[0], &mut state);
-
-    // Detail area
-    let detail_area = chunks[1];
-    if let Some((name, is_local)) = skill_metas.get(app.menu_state.selection_idx) {
-        let mut detail_text = Vec::new();
-        detail_text.push(Line::from(vec![
-            Span::styled(
-                name,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(if *is_local {
-                " (Local Skill)"
-            } else {
-                " (MCP Server)"
-            }),
-        ]));
-        detail_text.push(Line::from(""));
-
-        if *is_local {
-            detail_text.push(Line::from(vec![Span::styled(
-                "Tools:",
-                Style::default().add_modifier(Modifier::UNDERLINED),
-            )]));
-            if let Some(ref mgr) = app.manager {
-                for skill in mgr.tool_registry().skills.lock().unwrap().iter() {
-                    if skill.metadata().name == *name {
-                        for tool in skill.tools() {
-                            detail_text.push(Line::from(vec![
-                                Span::raw("  - "),
-                                Span::styled(
-                                    tool.name().to_string(),
-                                    Style::default().fg(Color::Green),
-                                ),
-                            ]));
-                        }
-                    }
-                }
-            }
-        } else if let Some(ref mgr) = app.manager {
-            let mcp_mgr = mgr.mcp_manager();
-            if let Ok(meta_guard) = mcp_mgr.metadata.try_lock() {
-                let meta_map: &std::collections::HashMap<
-                    String,
-                    crate::mcp::manager::McpServerMetadata,
-                > = &meta_guard;
-                if let Some(meta) = meta_map.get(name) {
-                    if !meta.tools.is_empty() {
-                        detail_text.push(Line::from(vec![Span::styled(
-                            "Tools:",
-                            Style::default().add_modifier(Modifier::UNDERLINED),
-                        )]));
-                        for t in &meta.tools {
-                            detail_text.push(Line::from(vec![
-                                Span::raw("  - "),
-                                Span::styled(t.name.clone(), Style::default().fg(Color::Green)),
-                            ]));
-                        }
-                    }
-                    if !meta.resources.is_empty() {
-                        detail_text.push(Line::from(""));
-                        detail_text.push(Line::from(vec![Span::styled(
-                            "Resources:",
-                            Style::default().add_modifier(Modifier::UNDERLINED),
-                        )]));
-                        for r in &meta.resources {
-                            detail_text.push(Line::from(vec![
-                                Span::raw("  - "),
-                                Span::styled(r.name.clone(), Style::default().fg(Color::Blue)),
-                            ]));
-                        }
-                    }
-                    if !meta.prompts.is_empty() {
-                        detail_text.push(Line::from(""));
-                        detail_text.push(Line::from(vec![Span::styled(
-                            "Prompts:",
-                            Style::default().add_modifier(Modifier::UNDERLINED),
-                        )]));
-                        for p in &meta.prompts {
-                            detail_text.push(Line::from(vec![
-                                Span::raw("  - "),
-                                Span::styled(p.name.clone(), Style::default().fg(Color::Magenta)),
-                            ]));
-                        }
-                    }
-                } else {
-                    detail_text.push(Line::from(
-                        "Server is being initialized or no metadata available.",
-                    ));
-                }
-            } else {
-                detail_text.push(Line::from("Loading metadata..."));
-            }
-        }
-
-        let para = Paragraph::new(detail_text)
-            .block(Block::default().borders(Borders::NONE))
-            .wrap(Wrap { trim: true });
-        frame.render_widget(para, detail_area);
-    }
-}
-
-fn render_settings(frame: &mut Frame, area: Rect, app: &App) {
-    let config = match app.config.as_ref() {
-        Some(c) => c,
-        None => return,
-    };
-
-    let settings = [
-        format!("Working Directory: {}", config.agent.working_directory),
-        format!("Max Iterations: {}", config.agent.max_iterations),
-        format!("Auto-approve Tools: {}", config.agent.auto_approve_tools),
-        format!("Theme: {}", config.ui.theme),
-        format!("Show Reasoning: {}", config.ui.show_reasoning),
-    ];
-
-    let items: Vec<ListItem> = settings
-        .iter()
-        .map(|s| ListItem::new(format!(" {}", s)))
-        .collect();
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(" Application Settings ")
-                .borders(Borders::NONE),
-        )
-        .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan))
-        .highlight_symbol(">> ");
-
-    let mut state = ListState::default().with_selected(Some(app.menu_state.selection_idx));
-    frame.render_stateful_widget(list, area, &mut state);
-} // render_settings
-
-fn render_help(frame: &mut Frame, area: Rect, _app: &App) {
-    let text = vec![
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            " Navigation",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::styled("   h / l / Tab", Style::default().fg(Color::Yellow)),
-            Span::raw("   Switch between tabs"),
-        ]),
-        Line::from(vec![
-            Span::styled("   j / k / ↑ / ↓", Style::default().fg(Color::Yellow)),
-            Span::raw(" Select item in list"),
-        ]),
-        Line::from(vec![
-            Span::styled("   Enter          ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Confirm selection"),
-        ]),
-        Line::from(vec![
-            Span::styled("   d / Del        ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Delete item (Sessions)"),
-        ]),
-        Line::from(vec![
-            Span::styled("   Esc / q        ", Style::default().fg(Color::Yellow)),
-            Span::raw(" Close menu"),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            " Updates",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![Span::raw(
-            " Selecting a model or provider will instantly reconfigure Seekr.",
-        )]),
-        Line::from(vec![Span::raw(
-            " Settings changes apply to the current session and config file.",
-        )]),
-    ];
-
-    let para = Paragraph::new(text)
-        .block(Block::default().borders(Borders::NONE))
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(para, area);
-} // render_help
-
-fn render_footer(frame: &mut Frame, area: Rect, _app: &App) {
-    let text = Line::from(vec![
-        Span::styled(" [esc]", Style::default().fg(Color::Yellow)),
-        Span::raw(" Close  "),
-        Span::styled(" [Tab/h/l]", Style::default().fg(Color::Yellow)),
-        Span::raw(" Tabs  "),
-        Span::styled(" [j/k/Enter]", Style::default().fg(Color::Yellow)),
-        Span::raw(" Select "),
-    ]);
-
-    let para = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(para, area);
-} // render_footer

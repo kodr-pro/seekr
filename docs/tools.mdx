@@ -1,63 +1,45 @@
 # Built-in Tools
 
-The power of **seekr** lies in its toolset. These tools allow the AI agent to interact with your system and the web to fulfill your requests.
+The worker sees a deliberately tiny toolset. Every tool is bounded, and
+only three can mutate anything.
 
-## Included Tools
+## Free tools (read-only, never gated)
 
-### 🐚 Shell Tool
-The shell tool allows the agent to execute commands on your system.
-- **Capabilities:** Run scripts, install packages, check system logs, etc.
-- **Background Execution:** Long-running tasks like server starts or complex builds can be run in the background (`background: true`), allowing the agent to continue its loop.
-- **Safety:** Features a 5-minute execution timeout and a blacklist of dangerous commands to prevent system instability.
+| Tool | What it does |
+|---|---|
+| `read_file` | Reads a file through the path sandbox, capped at `worker_read_lines` lines |
+| `grep` | Regex search across the worktree; results truncated |
+| `glob` | Path-pattern search |
+| `list` | Directory listing |
+| `diagnostics` | Compiles-focused quick feedback (opt-in per build) |
+| `web_fetch` | Fetches a URL, fenced as untrusted context (`allow_web` only) |
+| `subagent` | Spawns a read-only explorer with `read/grep/glob/report` only (`allow_subagent` only) |
 
-### 📂 File Edit Tool
-A specialized tool for managing files in your repository.
-- **Capabilities:** Read file contents, create new files, apply patches to existing files.
-- **Intelligence:** The agent understands file structures and can perform precise edits without overwriting unrelated data.
+Re-reading an unchanged file inside one attempt is answered from cache
+without consuming the action budget — the model is told to do something
+new.
 
-### 🌐 Web Tool
-Connects the agent to the internet.
-- **Capabilities:** Search for information using Google-like queries, fetch and parse webpage content into markdown.
-- **Use Case:** Researching documentation, finding solutions to bugs, or staying updated with latest library versions.
+## Mutating tools (intercepted)
 
-### 📋 Task Tool
-Used by the agent to manage its own internal state and goals.
-- **Capabilities:** Break down complex objectives into smaller, manageable tasks.
-- **Tracking:** Users can see the current active task and the history of completed tasks in the **Tasks** tab.
+| Tool | What it does | Deterministic gate |
+|---|---|---|
+| `write_file` | Creates or overwrites a file | Path sandbox: `..`, absolute, symlink, and sibling-prefix escapes rejected; must fall under the step's `allowed_paths` |
+| `edit_file` | Exact-match string replacement | Same path rules |
+| `run_command` | Shell command in the worktree | Blocklist check; read-only commands (tests, ls, grep...) run free, mutating ones are loop-checked |
 
----
+An exact repeat of a failed mutating action is rejected by
+fingerprint ("loop detected"), forcing a different approach.
 
-## ⚡ Concurrency & Parallelism
-**seekr** features a high-performance execution engine that allows for:
-1. **Multi-Tool Parallelism:** Independent tool calls (e.g., reading multiple files or fetching multiple URLs) are executed concurrently in separate threads.
-2. **Asynchronous Observation:** The agent can observe results as they come in, significantly reducing wait times for slow I/O operations.
-3. **Thread Tracking:** Every activity in the log is tagged with its thread ID (e.g., `1/3`, `2/3`), providing clear visibility into parallel execution.
+## Terminal tool
 
----
+`finish_step` — the worker declares the step complete with a summary
+stating how each invariant holds. This triggers the deterministic
+verification command and then AiWrangler's check gate, which reads that
+summary and checks it against the actual diff.
 
-## 🛠 Extensible Skills
-Beyond built-in tools, you can extend **seekr** with custom skills. 
+## What is deliberately absent
 
-### How it works:
-1. Create a directory in `~/.config/seekr/skills/` (global) or `./.seekr/skills/` (repository-specific).
-2. Add a `skill.json` to define your tools and their parameters.
-3. Write scripts that the tools will execute.
-
-**seekr** handles safe argument passing using a POSIX-compliant **Shell Escape Engine**. This ensures that even if an agent generates a malicious or malformed argument, it is safely escaped before being passed to the underlying shell (Python, Bash, etc.), preventing command injection vulnerabilities.
-
----
-
-## Tool Safety & Approvals
-**seekr** is designed with safety in mind. Every tool invocation that could modify your system is presented for confirmation. You can choose to:
-- **[Y]es**: Approve the current execution.
-- **[N]o**: Reject the execution.
-- **[A]lways**: Enter auto-approval mode for the remainder of the session.
-
-You can see:
-1. The exact command or edit being proposed.
-2. The agent's reasoning behind the action.
-3. A real-time preview of file diffs in the activity log.
-
----
-
-[Next: User Interface](/ui)
+No arbitrary shell, no network by default, no git access, no tool that
+can escape the worktree, and no `todo` tool — small models fixate on
+updating todo lists instead of editing code, so planning context is
+provided by the governor instead.

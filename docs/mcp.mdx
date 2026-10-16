@@ -1,37 +1,72 @@
-# Model Context Protocol (MCP)
+# AiWrangler Integration
 
-Seekr implements advanced support for the Model Context Protocol (MCP), enabling it to seamlessly tap into external data sources, expert tools, and predefined conversation prompts.
+seekr's semantic governance is
+[AiWrangler](https://github.com/kodr-pro/AiWrangler) — ground-truth
+guardrails for coding agents — consumed as a stdio MCP server. seekr
+spawns the server once per run and drives its gate lifecycle; there is
+no gate logic inside seekr to drift from the product.
 
-## Architecture
+## Lifecycle mapping
 
-Seekr interacts with MCP via the `McpManager`, an internal state director that manages concurrent connections across multiple configurable MCP servers. During startup, the agent maps and indexes:
-- **Tools**: Discoverable functions exposed to the agent natively.
-- **Resources**: Datasets, API schemas, and localized code documents.
-- **Prompts**: Specialized templates and workflows.
+| seekr moment | AiWrangler tool | Verdicts seekr acts on |
+|---|---|---|
+| Run start | `wrangler_config` | health check (doctor + fail-closed spawn) |
+| After DAG planning | `wrangler_plan` | PASS / CLARIFY / HUMAN + context pack |
+| Step completion | `wrangler_check` | PASS / FIX REQUIRED / HUMAN REVIEW / DEGRADED |
+| Owner intervention | `wrangler_ack` | pending findings list / recorded acknowledgments |
+| Owner intervention | `wrangler_loop_reset` | circuit-breaker reset |
 
-## Features
+The context pack from the plan gate becomes the `GROUND TRUTH` block in
+every worker prompt. The check gate receives the step description, its
+invariants, the worker's own finish summary, and the raw verification
+output — so the worker's claims are checked against the diff and the
+test results, not taken on faith.
 
-### Unified Discovery
-When the Seekr agent is initialized, it triggers an early metadata synchronization with all connected servers. This injects crucial state directly into the LLM's system prompt to ground the agent in the external context it actually has access to.
+## Ground truth discovery
 
-### Skills Tab Master-Detail
-The built-in text user interface (TUI) features an advanced master-detail view for managing MCP capabilities:
-- **Left Panel**: Presents all active baseline local Skills alongside managed MCP Servers.
-- **Right Panel**: Dynamically visualizes detailed capability information (Tools, Resources, Prompts) associated with the highlighted integration.
+AiWrangler discovers `aiwrangler.config.json` from the gate directory
+upward. seekr guarantees one exists in every run worktree:
 
-### Telemetry Pipeline & Observability
-MCP execution events, including live telemetry sourced via standard server streams (`notifications/message`), are piped directly into Seekr's `TaskManager`. As a result, the activity feed in the TUI provides 100% observability of actions taking place transparently across external environments.
+- **Your repo commits one** — it is checked out in the worktree
+  automatically, and your corpus (protocol spec, review rules,
+  divergence rulings, open questions, plan doors) governs every run.
+- **Your repo doesn't** — seekr writes a minimal generated config at the
+  worktree root (default gates, `jev-1.13.0`, ledger and cache pointed at
+  the run's state dir) and git-excludes it, so it never lands in diffs
+  or on the branch. Standard checks — scope, claims, silent defaults,
+  injection, test quality — still run; there is just no
+  project-specific corpus.
 
-## Configuration
+## Human-in-the-loop
 
-Servers can be plugged directly into the `seekr` ecosystem by registering them in `~/.seekr/config.toml`. 
+When the check gate returns HUMAN REVIEW, the step parks with status
+`needs_owner` and the run continues independent steps. The owner flow:
 
-```toml
-[[mcp_servers]]
-name = "filesystem"
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/my_project"]
-auto_install = true
+```bash
+seekr ack <run-id>                                   # list pending findings + diff hash
+seekr ack <run-id> --rules RULE-10 --note "approved: trust boundary is intentional"
+seekr resume <run-id>
 ```
 
-The `auto_install` parameter permits Seekr to instantly initialize missing dependencies when loading the MCP server, removing operational boilerplate.
+Acknowledgments are recorded in AiWrangler's append-only ledger, void on
+any diff change, and block-severity findings are never ackable.
+
+## Egress and degradation
+
+The semantic battery sends task/diff/spec text to `api.typesafe.ai`
+(pinned to `jev-1.13.0`). Set `AIWRANGLER_EGRESS=off` for a
+deterministic-only, zero-egress mode — expect DEGRADED verdicts, which
+seekr treats fail-closed: completed steps cannot pass without the
+semantic layer unless you explicitly pass `--allow-degraded`.
+
+## Testing without tokens
+
+`mock_aiwrangler` (shipped with seekr) is a scenario-driven stand-in for
+the real server:
+
+```sh
+mock_aiwrangler                      # healthy PASS scenario, zero tokens
+mock_aiwrangler scenario.json       # canned verdicts, e.g. forced FIX REQUIRED
+```
+
+The e2e test suite runs the entire governor loop against it.

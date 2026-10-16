@@ -1,0 +1,29 @@
+{
+  "goal": "Implement a fixed-capacity FIFO ring buffer in Go.",
+  "steps": [
+    {
+      "id": "ring_core",
+      "description": "Implement ring.Ring: New (panics on capacity 0), Push under capacity, Pop oldest-first with ok flag, Len, Cap",
+      "depends_on": [],
+      "invariants": [
+        "New(0) panics; New(n).Cap() == n; empty ring Len() == 0",
+        "Push returns true and appends while under capacity; Pop returns the OLDEST element and ok=false when empty",
+        "Must touch only files under ring/"
+      ],
+      "allowed_paths": ["ring/"],
+      "verification_command": "go test ./ring/ -run 'TestNew|TestPushPopRoundtrip|TestCapReporting' -count=1"
+    },
+    {
+      "id": "ring_full_wrap",
+      "description": "Implement full-buffer behavior: Push returns false when full without corrupting order, and the buffer wraps correctly across reuse",
+      "depends_on": ["ring_core"],
+      "invariants": [
+        "Push on a full ring returns false, leaves Len unchanged, and never corrupts FIFO order",
+        "push/pop interleaving keeps strict FIFO order across many wraparounds of the internal storage",
+        "Must touch only files under ring/"
+      ],
+      "allowed_paths": ["ring/"],
+      "verification_command": "go test ./... -count=1"
+    }
+  ]
+}
