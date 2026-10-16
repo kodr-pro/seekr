@@ -1058,7 +1058,7 @@ fn title_bar(app: &JockeyApp) -> Line<'static> {
     let spin = SPINNER[((app.tick / 3) % SPINNER.len() as u64) as usize];
     let mut spans = vec![
         Span::styled(
-            " ⚡ Jev Jockey · AiWrangler ",
+            " ⚡ seekr · AiWrangler ",
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)

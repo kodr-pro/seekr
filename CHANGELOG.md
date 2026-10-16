@@ -61,7 +61,7 @@ the gate logic and drives the released MCP server instead.
 
 ## [0.4.0] - 2026-10-05
 
-Jev Jockey: seekr becomes an autonomous, cost-guarded agent engine.
+seekr becomes an autonomous, cost-guarded agent engine.
 
 ### Added
 - **Jev (TypeSafe AI) client**: noul/choice/score judgments over `/v1/systemone`,

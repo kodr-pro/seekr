@@ -37,14 +37,23 @@ first implementations don't compile-and-pass within 3 attempts + one
 guidance round. The loop mechanics (rollback, findings feedback,
 escalation) all work; convergence doesn't.
 
+## Iteration history
+
+| Run | Steps | Mutations/run | Notes |
+|---|---|---|---|
+| baseline (0.5.0) | 0/10 | 2–4 | reads-mostly stalls; gate chain verified live |
+| iter 1 (seed + inline diagnostics + distilled failures) | 0/10 | 3–7 | writes up 2×, reads down; **governor bug found: stalls discarded unverified work** |
+| iter 2 (auto-verify on stall; frontier empty-reply retry) | 0/10 | 2–8 | verify gates engage on stalls; token_bucket reaches the check gate with cited FIX findings; wal_writer incomplete (bench aborted, model server cold) |
+
 Ranked levers, to be judged against this baseline:
 
-1. **Seed the target file into attempt-start context** — remove the
-   read/search phase entirely; the worker starts from the code in hand.
-2. **Compile feedback inside the attempt loop** — auto-run
-   `cargo check` after each mutation (the `diagnostics` tool exists for
-   exactly this) so syntax errors burn one action, not one attempt.
-3. **Curate verify-failure context** — point the worker at the exact
-   failing test and diff-worthy lines instead of the full output blob.
-4. **Escalate at mid-attempt stall** — zero mutations by attempt
-   midpoint goes straight to guidance.
+1. ~~Seed the target file into attempt-start context~~ (landed, iter 1)
+2. ~~Compile feedback inside the attempt loop~~ (landed, iter 1)
+3. ~~Curate verify-failure context~~ (landed, iter 1)
+4. ~~Auto-verify stalls with unverified work~~ (landed, iter 2)
+5. **Convergence quality**: the worker's implementations compile
+   increasingly often but still fail fixture tests on semantics; next
+   levers are diff-aware retry context (show the worker its own diff
+   against the failing test) and escalating to frontier patches (not
+   just guidance) on the second failed verification.
+

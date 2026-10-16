@@ -35,7 +35,7 @@ worktrees make every run reversible.
    │     HUMAN REVIEW → step parks until `seekr ack <run-id>`
    │     DEGRADED → fail-closed unless --allow-degraded
    │            ▼
-   │   Phase 4: Triage (Jev Jockey)
+   │   Phase 4: Triage (deterministic) + escalation
    │   syntax_fix → retry with stderr
    │   read_context → inject the file the error points at
    │   deadlock / attempts exhausted → escalate to frontier
