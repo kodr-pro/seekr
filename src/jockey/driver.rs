@@ -836,6 +836,24 @@ Never reply with prose only. (soft retry {prose_retries}/{MAX_PROSE_RETRIES_PER_
                         continue;
                     }
                     self.state.ledger.add_worker(None);
+                    // A stall with unverified work on disk is for the
+                    // verification gate to judge, not a reason to discard
+                    // the work: run it on the worker's behalf.
+                    if !records.is_empty() {
+                        live_context.push(
+                            "GOVERNOR: worker stalled with unverified \
+changes — running verification automatically."
+                                .to_string(),
+                        );
+                        return (
+                            self.verify(
+                                step_id,
+                                Some("governor auto-verify after stall"),
+                            )
+                            .await,
+                            records,
+                        );
+                    }
                     return (
                         AttemptOutcome::NoAction(format!("worker error: {e}")),
                         records,
@@ -1104,6 +1122,18 @@ with your next edit_file before anything else."
                     "WARNING: that reply made no effective progress (only repeats/todo). Propose an edit_file, write_file, run_command, or a NEW search now.".to_string(),
                 );
                 if no_op_strikes >= 3 {
+                    if !records.is_empty() {
+                        // Repeat-actions with unverified changes: the
+                        // gate judges the work, not the repetition.
+                        return (
+                            self.verify(
+                                step_id,
+                                Some("governor auto-verify after repetition"),
+                            )
+                            .await,
+                            records,
+                        );
+                    }
                     return (
                         AttemptOutcome::NoAction(
                             "worker repeated already-done actions and todo updates without making progress".to_string(),
@@ -1617,20 +1647,34 @@ Never restate the problem; fix or direct. Keep it minimal.\n";
             truncate_str(error.as_deref().unwrap_or("(none)"), 4000)
         );
 
-        let outcome = client
-            .chat_completion_with_usage(
-                vec![
-                    crate::api::types::ChatMessage::system(system),
-                    crate::api::types::ChatMessage::user(&user),
-                ],
-                &model,
-                Some(0.2),
-                Some(4096),
-                None,
-                None,
-            )
-            .await;
-        self.state.frontier_calls_used += 1;
+        // Reasoning-style frontiers occasionally return empty content
+        // (everything lands in reasoning); retry once before giving up.
+        let mut outcome = None;
+        for _try in 0..2 {
+            let attempt = client
+                .chat_completion_with_usage(
+                    vec![
+                        crate::api::types::ChatMessage::system(system),
+                        crate::api::types::ChatMessage::user(&user),
+                    ],
+                    &model,
+                    Some(0.2),
+                    Some(4096),
+                    None,
+                    None,
+                )
+                .await;
+            self.state.frontier_calls_used += 1;
+            let nonempty =
+                matches!(&attempt, Ok(c) if !c.content.trim().is_empty());
+            outcome = Some(attempt);
+            if nonempty
+                || self.state.frontier_calls_used >= self.jj.max_frontier_calls
+            {
+                break;
+            }
+        }
+        let outcome = outcome.expect("at least one frontier attempt");
         match outcome {
             Ok(completion) => {
                 self.state.ledger.add_frontier(completion.usage.as_ref());

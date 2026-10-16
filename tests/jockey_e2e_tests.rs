@@ -742,6 +742,58 @@ async fn stalled_step_escalates_to_frontier_before_failing() {
 }
 
 #[tokio::test]
+async fn stalled_worker_with_mutations_gets_auto_verified() {
+    let (_tmp, root) = init_repo().await;
+    let worker_server = MockServer::start().await;
+
+    // turn 1: the worker writes a real implementation...
+    mount_worker_reply(
+        &worker_server,
+        "write_file",
+        json!({"path": "fixed.txt", "content": "ok"}),
+        1,
+    )
+    .await;
+    // ...then stalls forever on prose (no finish_step, no more tools)
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "choices": [{"message": {"role": "assistant",
+                "content": "Let me review what I have done so far."}}],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 10, "total_tokens": 40}
+        })))
+        .mount(&worker_server)
+        .await;
+
+    let (client, model) = api_client(&worker_server, "worker");
+    let worker = Worker::new(client, model, 0.2, 1024, None);
+    let sandbox = GitSandbox::create(&root, "e2e-autoverify").await.unwrap();
+    let config = wrangler_config(json!({}));
+
+    let (outcome, events) = drive(
+        &config,
+        worker,
+        None,
+        sandbox.clone(),
+        one_step_dag(vec!["src", "fixed.txt"], "test -f fixed.txt"),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        RunOutcome::Success,
+        "the write landed; the stall must not discard it — verification \
+runs on the worker's behalf"
+    );
+    assert!(sandbox.worktree().join("fixed.txt").exists());
+    assert!(events.iter().any(|e| matches!(
+        e,
+        seekr::jockey::JockeyEvent::VerificationPassed { .. }
+    )));
+    sandbox.dispose().await.unwrap();
+}
+
+#[tokio::test]
 async fn parallel_reads_grep_and_list_flow() {
     let (_tmp, root) = init_repo().await;
     let worker_server = MockServer::start().await;
