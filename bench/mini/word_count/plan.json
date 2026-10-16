@@ -1,0 +1,19 @@
+{
+  "goal": "Implement word_count(text) returning per-word counts.",
+  "steps": [
+    {
+      "id": "wc",
+      "description": "Implement word_count in word_count.py: whitespace splitting, case-insensitive keys, punctuation attached, empty input -> {}",
+      "depends_on": [],
+      "invariants": [
+        "words split on any whitespace run; keys lowercased; punctuation attached to words",
+        "empty or whitespace-only input returns an empty dict",
+        "Must touch only word_count.py"
+      ],
+      "allowed_paths": [
+        "src/"
+      ],
+      "verification_command": "python3 src/test_word_count.py"
+    }
+  ]
+}

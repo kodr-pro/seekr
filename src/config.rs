@@ -148,7 +148,7 @@ pub struct JockeyConfig {
 }
 
 fn default_jj_attempts() -> u32 {
-    3
+    2
 }
 fn default_jj_frontier_calls() -> u32 {
     5

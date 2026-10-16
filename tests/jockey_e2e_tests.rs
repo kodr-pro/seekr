@@ -250,7 +250,7 @@ async fn out_of_scope_write_rejected_without_disk_mutation() {
 }
 
 #[tokio::test]
-async fn wrangler_fix_required_rolls_back_then_recovers() {
+async fn wrangler_fix_required_keeps_diff_then_recovers() {
     let (_tmp, root) = init_repo().await;
     let worker_server = MockServer::start().await;
 
@@ -312,12 +312,15 @@ async fn wrangler_fix_required_rolls_back_then_recovers() {
 
     // check gate: first completion is rejected with cited findings, the
     // second (recovered) one passes.
-    let config = wrangler_config(json!({
+    let mut config = wrangler_config(json!({
         "checks": [
             "AIWRANGLER FIX REQUIRED (exit 17)\ndirty: 1 file(s) across 1 repo(s)\n\nsemantic verdicts (jev, 100 in / 20 out tokens):\n\nsemantic findings:\n  RULE-2: silent default — the error path returns an empty vec without comment\n\nloop: cycle 1",
             "AIWRANGLER PASS (exit 0)\ndirty: 1 file(s)\nsemantic verdicts (jev, 90 in / 15 out tokens):"
         ]
     }));
+    // this scenario exercises three attempts; the product default (2)
+    // is a policy choice, not a mechanism constraint
+    config.jockey.max_attempts_per_step = 3;
 
     let (client, model) = api_client(&worker_server, "worker");
     let worker = Worker::new(client, model, 0.2, 1024, None);
@@ -338,21 +341,20 @@ async fn wrangler_fix_required_rolls_back_then_recovers() {
         seekr::jockey::JockeyEvent::WranglerGate { gate, action, .. }
             if gate == "check" && action.contains("FixRequired")
     )));
+    // near-miss work is kept between attempts, not rolled back
     assert!(
-        events.iter().any(|e| matches!(
+        !events.iter().any(|e| matches!(
             e,
             seekr::jockey::JockeyEvent::RolledBack { .. }
-        ))
+        )),
+        "attempts iterate on the same tree; rollback only on step failure"
     );
+    assert!(sandbox.worktree().join("src/attempt1.rs").exists());
     assert!(events.iter().any(|e| matches!(
         e,
         seekr::jockey::JockeyEvent::ActionRejected { reason, .. } if reason.contains("loop detected")
     )));
     assert!(sandbox.worktree().join("fixed.txt").exists());
-    assert!(
-        !sandbox.worktree().join("src/attempt1.rs").exists(),
-        "failed attempt's files must be rolled back"
-    );
     // semantic usage lands in the ledger
     assert!(config_ledger_checks(&events) >= 1);
     sandbox.dispose().await.unwrap();

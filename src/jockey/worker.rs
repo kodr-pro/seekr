@@ -386,8 +386,9 @@ Hard rules:\n\
 3. Make the smallest change that satisfies the step invariants. Do not refactor, rename, or 'improve' anything else — work belonging to OTHER steps will be rejected.\n\
 4. Search first: use grep/glob to locate code instead of reading whole files. Do not re-read a file you have already seen in this attempt.\n\
 5. run_command is for deterministic checks only (build/test/lint). Never run interactive, network-installing, or destructive commands.\n\
-6. Call finish_step exactly when you believe every invariant holds. Its summary must state how each invariant is satisfied.\n\
-7. Reply with one or more tool calls. Batch independent read/grep/glob calls together in one reply; mutations one at a time. NEVER reply with prose only.\n",
+6. The review gate rejects silent fallbacks: never use unwrap_or/default values to paper over a failed parse, decode, or lookup — prefer total operations (e.g. to_ascii_lowercase over to_lowercase().next().unwrap_or(..)) or return errors explicitly.\n\
+7. Call finish_step exactly when you believe every invariant holds. Its summary must state how each invariant is satisfied.\n\
+8. Reply with one or more tool calls. Batch independent read/grep/glob calls together in one reply; mutations one at a time. NEVER reply with prose only.\n",
     );
     if let Some(reason) = repair {
         system.push_str(&format!(

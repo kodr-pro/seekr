@@ -21,7 +21,7 @@ use crate::wrangler::{
     CheckAction, PlanAction, WranglerClient, ensure_gate_config,
 };
 
-const MAX_ACTIONS_PER_ATTEMPT: usize = 16;
+const MAX_ACTIONS_PER_ATTEMPT: usize = 8;
 const MAX_REJECTIONS_PER_ATTEMPT: usize = 6;
 const MAX_PROSE_RETRIES_PER_ATTEMPT: usize = 3;
 
@@ -604,11 +604,16 @@ findings above, then `seekr ack {}` (or re-run with a refined goal).",
                         .entry(step_id.to_string())
                         .or_default()
                         .extend(records);
-                    let to_commit = self.sandbox.current_commit().await?;
-                    self.sandbox.rollback().await?;
-                    self.emit(JockeyEvent::RolledBack {
+                    // Keep the near-miss work: attempts iterate on the
+                    // same tree so the next one fixes the delta instead
+                    // of rebuilding from the stub. Safety is unchanged —
+                    // every mutation was intercepted, and nothing
+                    // checkpoints without passing the full gate. The
+                    // worktree still rolls back on final step failure.
+                    self.emit(JockeyEvent::Triage {
                         step_id: step_id.to_string(),
-                        to_commit,
+                        verdict: "keep-diff".to_string(),
+                        confidence: 1.0,
                     });
                     last_error = Some(output);
                     let error_ref = last_error.clone();
@@ -632,6 +637,7 @@ findings above, then `seekr ack {}` (or re-run with a refined goal).",
                                 description,
                                 invariants,
                                 &error_ref,
+                                guidance_used,
                             )
                             .await?
                         {
@@ -675,6 +681,7 @@ findings above, then `seekr ack {}` (or re-run with a refined goal).",
                                 description,
                                 invariants,
                                 &Some(reason.clone()),
+                                guidance_used,
                             )
                             .await?
                         {
@@ -1004,6 +1011,27 @@ changes — running verification automatically."
                         let (ok, result) = self
                             .execute_action(&action, sandbox, &tool_ctx)
                             .await;
+                        // The worker proved the tests pass on its own run:
+                        // tell it to finish instead of polishing forever.
+                        // (Commands with || fallbacks can mask failures,
+                        // so those don't count as proof.)
+                        if action.tool == TOOL_RUN_COMMAND
+                            && ok
+                            && let Some(cmd) = action
+                                .args
+                                .get("command")
+                                .and_then(|c| c.as_str())
+                            && cmd.contains("test")
+                            && !cmd.contains("||")
+                            && !cmd.contains("&&")
+                        {
+                            live_context.push(
+                                "GOVERNOR: your test command just exited \
+successfully — the invariants are met. Call finish_step NOW with a summary \
+of how each invariant holds. Do not edit anything else."
+                                    .to_string(),
+                            );
+                        }
                         if action.tool == TOOL_READ_FILE
                             && let Some(path) =
                                 action.args.get("path").and_then(|p| p.as_str())
@@ -1221,11 +1249,18 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
     /// target dir under the run state dir. Checkpoint diffs, gate scans,
     /// and `git clean` rollbacks all stay clean, and the build cache
     /// survives rollbacks.
+    /// Env that keeps child-command artifacts out of the worktree: a
+    /// shared cargo target dir under the run state dir (the build cache
+    /// also survives rollbacks) and no Python bytecode (`__pycache__`
+    /// would pollute dirty-set gate scans).
     fn cargo_envs(&self) -> Vec<(String, String)> {
         let target = RunState::state_dir(&self.state.run_id)
             .map(|d| d.join("cargo-target"))
             .unwrap_or_else(|| std::env::temp_dir().join("seekr-cargo-target"));
-        vec![("CARGO_TARGET_DIR".to_string(), target.display().to_string())]
+        vec![
+            ("CARGO_TARGET_DIR".to_string(), target.display().to_string()),
+            ("PYTHONDONTWRITEBYTECODE".to_string(), "1".to_string()),
+        ]
     }
 
     /// Removes a Cargo.lock cargo created opportunistically (the project
@@ -1566,6 +1601,7 @@ Set --allow-degraded to accept deterministic-only verification.\n{}",
         description: &str,
         invariants: &[String],
         error: &Option<String>,
+        guidance_used: bool,
     ) -> Result<EscalationOutcome, GovernorError> {
         let Some((client, model)) = self.frontier.clone() else {
             return Ok(EscalationOutcome::Exhausted(
@@ -1617,12 +1653,21 @@ Set --allow-degraded to accept deterministic-only verification.\n{}",
             }
         }
 
-        let system = "You are the escalation tier of an autonomous coding agent. A small local \
+        // Guidance first; once guidance has been tried and failed, ask
+        // for a patch outright — the frontier finishes the step.
+        let system = if guidance_used {
+            "You are the escalation tier of an autonomous coding agent. A small local \
+model is stuck on ONE step and guidance has already failed. Reply with a unified \
+diff in a ```diff fence (paths relative to repo root) that completes the step. \
+Apply the invariants exactly; keep the diff minimal; do not reply with prose."
+        } else {
+            "You are the escalation tier of an autonomous coding agent. A small local \
 model is stuck on ONE step. You get the step, its invariants, the relevant files, the worker's \
 recent actions, and the exact failure. Reply with EITHER:\n\
 (1) a unified diff in a ```diff fence (paths relative to repo root) that fixes the step, OR\n\
 (2) a paragraph starting with GUIDANCE: giving the local model concrete, actionable instructions.\n\
-Never restate the problem; fix or direct. Keep it minimal.\n";
+Never restate the problem; fix or direct. Keep it minimal.\n"
+        };
         let action_log = self
             .attempts
             .get(step_id)

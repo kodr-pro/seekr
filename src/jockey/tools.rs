@@ -21,8 +21,10 @@ pub struct ToolCtx {
     pub verification_timeout: u64,
     pub read_lines: u32,
     pub allow_web: bool,
-    /// Extra env for child commands — used to point CARGO_TARGET_DIR at
-    /// the run state dir so build artifacts never land in the worktree.
+    /// Env for child commands — keeps build artifacts and Python
+    /// bytecode out of the worktree so diffs, checkpoints, and gate
+    /// scans see only real work: CARGO_TARGET_DIR points at the run
+    /// state dir, PYTHONDONTWRITEBYTECODE stops __pycache__.
     pub cargo_envs: Vec<(String, String)>,
 }
 
