@@ -382,10 +382,57 @@ pub fn print_summary(state: &RunState) {
 }
 
 /// `seekr merge <run_id>`: merges the run branch back into the repo's
-/// current branch and disposes the worktree (branch is preserved).
+/// current branch and disposes the worktree (branch is preserved). The
+/// gate findings ride along as review notes in the merge commit.
 pub async fn merge_run(run_id: &str) -> Result<()> {
     let state = RunState::load(run_id).context("run not found")?;
     let repo = &state.repo_root;
+
+    // Review notes: the gate's findings, summarized into the commit body.
+    let mut notes = String::new();
+    if let Some(dir) = RunState::state_dir(run_id)
+        && let Ok(raw) =
+            std::fs::read_to_string(dir.join("wrangler").join("ledger.jsonl"))
+    {
+        let mut count = 0;
+        for line in raw.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if v.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let Some(list) = v.get("findings").and_then(|f| f.as_array())
+            else {
+                continue;
+            };
+            for f in list {
+                if count == 0 {
+                    notes.push_str("\n\nreview notes (aiwrangler):\n");
+                }
+                if count >= 10 {
+                    notes.push_str("  … more in the run ledger\n");
+                    break;
+                }
+                notes.push_str(&format!(
+                    "  [{}] {} {}\n",
+                    f.get("severity").and_then(|s| s.as_str()).unwrap_or("?"),
+                    f.get("rule").and_then(|s| s.as_str()).unwrap_or("?"),
+                    f.get("subject")
+                        .or_else(|| f.get("file"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("-"),
+                ));
+                count += 1;
+            }
+        }
+    }
+    let message = format!(
+        "merge {run_id}: {}{}",
+        truncate_center(&state.goal, 60),
+        notes
+    );
+
     let sandbox = tokio::process::Command::new("git")
         .args([
             "-C",
@@ -394,7 +441,7 @@ pub async fn merge_run(run_id: &str) -> Result<()> {
             "--no-ff",
             &state.branch,
             "-m",
-            &format!("merge {run_id}"),
+            &message,
         ])
         .output()
         .await
@@ -456,6 +503,234 @@ pub async fn clean_run(run_id: &str) -> Result<()> {
         state.branch
     );
     Ok(())
+}
+
+/// `seekr summary <run-id>`: the return-after-hours view. Fixed-height,
+/// severity-first — the few things that need the owner, then a compact
+/// step table, then the gate findings as review notes. `--verbose`
+/// appends the event tail.
+pub fn summary_run(run_id: &str, verbose: bool) -> Result<()> {
+    let state = RunState::load(run_id).context("run not found")?;
+    let Some(dir) = RunState::state_dir(run_id) else {
+        anyhow::bail!("cannot determine state directory");
+    };
+
+    let mut attempts: std::collections::BTreeMap<String, u32> =
+        Default::default();
+    let mut escalated: std::collections::BTreeMap<String, u32> =
+        Default::default();
+    let mut completed: Vec<String> = Vec::new();
+    let mut failed: Vec<(String, String)> = Vec::new();
+    let mut first_ts: Option<String> = None;
+    let mut last_ts: Option<String> = None;
+    if let Ok(raw) = std::fs::read_to_string(dir.join("events.jsonl")) {
+        for line in raw.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if let Some(ts) = v.get("ts").and_then(|t| t.as_str()) {
+                first_ts.get_or_insert_with(|| ts.to_string());
+                last_ts = Some(ts.to_string());
+            }
+            let step = v
+                .get("step_id")
+                .and_then(|s| s.as_str())
+                .unwrap_or_default()
+                .to_string();
+            match v.get("type").and_then(|t| t.as_str()) {
+                Some("step_started") => {
+                    *attempts.entry(step).or_default() += 1;
+                }
+                Some("escalated") => {
+                    *escalated.entry(step).or_default() += 1;
+                }
+                Some("step_completed") => completed.push(step),
+                Some("step_failed") => failed.push((
+                    step,
+                    v.get("reason")
+                        .and_then(|r| r.as_str())
+                        .unwrap_or("(no reason)")
+                        .to_string(),
+                )),
+                _ => {}
+            }
+        }
+    }
+
+    // Gate findings double as the review notes on merge.
+    let mut findings: Vec<(String, String, String)> = Vec::new();
+    if let Ok(raw) =
+        std::fs::read_to_string(dir.join("wrangler").join("ledger.jsonl"))
+    {
+        for line in raw.lines() {
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if v.get("kind").and_then(|k| k.as_str()) != Some("check") {
+                continue;
+            }
+            let Some(list) = v.get("findings").and_then(|f| f.as_array())
+            else {
+                continue;
+            };
+            for f in list {
+                findings.push((
+                    f.get("severity")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("?")
+                        .to_string(),
+                    f.get("rule")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("?")
+                        .to_string(),
+                    f.get("subject")
+                        .or_else(|| f.get("file"))
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("-")
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
+    let wall = match (&first_ts, &last_ts) {
+        (Some(a), Some(b)) => {
+            match (
+                chrono::DateTime::parse_from_rfc3339(a),
+                chrono::DateTime::parse_from_rfc3339(b),
+            ) {
+                (Ok(pa), Ok(pb)) => {
+                    let secs = (pb - pa).num_seconds().max(0);
+                    if secs >= 3600 {
+                        format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60)
+                    } else {
+                        format!("{}m{:02}s", secs / 60, secs % 60)
+                    }
+                }
+                _ => "?".to_string(),
+            }
+        }
+        _ => "?".to_string(),
+    };
+    let parked: Vec<&(String, String)> = failed
+        .iter()
+        .filter(|(_, r)| r.to_lowercase().contains("owner action required"))
+        .collect();
+    let hard_failed: Vec<&(String, String)> = failed
+        .iter()
+        .filter(|(_, r)| !r.to_lowercase().contains("owner action required"))
+        .collect();
+    let review_count =
+        findings.iter().filter(|(s, _, _)| s == "review").count();
+
+    println!("╔═ run {run_id}");
+    println!("║ {} · {} · {}", state.status, wall, state.branch);
+    println!("║ goal: {}", truncate_center(&state.goal, 72));
+    println!(
+        "║ cost: worker {:.1}k tok ({} calls) · gates {:.1}k · frontier {} calls",
+        (state.ledger.worker_prompt_tokens
+            + state.ledger.worker_completion_tokens) as f64
+            / 1000.0,
+        state.ledger.worker_calls,
+        (state.ledger.wrangler_input_tokens
+            + state.ledger.wrangler_output_tokens) as f64
+            / 1000.0,
+        state.ledger.frontier_calls,
+    );
+
+    println!("╠═ needs attention");
+    if state.status == "running" {
+        println!(
+            "║   ● unfinished (last event {}) — seekr resume {run_id} if the \
+process is gone",
+            last_ts.as_deref().map(|t| &t[11..19]).unwrap_or("?")
+        );
+    } else if parked.is_empty() && hard_failed.is_empty() && review_count == 0 {
+        println!("║   nothing — no parks, failures, or review findings");
+    }
+    for (step, _) in &parked {
+        println!("║   ⚠ human review: {step}  → seekr ack {run_id}");
+    }
+    for (step, reason) in hard_failed.iter().take(3) {
+        println!("║   ✗ {step}: {}", first_line(reason, 58));
+    }
+    if hard_failed.len() > 3 {
+        println!("║   … and {} more failed steps", hard_failed.len() - 3);
+    }
+    if review_count > 0 {
+        println!(
+            "║   ● {review_count} review-severity finding(s) — see notes below"
+        );
+    }
+
+    println!("╠═ steps");
+    for step in &state.dag.steps {
+        let att = attempts.get(&step.id).copied().unwrap_or(0);
+        let status = if completed.contains(&step.id) {
+            "✓"
+        } else if failed.iter().any(|(s, _)| s == &step.id) {
+            "✗"
+        } else {
+            "…"
+        };
+        let by = if escalated.get(&step.id).copied().unwrap_or(0) > 0
+            && status == "✓"
+        {
+            "frontier"
+        } else {
+            "worker"
+        };
+        println!(
+            "║   {status} {:<24} {:>2} attempt{}  finished by {}",
+            step.id,
+            att,
+            if att == 1 { "" } else { "s" },
+            by
+        );
+    }
+
+    if !findings.is_empty() {
+        println!("╠═ findings (review notes)");
+        for (severity, rule, subject) in findings.iter().take(10) {
+            println!("║   [{severity}] {rule}  {subject}");
+        }
+        if findings.len() > 10 {
+            println!("║   … and {} more", findings.len() - 10);
+        }
+    }
+
+    println!(
+        "╚═ review: cd {} && git diff main..{} · merge: seekr merge {run_id}",
+        state.worktree.display(),
+        state.branch
+    );
+
+    if verbose {
+        println!("\n── event tail ──────────────────────────────");
+        if let Ok(raw) = std::fs::read_to_string(dir.join("events.jsonl")) {
+            let lines: Vec<&str> = raw.lines().collect();
+            for line in lines.iter().rev().take(40).rev() {
+                println!("  {line}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn first_line(s: &str, width: usize) -> String {
+    let l = s.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    l.chars().take(width).collect()
+}
+
+fn truncate_center(s: &str, width: usize) -> String {
+    if s.chars().count() <= width {
+        s.to_string()
+    } else {
+        let half = width / 2 - 1;
+        let head: String = s.chars().take(half).collect();
+        let tail: String = s.chars().skip(s.chars().count() - half).collect();
+        format!("{head}…{tail}")
+    }
 }
 
 /// `seekr ack <run_id>`: inspect pending AiWrangler human-severity

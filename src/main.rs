@@ -64,6 +64,13 @@ enum Commands {
     Clean { run_id: String },
     /// Delete a run's state (and worktree); the branch is kept
     Rm { run_id: String },
+    /// The return-after-hours view: attention-first summary of a run
+    Summary {
+        run_id: String,
+        /// Append the raw event tail
+        #[arg(long)]
+        verbose: bool,
+    },
     /// Review / acknowledge AiWrangler human-review findings for a run
     Ack {
         run_id: String,
@@ -174,6 +181,9 @@ async fn main() -> Result<()> {
         Some(Commands::Merge { run_id }) => cli::merge_run(&run_id).await,
         Some(Commands::Clean { run_id }) => cli::clean_run(&run_id).await,
         Some(Commands::Rm { run_id }) => cli::rm_run(&run_id).await,
+        Some(Commands::Summary { run_id, verbose }) => {
+            cli::summary_run(&run_id, verbose)
+        }
         Some(Commands::Ack {
             run_id,
             rules,

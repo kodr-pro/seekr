@@ -1,51 +1,59 @@
 # Introduction
 
-**seekr** is an autonomous, cost-guarded coding agent. You give it a
-goal; a frontier model plans a rigid task DAG; a cheap local model
-grinds through every step; [AiWrangler](https://github.com/kodr-pro/AiWrangler)
-gates the plan and every completed step against your ground truth;
-deterministic verification runs between attempts; and git worktrees make
-every run reversible.
+**OpenCode when you're driving. Seekr when you're sleeping.**
 
-## Why it exists
+Seekr is an autonomous coding agent for long, well-specified tasks. You
+queue the work, walk away, and come back to finished branches with a
+reviewable paper trail — at a fraction of the cost of running a frontier
+model end to end.
 
-Letting a small local model loose on a repo unsupervised is cheap — and
-terrifying. seekr's whole architecture is about making that safe:
+## The bet
 
-- **The plan is rigid.** The frontier model decomposes the goal into a
-  validated DAG with per-step invariants, allowed paths, and a
-  deterministic verification command. The worker cannot wander.
-- **Every action is intercepted.** Path sandboxing, a shell blocklist,
-  and a duplicate-fingerprint loop breaker reject unsafe or stuck
-  actions deterministically — fail-closed, no network required.
-- **Every completed step is gated.** AiWrangler's check battery reads
-  the dirty diff, the worker's own summary, and the verification output,
-  and catches claims that outrun the diff, scope creep, silent defaults,
-  injected steering text, and missing tests. Anything touching a one-way
-  door stops for a human.
-- **Everything is reversible.** Each verified step checkpoints; each
-  failed attempt rolls back to it — including untracked files. Your main
-  checkout is never touched; runs live on `jj/<run-id>` branches in
-  linked worktrees.
+| Tier | Cost | Quality |
+|---|---|---|
+| Frontier API models | expensive per token | accurate, plans well |
+| Local models | free, runs all night | drift on long tasks |
+| [AiWrangler](https://github.com/kodr-pro/AiWrangler) | cheap judgments | calibrated, citable |
 
-## The loop at a glance
+Big-model agents cost dollars per task. Local-model agents drift within
+the hour. Seekr combines all three: **the frontier writes the plan and
+occasionally finishes a stuck step; the local model does the
+overwhelming majority of the work; AiWrangler gates every completed step
+against the documents that actually govern your repo.** The only real
+cost is server horsepower — and when the local tier carries the task,
+the run's ledger shows zero frontier calls.
 
-1. **Plan** — frontier decomposes the goal (bounded clarification
-   rounds), then AiWrangler's plan gate returns PASS / CLARIFY / HUMAN
-   plus a ground-truth context pack the worker must honor.
-2. **Grind** — the worker proposes one small action at a time against a
-   fresh, bounded context; the interceptor checks it deterministically.
-3. **Verify + gate** — `finish_step` triggers the step's verification
-   command, then the AiWrangler check gate over the dirty worktree.
-   PASS checkpoints, FIX REQUIRED feeds cited findings back, HUMAN
-   REVIEW parks the step for `seekr ack`.
-4. **Triage / escalate** — deterministic triage decides whether to
-   retry, inject context, or escalate to the frontier (hard budget).
+## The loop
+
+1. **Plan** — frontier decomposes the goal into a rigid DAG (invariants,
+   allowed paths, verification commands). The plan gate judges it
+   against your ground truth before anything touches disk: ambiguity
+   stops for answers, one-way doors stop for the owner.
+2. **Grind** — the local worker acts one small step at a time under a
+   fail-closed interceptor, with inline compile feedback and kept-diff
+   retries.
+3. **Gate** — each completed step passes its verification command, then
+   the check battery: scope discipline, claims-vs-diff, silent
+   defaults, injection defense, test quality.
+4. **Finish** — two stalled attempts and the frontier steps in:
+   guidance first, a verified patch if that fails.
+5. **Review** — a severity-first summary of what needs you, findings
+   that become review notes on merge.
+
+## What it's for
+
+**Shines:** test backfill, dependency migrations, lint debt, doc drift,
+mechanical refactors — verification-friendly work where "done" is a
+command that exits 0.
+
+**Not for:** novel features without a test suite, exploratory spikes.
+No deterministic verification, no anchor for the gates — use your
+interactive agent for those.
 
 ## Where to go next
 
-- [Getting Started](/getting-started) — install, configure, first run
-- [Configuration](/schema) — every config key, including the AiWrangler
-  wiring
+- [Getting Started](/getting-started)
+- [Configuration](/schema)
 - [The Governor Loop](/agent) — the four phases in detail
-- [AiWrangler Integration](/mcp) — gates, ground truth, and the ack flow
+- [AiWrangler Integration](/mcp) — gates, ground truth, the ack flow
+- [Benchmarks](/custom-skills) — the mini and full corpora

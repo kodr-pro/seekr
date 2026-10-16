@@ -53,10 +53,18 @@ jobs:
           echo "::group::fixture $name"
           (
             cd "$f"
-            cargo build --quiet
-            if cargo test --quiet >tests.log 2>&1; then
-              echo "fixture $name passed tests against stubs — tests are not discriminating" >&2
-              exit 1
+            if [ -f go.mod ]; then
+              go vet ./...
+              if go test ./... -count=1 >tests.log 2>&1; then
+                echo "fixture $name passed tests against stubs — tests are not discriminating" >&2
+                exit 1
+              fi
+            else
+              cargo build --quiet
+              if cargo test --quiet >tests.log 2>&1; then
+                echo "fixture $name passed tests against stubs — tests are not discriminating" >&2
+                exit 1
+              fi
             fi
           )
           echo "::endgroup::"

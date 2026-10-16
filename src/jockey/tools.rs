@@ -372,10 +372,20 @@ impl ToolCtx {
         (outcome.success, outcome.combined())
     }
 
+    /// Inline compile feedback, dispatched by project type: `cargo
+    /// check` for Cargo workspaces (JSON diagnostics distilled to
+    /// file:line), `go build && go vet` for Go modules (concise raw
+    /// output).
     async fn diagnostics(&self) -> (bool, String) {
+        let has_go_mod = self.worktree.join("go.mod").is_file();
+        let command = if has_go_mod {
+            "go build ./... 2>&1 && go vet ./... 2>&1 && echo GO-DIAG-OK"
+        } else {
+            "cargo check --workspace --message-format=json --quiet 2>/dev/null"
+        };
         let outcome = run_command_env(
             &self.worktree,
-            "cargo check --workspace --message-format=json --quiet 2>/dev/null",
+            command,
             self.verification_timeout,
             &self.blocklist,
             &self.cargo_envs,
@@ -388,6 +398,13 @@ impl ToolCtx {
             stdout: String::new(),
             stderr: format!("spawn failed: {e}"),
         });
+        if has_go_mod {
+            let text = outcome.combined();
+            if outcome.success {
+                return (true, "no diagnostics".into());
+            }
+            return (false, truncate_str(&text, 8_000).to_string());
+        }
         let mut diags: Vec<String> = Vec::new();
         for line in outcome.stdout.lines() {
             let Ok(v) = serde_json::from_str::<Value>(line) else {

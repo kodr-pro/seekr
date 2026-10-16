@@ -1064,11 +1064,16 @@ of how each invariant holds. Do not edit anything else."
                             // Compile feedback inside the loop: a syntax
                             // error costs one action, not one attempt.
                             if self.jj.auto_diagnostics
-                                && self
+                                && (self
                                     .state
                                     .worktree
                                     .join("Cargo.toml")
                                     .is_file()
+                                    || self
+                                        .state
+                                        .worktree
+                                        .join("go.mod")
+                                        .is_file())
                             {
                                 let (dok, dout) = tool_ctx
                                     .execute(&WorkerAction {
@@ -1291,32 +1296,30 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
             let mut candidates: Vec<PathBuf> = Vec::new();
             if full.is_file() {
                 candidates.push(full);
-            } else if full.is_dir() {
-                if let Ok(entries) = std::fs::read_dir(&full) {
-                    let mut names: Vec<String> = Vec::new();
-                    for entry in entries.flatten() {
-                        let p = entry.path();
-                        if p.is_file()
-                            && p.extension().is_some_and(|e| {
-                                ["rs", "py", "go", "ts", "js", "toml"]
-                                    .contains(&e.to_string_lossy().as_ref())
-                            })
-                        {
-                            if let Ok(rel) =
-                                p.strip_prefix(&self.state.worktree)
-                            {
-                                names.push(rel.display().to_string());
-                            }
-                            candidates.push(p);
+            } else if full.is_dir()
+                && let Ok(entries) = std::fs::read_dir(&full)
+            {
+                let mut names: Vec<String> = Vec::new();
+                for entry in entries.flatten() {
+                    let p = entry.path();
+                    if p.is_file()
+                        && p.extension().is_some_and(|e| {
+                            ["rs", "py", "go", "ts", "js", "toml"]
+                                .contains(&e.to_string_lossy().as_ref())
+                        })
+                    {
+                        if let Ok(rel) = p.strip_prefix(&self.state.worktree) {
+                            names.push(rel.display().to_string());
                         }
+                        candidates.push(p);
                     }
-                    if !names.is_empty() {
-                        out.push(format!(
-                            "TARGET DIR {} contains: {}",
-                            rel.display(),
-                            names.join(", ")
-                        ));
-                    }
+                }
+                if !names.is_empty() {
+                    out.push(format!(
+                        "TARGET DIR {} contains: {}",
+                        rel.display(),
+                        names.join(", ")
+                    ));
                 }
             }
             // Smallest files first: they are the leaf modules an SLM can
