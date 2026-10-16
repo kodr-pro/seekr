@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde_json::json;
 
 use crate::api::client::ApiClient;
 use crate::config::AppConfig;
@@ -239,8 +240,14 @@ pub async fn run_headless_json(
 
     let printer = tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            if let Ok(line) = serde_json::to_string(&event) {
-                println!("{line}");
+            if let Ok(mut value) = serde_json::to_value(&event) {
+                if let Some(map) = value.as_object_mut() {
+                    map.insert(
+                        "ts".to_string(),
+                        json!(chrono::Utc::now().to_rfc3339()),
+                    );
+                }
+                println!("{value}");
             }
         }
     });
