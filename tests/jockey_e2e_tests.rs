@@ -232,9 +232,19 @@ async fn out_of_scope_write_rejected_without_disk_mutation() {
             if reason.contains("outside the step's allowed_paths")
     )));
     let status = run(sandbox.worktree(), &["status", "--porcelain"]).await;
+    let meaningful: Vec<&str> = status
+        .lines()
+        .map(str::trim)
+        .filter(|l| {
+            !l.is_empty()
+                && !(l.starts_with("?? ")
+                    && l.ends_with("aiwrangler.config.json")
+                    && !l.contains('/'))
+        })
+        .collect();
     assert!(
-        status.trim().is_empty(),
-        "checkpoint must leave a clean tree"
+        meaningful.is_empty(),
+        "checkpoint must leave a clean tree (seekr plumbing aside), got: {status}"
     );
     sandbox.dispose().await.unwrap();
 }
@@ -421,7 +431,7 @@ async fn exhausted_attempts_escalate_and_fail_cleanly() {
     let status = run(sandbox.worktree(), &["status", "--porcelain"]).await;
     assert!(
         status.trim().is_empty(),
-        "worktree must be rolled back clean"
+        "worktree must be rolled back clean, got: {status}"
     );
     sandbox.dispose().await.unwrap();
 }

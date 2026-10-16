@@ -6,7 +6,7 @@ pub use client::{
 };
 
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// How the worktree got an `aiwrangler.config.json` for this run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +29,10 @@ pub const GATE_CONFIG_FILE: &str = "aiwrangler.config.json";
 /// when there is none, discovery would escape to unrelated parent dirs or
 /// the user-global config with the wrong corpus — so we generate a minimal
 /// one at the worktree root with ledger/cache redirected to the run state
-/// dir, and git-exclude it so it never lands in diffs or on the branch.
+/// dir. It stays untracked and is excluded from checkpoints via
+/// `GitSandbox::CHECKPOINT_EXCLUDES` — note that git does not honor
+/// per-worktree `info/exclude` for linked worktrees, so exclusion has to
+/// happen at the `git add` pathspec layer, not via ignore rules.
 pub fn ensure_gate_config(
     worktree: &Path,
     state_dir: &Path,
@@ -50,40 +53,7 @@ pub fn ensure_gate_config(
         &config_path,
         serde_json::to_string_pretty(&config).unwrap_or_default(),
     )?;
-    exclude_in_worktree(worktree, GATE_CONFIG_FILE)?;
     Ok(GateConfigOrigin::Generated)
-}
-
-/// Appends `entry` to the worktree-local git exclude so untracked helper
-/// files stay out of diffs, status, and commits. Linked worktrees keep
-/// their exclude at `<main>/.git/worktrees/<name>/info/exclude`, resolved
-/// through the `.git` pointer file.
-fn exclude_in_worktree(worktree: &Path, entry: &str) -> io::Result<()> {
-    let dot_git = worktree.join(".git");
-    let git_dir = if dot_git.is_file() {
-        let raw = std::fs::read_to_string(&dot_git)?;
-        raw.trim()
-            .strip_prefix("gitdir:")
-            .map(|s| s.trim().to_string())
-            .map(PathBuf::from)
-            .ok_or_else(|| {
-                io::Error::other("unexpected .git pointer in worktree")
-            })?
-    } else {
-        dot_git
-    };
-    let info_dir = git_dir.join("info");
-    std::fs::create_dir_all(&info_dir)?;
-    let exclude = info_dir.join("exclude");
-    let mut existing = std::fs::read_to_string(&exclude).unwrap_or_default();
-    if !existing.lines().any(|l| l.trim() == entry) {
-        if !existing.ends_with('\n') && !existing.is_empty() {
-            existing.push('\n');
-        }
-        existing.push_str(&format!("# added by seekr\n{entry}\n"));
-        std::fs::write(&exclude, existing)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -103,10 +73,6 @@ mod tests {
             .unwrap();
         assert!(cfg.contains("jev-1.13.0"));
         assert!(cfg.contains("wrangler/cache"));
-        let exclude =
-            std::fs::read_to_string(repo.path().join(".git/info/exclude"))
-                .unwrap();
-        assert!(exclude.contains(GATE_CONFIG_FILE));
 
         // second call is a no-op returning Committed (file now exists)
         let origin2 = ensure_gate_config(repo.path(), state.path()).unwrap();

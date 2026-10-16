@@ -140,6 +140,11 @@ pub struct JockeyConfig {
     /// Allow the worker to spawn read-only explorer subagents.
     #[serde(default = "default_true")]
     pub allow_subagent: bool,
+    /// Auto-run `cargo check` after every successful mutation and feed
+    /// the diagnostics back into the attempt loop (compile errors cost
+    /// one action instead of one attempt).
+    #[serde(default = "default_true")]
+    pub auto_diagnostics: bool,
 }
 
 fn default_jj_attempts() -> u32 {
@@ -193,6 +198,7 @@ impl Default for JockeyConfig {
             worker_read_lines: default_jj_read_limit(),
             allow_web: false,
             allow_subagent: true,
+            auto_diagnostics: true,
         }
     }
 }

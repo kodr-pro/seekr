@@ -96,6 +96,19 @@ pub async fn run_command(
     timeout_secs: u64,
     blocklist: &[String],
 ) -> std::io::Result<CommandOutcome> {
+    run_command_env(cwd, command, timeout_secs, blocklist, &[]).await
+}
+
+/// [`run_command`] with extra environment variables for the child. Used
+/// to redirect cargo's target dir out of run worktrees so build
+/// artifacts never pollute diffs, checkpoints, or gate scans.
+pub async fn run_command_env(
+    cwd: &Path,
+    command: &str,
+    timeout_secs: u64,
+    blocklist: &[String],
+    envs: &[(String, String)],
+) -> std::io::Result<CommandOutcome> {
     if let Some(pattern) = blocklist_violation(command, blocklist) {
         return Ok(CommandOutcome {
             success: false,
@@ -110,6 +123,7 @@ pub async fn run_command(
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
+        .envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

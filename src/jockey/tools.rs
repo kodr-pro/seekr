@@ -9,7 +9,7 @@ use crate::jockey::worker::{
     WorkerAction,
 };
 use crate::sandbox::paths::PathSandbox;
-use crate::sandbox::run_command;
+use crate::sandbox::run_command_env;
 
 /// Execution context for worker tools that touch the workspace. Pure-fs
 /// tools live here; loop-state tools (todo, subagent, finish_step) are
@@ -21,6 +21,9 @@ pub struct ToolCtx {
     pub verification_timeout: u64,
     pub read_lines: u32,
     pub allow_web: bool,
+    /// Extra env for child commands — used to point CARGO_TARGET_DIR at
+    /// the run state dir so build artifacts never land in the worktree.
+    pub cargo_envs: Vec<(String, String)>,
 }
 
 const MAX_GREP_HITS: usize = 200;
@@ -349,25 +352,31 @@ impl ToolCtx {
             .unwrap_or(self.verification_timeout)
             .min(self.verification_timeout)
             .max(1);
-        let outcome =
-            run_command(&self.worktree, command, timeout, &self.blocklist)
-                .await
-                .unwrap_or_else(|e| crate::sandbox::CommandOutcome {
-                    success: false,
-                    exit_code: None,
-                    timed_out: false,
-                    stdout: String::new(),
-                    stderr: format!("spawn failed: {e}"),
-                });
+        let outcome = run_command_env(
+            &self.worktree,
+            command,
+            timeout,
+            &self.blocklist,
+            &self.cargo_envs,
+        )
+        .await
+        .unwrap_or_else(|e| crate::sandbox::CommandOutcome {
+            success: false,
+            exit_code: None,
+            timed_out: false,
+            stdout: String::new(),
+            stderr: format!("spawn failed: {e}"),
+        });
         (outcome.success, outcome.combined())
     }
 
     async fn diagnostics(&self) -> (bool, String) {
-        let outcome = run_command(
+        let outcome = run_command_env(
             &self.worktree,
             "cargo check --workspace --message-format=json --quiet 2>/dev/null",
             self.verification_timeout,
             &self.blocklist,
+            &self.cargo_envs,
         )
         .await
         .unwrap_or_else(|e| crate::sandbox::CommandOutcome {

@@ -16,7 +16,7 @@ use crate::jockey::worker::{
 };
 use crate::sandbox::git::GitSandbox;
 use crate::sandbox::paths::PathSandbox;
-use crate::sandbox::run_command;
+use crate::sandbox::run_command_env;
 use crate::wrangler::{
     CheckAction, PlanAction, WranglerClient, ensure_gate_config,
 };
@@ -128,6 +128,11 @@ pub struct Governor {
     event_log: EventLog,
     attempts: BTreeMap<String, Vec<AttemptRecord>>,
     extra_context: BTreeMap<String, Vec<String>>,
+    /// Whether the worktree had a Cargo.lock at run start. Cargo creates
+    /// one opportunistically even for read-only checks; when the project
+    /// never committed one, that file is plumbing and gets removed so
+    /// status, checkpoints, and gate scans stay clean.
+    cargo_lock_initially: bool,
     /// Steps parked by AiWrangler HUMAN REVIEW. Their dirty worktree is
     /// deliberately preserved: `seekr ack` matches findings to the
     /// exact diff, and resume re-runs the gate against it.
@@ -149,6 +154,7 @@ impl Governor {
             GovernorError::Failed("cannot determine state directory".into())
         })?;
         let event_log = EventLog::create(&state_dir)?;
+        let worktree_has_lock = sandbox.worktree().join("Cargo.lock").exists();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         // The worktree must have a discoverable AiWrangler config before
         // any gate runs; generated ones keep their ledger in the state dir.
@@ -190,6 +196,7 @@ impl Governor {
             attempts: BTreeMap::new(),
             parked: std::collections::HashSet::new(),
             extra_context: BTreeMap::new(),
+            cargo_lock_initially: worktree_has_lock,
         })
     }
 
@@ -207,6 +214,7 @@ impl Governor {
                 GovernorError::Failed("cannot determine state directory".into())
             })?;
         let event_log = EventLog::create(&state_dir)?;
+        let worktree_has_lock = state.worktree.join("Cargo.lock").exists();
         let (event_tx, event_rx) = mpsc::unbounded_channel();
         // An explicit resume is a request to try again: rolled-back
         // steps (including HUMAN REVIEW parks acked via `seekr ack`)
@@ -242,6 +250,7 @@ impl Governor {
             attempts: BTreeMap::new(),
             parked: std::collections::HashSet::new(),
             extra_context: BTreeMap::new(),
+            cargo_lock_initially: worktree_has_lock,
         })
     }
 
@@ -541,9 +550,17 @@ targeted read."
                         .to_string(),
                 );
             }
+            // Seed the step's target files so the worker starts from the
+            // code in hand instead of burning turns reading it (the
+            // dominant stall in the 0.5.0 baseline).
+            for seeded in self.seed_target_files(sandbox.allowed(), 16_000) {
+                context.push(seeded);
+            }
             if let Some(err) = &last_error {
-                context
-                    .push(format!("LAST ATTEMPT FAILED verification:\n{err}"));
+                context.push(format!(
+                    "LAST ATTEMPT FAILED verification:\n{}",
+                    distill_failure(err)
+                ));
             }
             if let Some(g) = &guidance {
                 context
@@ -734,6 +751,7 @@ already tried once"
             verification_timeout: self.jj.verification_timeout_secs,
             read_lines: self.jj.worker_read_lines,
             allow_web: self.jj.allow_web,
+            cargo_envs: self.cargo_envs(),
         };
 
         loop {
@@ -997,6 +1015,40 @@ Never reply with prose only. (soft retry {prose_retries}/{MAX_PROSE_RETRIES_PER_
                                     ),
                                 brief,
                             });
+                            // Compile feedback inside the loop: a syntax
+                            // error costs one action, not one attempt.
+                            if self.jj.auto_diagnostics
+                                && self
+                                    .state
+                                    .worktree
+                                    .join("Cargo.toml")
+                                    .is_file()
+                            {
+                                let (dok, dout) = tool_ctx
+                                    .execute(&WorkerAction {
+                                        id: "auto".into(),
+                                        tool:
+                                            crate::jockey::worker::TOOL_DIAGNOSTICS
+                                                .into(),
+                                        args: json!({}),
+                                    })
+                                    .await;
+                                self.cleanup_opportunistic_lock();
+                                if !dok || !dout.contains("no diagnostics") {
+                                    live_context.push(format!(
+                                        "DIAGNOSTICS (cargo check, run \
+automatically after your edit):\n{}",
+                                        truncate_str(&dout, 3_000)
+                                    ));
+                                    if !dok {
+                                        live_context.push(
+                                            "Fix the compile errors above \
+with your next edit_file before anything else."
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                            }
                         }
                         live_context.push(format!(
                             "ACTION {}: {} -> {}",
@@ -1135,6 +1187,100 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
         self.state.dag.step(step_id).expect("step exists").clone()
     }
 
+    /// Env that keeps cargo's artifacts out of the worktree: a shared
+    /// target dir under the run state dir. Checkpoint diffs, gate scans,
+    /// and `git clean` rollbacks all stay clean, and the build cache
+    /// survives rollbacks.
+    fn cargo_envs(&self) -> Vec<(String, String)> {
+        let target = RunState::state_dir(&self.state.run_id)
+            .map(|d| d.join("cargo-target"))
+            .unwrap_or_else(|| std::env::temp_dir().join("seekr-cargo-target"));
+        vec![("CARGO_TARGET_DIR".to_string(), target.display().to_string())]
+    }
+
+    /// Removes a Cargo.lock cargo created opportunistically (the project
+    /// never committed one). Called after diagnostics and verification so
+    /// incidental files never reach checkpoints or gate scans.
+    fn cleanup_opportunistic_lock(&self) {
+        if !self.cargo_lock_initially {
+            let lock = self.state.worktree.join("Cargo.lock");
+            if lock.is_file() {
+                let _ = std::fs::remove_file(&lock);
+            }
+        }
+    }
+
+    /// Bounded view of the step's target files for attempt-start context:
+    /// allowed file paths verbatim; allowed directories as a listing plus
+    /// their smallest source files. Plain (un-numbered) content so it can
+    /// be used directly as edit_file `old_string` material.
+    fn seed_target_files(
+        &self,
+        allowed: &[PathBuf],
+        budget: usize,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut spent = 0usize;
+        for rel in allowed {
+            let full = self.state.worktree.join(rel);
+            let mut candidates: Vec<PathBuf> = Vec::new();
+            if full.is_file() {
+                candidates.push(full);
+            } else if full.is_dir() {
+                if let Ok(entries) = std::fs::read_dir(&full) {
+                    let mut names: Vec<String> = Vec::new();
+                    for entry in entries.flatten() {
+                        let p = entry.path();
+                        if p.is_file()
+                            && p.extension().is_some_and(|e| {
+                                ["rs", "py", "go", "ts", "js", "toml"]
+                                    .contains(&e.to_string_lossy().as_ref())
+                            })
+                        {
+                            if let Ok(rel) =
+                                p.strip_prefix(&self.state.worktree)
+                            {
+                                names.push(rel.display().to_string());
+                            }
+                            candidates.push(p);
+                        }
+                    }
+                    if !names.is_empty() {
+                        out.push(format!(
+                            "TARGET DIR {} contains: {}",
+                            rel.display(),
+                            names.join(", ")
+                        ));
+                    }
+                }
+            }
+            // Smallest files first: they are the leaf modules an SLM can
+            // digest whole, and the ordering is deterministic.
+            candidates.sort_by_key(|p| {
+                std::fs::metadata(p).map(|m| m.len()).unwrap_or(u64::MAX)
+            });
+            for path in candidates.into_iter().take(2) {
+                let Ok(content) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let rel = path
+                    .strip_prefix(&self.state.worktree)
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| path.display().to_string());
+                if content.is_empty() || spent > budget {
+                    continue;
+                }
+                let slice = truncate_str(&content, 6_000);
+                spent += slice.len();
+                out.push(format!(
+                    "TARGET FILE {rel} — exact current content (use verbatim \
+as edit_file old_string/new_string basis):\n{slice}"
+                ));
+            }
+        }
+        out
+    }
+
     fn deterministic_check(
         &self,
         action: &WorkerAction,
@@ -1198,11 +1344,12 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
                 command: command.clone(),
             });
             let start = std::time::Instant::now();
-            let outcome = run_command(
+            let outcome = run_command_env(
                 &self.state.worktree,
                 command,
                 self.jj.verification_timeout_secs,
                 &self.shell_blocklist,
+                &self.cargo_envs(),
             )
             .await
             .unwrap_or_else(|e| crate::sandbox::CommandOutcome {
@@ -1215,6 +1362,7 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
 
             if !outcome.success {
                 let output = outcome.combined();
+                self.cleanup_opportunistic_lock();
                 self.emit(JockeyEvent::VerificationFailed {
                     step_id: step_id.to_string(),
                     output: truncate_str(&output, 2000).to_string(),
@@ -1222,6 +1370,7 @@ Then call report ONCE with a dense, factual answer (max 400 words, include file 
                 return AttemptOutcome::VerificationFailed(output);
             }
             tool_output = truncate_str(&outcome.combined(), 4000).to_string();
+            self.cleanup_opportunistic_lock();
             self.emit(JockeyEvent::VerificationPassed {
                 step_id: step_id.to_string(),
                 commit: String::new(),
@@ -1635,6 +1784,82 @@ fn relativize_action(mut action: WorkerAction, root: &Path) -> WorkerAction {
         obj.insert("path".to_string(), json!(stripped));
     }
     action
+}
+
+/// Distills a verification-failure blob (compiler/test output) into the
+/// parts an SLM can act on: failing test names, panic sites, `file:line`
+/// references, and a short raw tail. Full output stays available in the
+/// run log.
+fn distill_failure(output: &str) -> String {
+    let mut failing: Vec<&str> = Vec::new();
+    let mut panics: Vec<&str> = Vec::new();
+    let mut refs: Vec<&str> = Vec::new();
+    for line in output.lines() {
+        let t = line.trim();
+        if t.starts_with("test ") && t.contains("FAILED") {
+            failing.push(t);
+        } else if t.starts_with("assertion")
+            || t.starts_with("panicked at")
+            || t.starts_with("error:")
+            || t.starts_with("error[")
+        {
+            panics.push(t);
+        } else if t.contains(" --> ") && refs.len() < 8 {
+            refs.push(t.trim_end());
+        }
+    }
+    let mut out = String::new();
+    if !failing.is_empty() {
+        out.push_str("FAILING TESTS:\n");
+        out.push_str(
+            &failing
+                .iter()
+                .take(12)
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        out.push('\n');
+    }
+    if !panics.is_empty() {
+        out.push_str("ERRORS / PANICS:\n");
+        out.push_str(
+            &panics
+                .iter()
+                .take(12)
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        out.push('\n');
+    }
+    if !refs.is_empty() {
+        out.push_str("LOCATIONS:\n");
+        out.push_str(
+            &refs
+                .iter()
+                .map(|s| format!("  {s}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        out.push('\n');
+    }
+    let tail: String = output
+        .lines()
+        .collect::<Vec<_>>()
+        .iter()
+        .rev()
+        .take(12)
+        .rev()
+        .copied()
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !out.is_empty() {
+        out.push_str(&format!("\nRAW TAIL:\n{tail}"));
+        out
+    } else {
+        truncate_str(output, 4_000).to_string()
+    }
 }
 
 /// Keeps the newest 3 action results verbatim; older ones collapse to a

@@ -153,13 +153,17 @@ impl GitSandbox {
 
     /// Build artifacts and caches never belong in checkpoints. Excluded via
     /// pathspec so they stay untracked (and invisible to rollback/status).
-    const CHECKPOINT_EXCLUDES: [&'static str; 6] = [
+    const CHECKPOINT_EXCLUDES: [&'static str; 8] = [
         ":(exclude)__pycache__/",
         ":(exclude)*.pyc",
         ":(exclude)*.pyo",
         ":(exclude).DS_Store",
         ":(exclude)node_modules/",
         ":(exclude)target/",
+        // seekr-generated gate plumbing and opportunistic lockfiles:
+        // dependency changes deserve review, not silent checkpoints.
+        ":(exclude)aiwrangler.config.json",
+        ":(exclude)Cargo.lock",
     ];
 
     fn add_args(intent_only: bool) -> Vec<String> {

@@ -47,6 +47,7 @@ async fn main() {
         verification_timeout: 600,
         read_lines: 400,
         allow_web: false,
+        cargo_envs: vec![],
     };
 
     let mut context: Vec<String> = vec![];
