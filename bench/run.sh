@@ -34,13 +34,20 @@ echo "binary: $SEEKR_BIN"
 echo
 
 mkdir -p "$(dirname "$OUT")"
-: > "$OUT.tmp"
+run_tmp="$(mktemp "/tmp/opencode/bench-results-XXXXXX")"
+trap 'rm -f "$run_tmp"' EXIT
 
 for name in "${SELECTED[@]}"; do
   src="$ROOT/bench/fixtures/$name"
   [ -d "$src" ] || { echo "no such fixture: $name" >&2; exit 1; }
   work="$(mktemp -d "/tmp/opencode/bench-$name-XXXXXX")"
   cp -r "$src/." "$work/"
+  # The governor works in git worktrees, so the copy must be a repo with
+  # the fixture committed as its base.
+  git -C "$work" init -q
+  git -C "$work" add -A
+  git -C "$work" -c user.email=bench@seekr -c user.name=seekr-bench \
+    commit -qm "fixture base: $name"
   state="$work/.state"
   log="$work/run.jsonl"
 
@@ -56,7 +63,7 @@ for name in "${SELECTED[@]}"; do
 
   python3 "$ROOT/bench/collect.py" \
     --fixture "$name" --log "$log" --worktree "$work" \
-    --secs $((end - start)) --exit "$rc" --results "$OUT.tmp"
+    --secs $((end - start)) --exit "$rc" --results "$run_tmp"
   if [ $rc -ne 0 ]; then
     echo "  (seekr exited $rc; stderr tail:)"
     tail -3 "$work/stderr.log" | sed 's/^/    /'
@@ -64,7 +71,8 @@ for name in "${SELECTED[@]}"; do
 done
 
 echo
-python3 "$ROOT/bench/summarize.py" --results "$OUT.tmp"
-mv "$OUT.tmp" "$OUT"
+python3 "$ROOT/bench/summarize.py" --results "$run_tmp"
+# This run's records join the cumulative history.
+cat "$run_tmp" >> "$OUT"
 echo
 echo "results appended to $OUT"
