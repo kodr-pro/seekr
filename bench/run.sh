@@ -54,7 +54,7 @@ for name in "${SELECTED[@]}"; do
   echo "── $name ──────────────────────────────"
   start=$(date +%s)
   set +e
-  (cd "$work" && SEEKR_STATE_DIR="$state" timeout 3600 \
+  (cd "$work" && SEEKR_STATE_DIR="$state" timeout "${SEEKR_BENCH_TIMEOUT:-1200}" \
      "$SEEKR_BIN" run . --plan plan.json --auto --headless --json) \
      > "$log" 2> "$work/stderr.log"
   rc=$?

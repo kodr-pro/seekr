@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::path::PathBuf;
 
 /// Per-tier cost accounting for one run.
@@ -158,7 +159,14 @@ impl EventLog {
     }
 
     pub fn append(&self, event: &JockeyEvent) {
-        if let Ok(line) = serde_json::to_string(event) {
+        if let Ok(mut obj) = serde_json::to_value(event) {
+            if let Some(map) = obj.as_object_mut() {
+                map.insert(
+                    "ts".to_string(),
+                    json!(chrono::Utc::now().to_rfc3339()),
+                );
+            }
+            let line = obj.to_string();
             use std::io::Write;
             if let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)

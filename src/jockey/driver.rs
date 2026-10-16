@@ -1519,6 +1519,13 @@ Never restate the problem; fix or direct. Keep it minimal.\n";
                     .unwrap_or(&content)
                     .trim()
                     .to_string();
+                if guidance.is_empty() {
+                    // Empty guidance is worse than none: injected as
+                    // authoritative, it burns an attempt saying nothing.
+                    return Ok(EscalationOutcome::Exhausted(
+                        "frontier returned empty guidance".to_string(),
+                    ));
+                }
                 self.emit(JockeyEvent::FrontierGuidance {
                     step_id: step_id.to_string(),
                     brief: truncate_str(&guidance, 300).to_string(),
