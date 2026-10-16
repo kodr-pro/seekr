@@ -44,16 +44,27 @@ escalation) all work; convergence doesn't.
 | baseline (0.5.0) | 0/10 | 2–4 | reads-mostly stalls; gate chain verified live |
 | iter 1 (seed + inline diagnostics + distilled failures) | 0/10 | 3–7 | writes up 2×, reads down; **governor bug found: stalls discarded unverified work** |
 | iter 2 (auto-verify on stall; frontier empty-reply retry) | 0/10 | 2–8 | verify gates engage on stalls; token_bucket reaches the check gate with cited FIX findings; wal_writer incomplete (bench aborted, model server cold) |
+| iter 3 (keep-diff attempts; 2-attempt policy; silent-fallback rule; test-success nudge) | 0/10 | 2–3 | loop is lean and complete (7–10 calls, ~95k worker tokens total, every fixture reaches escalation) — but qwen's module-scale code is self-inconsistent and doesn't converge in 2 attempts |
+| mini-bench (iter 3, single-function tasks) | **2/2** | 1–2 | word_count ~80s, slugify 182–318s — **worker-only, zero frontier calls, gate-approved** |
 
-Ranked levers, to be judged against this baseline:
+## Where the line is
 
-1. ~~Seed the target file into attempt-start context~~ (landed, iter 1)
-2. ~~Compile feedback inside the attempt loop~~ (landed, iter 1)
-3. ~~Curate verify-failure context~~ (landed, iter 1)
-4. ~~Auto-verify stalls with unverified work~~ (landed, iter 2)
-5. **Convergence quality**: the worker's implementations compile
-   increasingly often but still fail fixture tests on semantics; next
-   levers are diff-aware retry context (show the worker its own diff
-   against the failing test) and escalating to frontier patches (not
-   just guidance) on the second failed verification.
+Single-function tasks: the local worker carries them alone, end to end.
+Whole-module tasks (the five corpus fixtures): the worker's code
+disagrees with itself across a file (tuple designs matched against
+non-tuple maps, helpers referenced but never defined) and 2 attempts +
+one guidance round don't close it. The loop is no longer the limiter —
+the worker tier is, at this task size.
+
+Options, per the product thesis (cheap labor, expensive supervision):
+
+1. **Per-step model routing** — the planner tags step difficulty; hard
+   steps go to a mid-tier API model (still ~10× cheaper than
+   frontier-only), easy ones stay local. Needs planner support.
+2. **Finer task split** — planner decomposes modules into
+   function-sized steps (mini-bench scale, where locals win).
+   More frontier planning tokens, same free grinding.
+3. **Escalate harder** — frontier patch on FIRST failed verification
+   instead of after guidance. Cheapest to build (the mechanism exists);
+   spends more frontier tokens per run.
 
