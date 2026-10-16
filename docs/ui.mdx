@@ -52,3 +52,17 @@ The JSON stream is the governor's event log: `run_started`,
 ```
 
 The same events persist per run — `seekr logs <run-id>` replays them.
+
+## The summary view
+
+`seekr summary <run-id>` is the return-after-hours surface — designed
+so a long absence never becomes an endless scroll:
+
+- **needs attention** (top, capped): human-review parks, failed steps
+  with a one-line why, review-severity finding counts, and an
+  `unfinished` marker for runs whose process died.
+- **steps**: one line each — status, attempts, and *who finished it*
+  (worker or frontier).
+- **findings (review notes)**: the gate's citable findings; the same
+  notes fold into the merge commit via `seekr merge`.
+- `--verbose` appends the raw event tail for debugging.
